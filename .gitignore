@@ -1,0 +1,23 @@
+# Build outputs
+avif2ppm
+avif2ppm_dav1d
+test_avif2png
+test_avif
+*.o
+*.obj
+*.exe
+
+# Output directories
+output_ppm/
+output_png/
+
+# macOS
+.DS_Store
+*.dSYM/
+
+# Editors
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
