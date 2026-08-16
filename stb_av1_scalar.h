@@ -10,9 +10,13 @@
 #include "stb_av1_partition.h"
 #include "stb_av1_partition_decode.h"
 #include "stb_av1_tx.h"
+#include "stb_av1_intra.h"
 #include "stb_av1_coef.h"
 #include "stb_av1_itx.h"
 #include "stb_av1_ipred.h"
 #include "stb_av1_block.h"
+#include "stb_av1_seqhdr.h"
+#include "stb_av1_framehdr.h"
+#include "stb_av1_tile.h"
 
 #endif
