@@ -53,23 +53,15 @@
 #define STBV_AV1_TX_CLASS_H               1
 #define STBV_AV1_TX_CLASS_V               2
 
-static const unsigned char stbv_av1_tx_set_intra2[4] = {
-    STBV_AV1_TX_IDTX, STBV_AV1_TX_DCT_DCT,
-    STBV_AV1_TX_ADST_ADST, STBV_AV1_TX_ADST_DCT
+static const unsigned char stbv_av1_tx_set_intra2[5] = {
+    STBV_AV1_TX_IDTX, STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_ADST_ADST,
+    STBV_AV1_TX_ADST_DCT, STBV_AV1_TX_DCT_ADST
 };
 
-/* The fifth entry is intentionally DCT_ADST, matching dav1d's
- * tx_types_per_set[] Intra2 set. */
-static const unsigned char stbv_av1_tx_set_intra2_full[5] = {
-    STBV_AV1_TX_IDTX, STBV_AV1_TX_DCT_DCT,
-    STBV_AV1_TX_ADST_ADST, STBV_AV1_TX_ADST_DCT,
+static const unsigned char stbv_av1_tx_set_intra1[7] = {
+    STBV_AV1_TX_IDTX, STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_V_DCT,
+    STBV_AV1_TX_H_DCT, STBV_AV1_TX_ADST_ADST, STBV_AV1_TX_ADST_DCT,
     STBV_AV1_TX_DCT_ADST
-};
-
-static const unsigned char stbv_av1_tx_set_intra1[6] = {
-    STBV_AV1_TX_IDTX, STBV_AV1_TX_DCT_DCT,
-    STBV_AV1_TX_V_DCT, STBV_AV1_TX_H_DCT,
-    STBV_AV1_TX_ADST_ADST, STBV_AV1_TX_ADST_DCT
 };
 
 /* Transform dimensions use 4x4 units. */
@@ -172,7 +164,7 @@ static int stbv_av1_decode_tx_split(struct stb_av1_msac *msac,
 
     ctx = (above_smaller ? 1 : 0) + (left_smaller ? 1 : 0);
     return (int)stb_av1_msac_bool_adapt(msac,
-                &cdf->txpart[cat * 2 + ctx]);
+                &cdf->txpart[cat * 6 + ctx]);
 }
 
 /*
@@ -193,14 +185,14 @@ static int stbv_av1_decode_intra_txtp(struct stb_av1_msac *msac,
     if (reduced_txtp_set || tx_min == STBV_AV1_TX_16X16) {
         idx = stb_av1_msac_symbol(msac,
               &cdf->txtp_intra2[(tx_min - 1) * 104 + y_mode_nofilt * 8], 4);
-        if (idx < 4)
+        if (idx < 5)
             return stbv_av1_tx_set_intra2[idx];
         return STBV_AV1_TX_DCT_DCT;
     }
 
     idx = stb_av1_msac_symbol(msac,
           &cdf->txtp_intra1[tx_min * 104 + y_mode_nofilt * 8], 6);
-    if (idx < 6)
+    if (idx < 7)
         return stbv_av1_tx_set_intra1[idx];
     return STBV_AV1_TX_DCT_DCT;
 }
