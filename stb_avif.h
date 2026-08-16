@@ -149,16 +149,18 @@ typedef signed short   stbv_s16;
 typedef unsigned int   stbv_u32;
 typedef signed int     stbv_s32;
 
-/* We need 64-bit types. Use unsigned long long which is available in C89
-   as a common extension, or we can use two-32-bit approach. */
+/* The AV1 decoder needs native 64-bit arithmetic for MSAC and bit reading.
+   C89 has no standard 64-bit integer type, so use the compiler extensions
+   available on the supported C89-era toolchains. */
 #ifndef STB_AVIF_NO_64BIT
   #if defined(_MSC_VER)
     typedef unsigned __int64 stbv_u64;
+    typedef __int64          stbv_s64;
   #else
     typedef unsigned long long stbv_u64;
+    typedef long long          stbv_s64;
   #endif
 #else
-  /* 64-bit not available; use a struct pair approach (not implemented) */
   #error "stb_avif requires 64-bit integer support"
 #endif
 
