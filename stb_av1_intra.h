@@ -1,198 +1,118 @@
 /*
- * stb_av1_intra.h - scalar AV1 intra block syntax
+ * stb_av1_intra.h - scalar AV1 intra-mode syntax decoder
  *
- * Portions are derived from dav1d 1.5.4 src/decode.c and src/tables.c.
- * Copyright (C) 2018-2021, VideoLAN and dav1d authors
- * Copyright (C) 2018, Two Orioles, LLC
- * SPDX-License-Identifier: BSD-2-Clause
+ * Intra syntax adapted from dav1d 1.5.4 src/decode.c.
+ * BSD-2-Clause; see dav1d COPYING for attribution/license details.
  */
 #ifndef STB_AV1_INTRA_H
 #define STB_AV1_INTRA_H
 
-#include "stb_av1_msac.h"
-#include "stb_av1_cdf.h"
+#ifndef STB_AV1_MSAC_H
+#error "include stb_av1_msac.h first"
+#endif
+#ifndef STB_AV1_CDF_H
+#error "include stb_av1_cdf.h first"
+#endif
 
-#define STBV_AV1_DC_PRED              0
-#define STBV_AV1_VERT_PRED            1
-#define STBV_AV1_HOR_PRED             2
-#define STBV_AV1_DIAG_DOWN_LEFT_PRED  3
-#define STBV_AV1_DIAG_DOWN_RIGHT_PRED 4
-#define STBV_AV1_VERT_RIGHT_PRED      5
-#define STBV_AV1_HOR_DOWN_PRED        6
-#define STBV_AV1_HOR_UP_PRED          7
-#define STBV_AV1_VERT_LEFT_PRED       8
-#define STBV_AV1_SMOOTH_PRED          9
-#define STBV_AV1_SMOOTH_V_PRED        10
-#define STBV_AV1_SMOOTH_H_PRED        11
-#define STBV_AV1_PAETH_PRED            12
-#define STBV_AV1_N_INTRA_PRED_MODES   13
-#define STBV_AV1_CFL_PRED              13
-#define STBV_AV1_N_UV_INTRA_PRED_MODES 14
-#define STBV_AV1_FILTER_PRED           13
+#define STBV_AV1_INTRA_DC          0
+#define STBV_AV1_INTRA_VERT        1
+#define STBV_AV1_INTRA_HOR         2
+#define STBV_AV1_INTRA_DDL         3
+#define STBV_AV1_INTRA_DDR         4
+#define STBV_AV1_INTRA_VR          5
+#define STBV_AV1_INTRA_HD          6
+#define STBV_AV1_INTRA_HU          7
+#define STBV_AV1_INTRA_VL          8
+#define STBV_AV1_INTRA_SMOOTH      9
+#define STBV_AV1_INTRA_SMOOTH_V   10
+#define STBV_AV1_INTRA_SMOOTH_H   11
+#define STBV_AV1_INTRA_PAETH      12
+#define STBV_AV1_INTRA_CFL        13
 
-/* Map AV1 block dimensions to dav1d's y_mode size context. */
-static int stb_av1_ymode_size_ctx(int w, int h)
-{
-    int bw, bh;
-    bw = 0;
-    bh = 0;
-    while (w > 4) { w >>= 1; bw++; }
-    while (h > 4) { h >>= 1; bh++; }
+/* dav1d_intra_mode_context[], in the same order as N_INTRA_PRED_MODES. */
+static const stbv_u8 stbv_av1_intra_mode_ctx[13] = {
+    0, 1, 2, 3, 4, 4, 4, 4, 3, 0, 1, 2, 0
+};
 
-    if (bw >= 3 || bh >= 3) return 3;
-    if (bw >= 2 || bh >= 2) return 2;
-    if (bw >= 1 || bh >= 1) return 1;
-    return 0;
-}
-
-static int stb_av1_intra_mode_ctx(int mode)
-{
-    switch (mode) {
-    case STBV_AV1_DC_PRED:              return 0;
-    case STBV_AV1_VERT_PRED:            return 1;
-    case STBV_AV1_HOR_PRED:             return 2;
-    case STBV_AV1_DIAG_DOWN_LEFT_PRED:  return 3;
-    case STBV_AV1_VERT_LEFT_PRED:       return 3;
-    case STBV_AV1_DIAG_DOWN_RIGHT_PRED: return 4;
-    case STBV_AV1_VERT_RIGHT_PRED:      return 4;
-    case STBV_AV1_HOR_DOWN_PRED:        return 4;
-    case STBV_AV1_HOR_UP_PRED:          return 4;
-    case STBV_AV1_SMOOTH_PRED:          return 0;
-    case STBV_AV1_SMOOTH_V_PRED:        return 1;
-    case STBV_AV1_SMOOTH_H_PRED:        return 2;
-    case STBV_AV1_PAETH_PRED:           return 0;
-    default:                            return 0;
-    }
-}
-
-static int stb_av1_log2_dim4(int n)
-{
-    int v = 0;
-    while (n > 4) { n >>= 1; v++; }
-    return v;
-}
-
-/*
- * Decode the intra-specific syntax of one leaf block.
- *
- * above_mode and left_mode are the already reconstructed luma modes of the
- * neighbouring 4x4 locations.  The caller owns those context arrays.
- *
- * This intentionally omits palette/screen-content syntax in the first pass.
- * It also leaves transform-size selection to the following transform layer.
- */
-typedef struct stb_av1_intra_block {
+struct stb_av1_intra_block {
     int y_mode;
     int y_angle;
     int uv_mode;
     int uv_angle;
     int cfl_alpha_u;
     int cfl_alpha_v;
-    int use_filter_intra;
-    int filter_intra_mode;
-    int tx;
-    int uv_tx;
-} stb_av1_intra_block;
+};
 
-static int stb_av1_decode_intra_block(
-    struct stb_av1_msac *msac,
-    stbv_av1_cdf *cdf,
-    stb_av1_intra_block *b,
-    int w, int h,
-    int above_mode, int left_mode,
-    int monochrome,
-    int cfl_allowed,
-    int filter_intra_enabled,
-    int bs_index,
-    int filter_intra_allowed)
+static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
+                                      stbv_av1_cdf *cdf,
+                                      int above_mode, int left_mode,
+                                      int cbw4, int cbh4,
+                                      int cfl_allowed,
+                                      struct stb_av1_intra_block *b)
 {
-    int ac;
-    int ctx;
-    int bdim_sum;
-    int bdim_max;
-    stbv_u16 *ymode_cdf;
+    int ac, lc, mode;
+    stbv_u16 *ycdf;
+    stbv_u16 *uvcdf;
+    unsigned sym;
+    int sign, sign_u, sign_v, ctx;
 
-    if (!msac || !cdf || !b)
-        return 0;
+    if (!b) return -1;
+    if (above_mode < 0 || above_mode > 12) above_mode = STBV_AV1_INTRA_DC;
+    if (left_mode < 0 || left_mode > 12) left_mode = STBV_AV1_INTRA_DC;
 
+    ac = stbv_av1_intra_mode_ctx[above_mode];
+    lc = stbv_av1_intra_mode_ctx[left_mode];
+    ycdf = cdf->kfym + (ac * 5 + lc) * 16;
+    sym = stb_av1_msac_symbol(msac, ycdf, 12);
+    if (sym > 12) return -2;
+    mode = (int)sym;
+    b->y_mode = mode;
     b->y_angle = 0;
+    b->uv_mode = STBV_AV1_INTRA_DC;
     b->uv_angle = 0;
     b->cfl_alpha_u = 0;
     b->cfl_alpha_v = 0;
-    b->use_filter_intra = 0;
-    b->filter_intra_mode = 0;
-    b->tx = 0;
-    b->uv_tx = 0;
 
-    /* Key/intra frame uses the 5x5 key-frame intra-mode CDF. */
-    ctx = stb_av1_intra_mode_ctx(above_mode);
-    ac = stb_av1_intra_mode_ctx(left_mode);
-    ymode_cdf = cdf->kfym + (ctx * 5 + ac) * 16;
-    b->y_mode = (int)stb_av1_msac_symbol(msac, ymode_cdf,
-                                         STBV_AV1_N_INTRA_PRED_MODES - 1);
-
-    bdim_sum = stb_av1_log2_dim4(w) + stb_av1_log2_dim4(h);
-    bdim_max = stb_av1_log2_dim4(w);
-    ac = stb_av1_log2_dim4(h);
-    if (ac > bdim_max) bdim_max = ac;
-
-    if (bdim_sum >= 2 && b->y_mode >= STBV_AV1_VERT_PRED &&
-        b->y_mode <= STBV_AV1_VERT_LEFT_PRED) {
-        stbv_u16 *angle_cdf = cdf->angle_delta +
-                              (b->y_mode - STBV_AV1_VERT_PRED) * 8;
-        b->y_angle = (int)stb_av1_msac_symbol(msac, angle_cdf, 6) - 3;
+    if (cbw4 + cbh4 >= 2 && mode >= STBV_AV1_INTRA_VERT &&
+        mode <= STBV_AV1_INTRA_VL) {
+        sym = stb_av1_msac_symbol(msac,
+                                  cdf->angle_delta + (mode - STBV_AV1_INTRA_VERT) * 8,
+                                  6);
+        b->y_angle = (int)sym - 3;
     }
 
-    if (!monochrome) {
-        stbv_u16 *uv_cdf = cdf->uv_mode +
-            ((cfl_allowed ? 0 : 1) * STBV_AV1_N_INTRA_PRED_MODES +
-             b->y_mode) * 16;
-        int n_uv = STBV_AV1_N_UV_INTRA_PRED_MODES - 1 - !cfl_allowed;
+    uvcdf = cdf->uv_mode + ((cfl_allowed ? 1 : 0) * 13 + mode) * 16;
+    sym = stb_av1_msac_symbol(msac, uvcdf, cfl_allowed ? 13 : 12);
+    if (sym > 12) return -3;
+    b->uv_mode = (int)sym;
 
-        b->uv_mode = (int)stb_av1_msac_symbol(msac, uv_cdf, (size_t)n_uv);
+    if (b->uv_mode == STBV_AV1_INTRA_CFL) {
+        sym = stb_av1_msac_symbol(msac, cdf->cfl_sign, 7);
+        sign = (int)sym + 1;
+        sign_u = sign / 3;
+        sign_v = sign - sign_u * 3;
 
-        if (b->uv_mode == STBV_AV1_CFL_PRED) {
-            int sign = (int)stb_av1_msac_symbol(msac, cdf->cfl_sign, 7) + 1;
-            int sign_u = (sign * 0x56) >> 8;
-            int sign_v = sign - sign_u * 3;
-            int ca;
-
-            if (sign_u) {
-                ca = (sign_u == 2) * 3 + sign_v;
-                b->cfl_alpha_u = (int)stb_av1_msac_symbol(
-                    msac, cdf->cfl_alpha + ca * 16, 15) + 1;
-                if (sign_u == 1) b->cfl_alpha_u = -b->cfl_alpha_u;
-            }
-            if (sign_v) {
-                ca = (sign_v == 2) * 3 + sign_u;
-                b->cfl_alpha_v = (int)stb_av1_msac_symbol(
-                    msac, cdf->cfl_alpha + ca * 16, 15) + 1;
-                if (sign_v == 1) b->cfl_alpha_v = -b->cfl_alpha_v;
-            }
-        } else if (bdim_sum >= 2 && b->uv_mode >= STBV_AV1_VERT_PRED &&
-                   b->uv_mode <= STBV_AV1_VERT_LEFT_PRED) {
-            stbv_u16 *angle_cdf = cdf->angle_delta +
-                                  (b->uv_mode - STBV_AV1_VERT_PRED) * 8;
-            b->uv_angle = (int)stb_av1_msac_symbol(msac, angle_cdf, 6) - 3;
+        if (sign_u) {
+            ctx = (sign_u == 2) * 3 + sign_v;
+            sym = stb_av1_msac_symbol(msac, cdf->cfl_alpha + ctx * 16, 15);
+            b->cfl_alpha_u = (int)sym + 1;
+            if (sign_u == 1) b->cfl_alpha_u = -b->cfl_alpha_u;
         }
-    } else {
-        b->uv_mode = STBV_AV1_DC_PRED;
-    }
-
-    /* Filter intra is only considered for DC luma blocks of small size. */
-    if (filter_intra_enabled && filter_intra_allowed &&
-        b->y_mode == STBV_AV1_DC_PRED && bdim_max <= 3 && bdim_sum >= 2) {
-        int use = (int)stb_av1_msac_bool_adapt(
-            msac, cdf->use_filter_intra + bs_index * 1);
-        if (use) {
-            b->use_filter_intra = 1;
-            b->y_mode = STBV_AV1_FILTER_PRED;
-            b->filter_intra_mode =
-                (int)stb_av1_msac_symbol(msac, cdf->filter_intra, 4);
+        if (sign_v) {
+            ctx = (sign_v == 2) * 3 + sign_u;
+            sym = stb_av1_msac_symbol(msac, cdf->cfl_alpha + ctx * 16, 15);
+            b->cfl_alpha_v = (int)sym + 1;
+            if (sign_v == 1) b->cfl_alpha_v = -b->cfl_alpha_v;
         }
+    } else if (cbw4 + cbh4 >= 2 && b->uv_mode >= STBV_AV1_INTRA_VERT &&
+               b->uv_mode <= STBV_AV1_INTRA_VL) {
+        sym = stb_av1_msac_symbol(msac,
+                                  cdf->angle_delta + (b->uv_mode - STBV_AV1_INTRA_VERT) * 8,
+                                  6);
+        b->uv_angle = (int)sym - 3;
     }
 
-    return 1;
+    return 0;
 }
 
 #endif
