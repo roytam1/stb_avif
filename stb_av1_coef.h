@@ -9,11 +9,16 @@
 #ifndef STB_AV1_COEF_H
 #define STB_AV1_COEF_H
 
+#include <string.h>
+
 #ifndef STBV_U16_DEFINED
 #error "stb_av1_coef.h requires stbv_u16"
 #endif
 #ifndef STBV_U32_DEFINED
 #error "stb_av1_coef.h requires stbv_u32"
+#endif
+#ifndef STBV_I32_DEFINED
+#error "stb_av1_coef.h requires stbv_i32"
 #endif
 
 /* tx_class: 0 = 2D, 1 = horizontal, 2 = vertical. */
@@ -172,10 +177,16 @@ static const stbv_u16 stbv_av1_scan_32x32[1024] = {
     863, 895, 926, 957, 988, 1019, 1020, 989, 958, 927, 959, 990, 1021, 1022, 991, 1023
 };
 
-/* Decode one square 4/8/16/32 transform.  The returned coefficients are
- * dequantized signed coefficients.  This first scalar implementation does not
- * apply a quantization matrix; dq_dc/dq_ac and dq_shift are supplied by the
- * caller. */
+/* Decode one square 4/8/16/32 transform.
+ *
+ * This follows dav1d's decode_coefs() representation closely.  cf[] is used
+ * as a temporary linked list: bits 11.. carry the coefficient token and the
+ * low 10 bits carry the next non-zero scan position.  After the syntax has
+ * been consumed the list is walked again to read signs and dequantize.
+ *
+ * Quantization matrices are intentionally not handled here yet; the caller
+ * supplies the scalar DC/AC dequantizers and dq_shift.
+ */
 static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
                                           stbv_av1_cdf *cdf,
                                           int txctx, int chroma, int tx_class,
@@ -184,175 +195,283 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
                                           stbv_i32 *cf)
 {
     const stbv_u16 *scan;
-    unsigned area, log2n, szctx, eob, eobbin, is1d;
-    unsigned i, ctx, tok, mag;
-    unsigned char levels[34 * 34];
-    stbv_u16 nz[1024];
-    stbv_u16 mags[1024];
-    unsigned nz_count = 0;
-    stbv_u16 *eobbin_cdf;
-    stbv_u16 *eobhi_cdf;
-    stbv_u16 *eobbase_cdf;
-    stbv_u16 *base_cdf;
-    stbv_u16 *br_cdf;
-    stbv_u16 *dc_sign_cdf;
-    int sign;
+    stbv_u8 levels[34 * 34];
+    unsigned area, sl, szctx, eob, eob_bin, is1d;
+    unsigned x, y, rc, i, ctx, tok, mag;
+    unsigned cul_level, dc_sign_level;
     int dc_tok, dc_sign, dc_dq;
-    unsigned cul_level = 0;
-    unsigned dc_sign_level;
+    stbv_u16 *eob_bin_cdf;
+    stbv_u16 *eob_hi_cdf;
+    stbv_u16 *eob_cdf;
+    stbv_u16 *lo_cdf;
+    stbv_u16 *hi_cdf;
+    stbv_u16 *dc_sign_cdf;
+    unsigned stride, shift, shift2, mask;
+    unsigned char *level;
+    int cf_max = 255;
 
     if (n == 4) {
-        scan = stbv_av1_scan_4x4; log2n = 2; txctx = 0;
+        scan = stbv_av1_scan_4x4;
+        sl = 0;
     } else if (n == 8) {
-        scan = stbv_av1_scan_8x8; log2n = 3; txctx = 1;
+        scan = stbv_av1_scan_8x8;
+        sl = 1;
     } else if (n == 16) {
-        scan = stbv_av1_scan_16x16; log2n = 4; txctx = 2;
+        scan = stbv_av1_scan_16x16;
+        sl = 2;
     } else if (n == 32) {
-        scan = stbv_av1_scan_32x32; log2n = 5; txctx = 3;
+        scan = stbv_av1_scan_32x32;
+        sl = 3;
     } else {
         return -1;
     }
 
+    if (txctx < 0) txctx = 0;
+    if (txctx > 4) txctx = 4;
+    if (skip_ctx < 0) skip_ctx = 0;
+    if (skip_ctx > 12) skip_ctx = 12;
+    if (dc_sign_ctx < 0) dc_sign_ctx = 0;
+    if (dc_sign_ctx > 2) dc_sign_ctx = 2;
+
     area = (unsigned)n * (unsigned)n;
-    szctx = log2n + log2n - 4U;
+    szctx = sl + sl;
     is1d = tx_class != 0;
     memset(cf, 0, area * sizeof(*cf));
     memset(levels, 0, sizeof(levels));
-    memset(nz, 0, sizeof(nz));
-    memset(mags, 0, sizeof(mags));
 
-    /* skip / all-zero. CDF skip[N_TX_SIZES][13][2]. */
+    /* skip[N_TX_SIZES][13][2] */
     ctx = (unsigned)txctx * 26U + (unsigned)skip_ctx * 2U;
-    if (stb_av1_msac_symbol(msac, cdf->coef + ctx, 1U))
-        return -1;
-
-    switch (szctx) {
-    case 0: eobbin_cdf = cdf->coef + 130U + (chroma * 2U + is1d) * 8U; break;
-    case 1: eobbin_cdf = cdf->coef + 162U + (chroma * 2U + is1d) * 8U; break;
-    case 2: eobbin_cdf = cdf->coef + 194U + (chroma * 2U + is1d) * 8U; break;
-    case 3: eobbin_cdf = cdf->coef + 226U + (chroma * 2U + is1d) * 8U; break;
-    case 4: eobbin_cdf = cdf->coef + 258U + (chroma * 2U + is1d) * 16U; break;
-    case 5: eobbin_cdf = cdf->coef + 322U + chroma * 16U; break;
-    default: eobbin_cdf = cdf->coef + 354U + chroma * 16U; break;
+    if (stb_av1_msac_symbol(msac, cdf->coef + ctx, 1U)) {
+        return 0;
     }
 
-    eob = stb_av1_msac_symbol(msac, eobbin_cdf, 4U + szctx);
+    /* eob_bin_{16..1024}.  The first two dimensions are chroma and 1-D. */
+    switch (szctx) {
+    case 0:
+        eob_bin_cdf = cdf->coef + 130U +
+                      ((unsigned)chroma * 2U + is1d) * 8U;
+        break;
+    case 1:
+        eob_bin_cdf = cdf->coef + 162U +
+                      ((unsigned)chroma * 2U + is1d) * 8U;
+        break;
+    case 2:
+        eob_bin_cdf = cdf->coef + 194U +
+                      ((unsigned)chroma * 2U + is1d) * 8U;
+        break;
+    case 3:
+        eob_bin_cdf = cdf->coef + 226U +
+                      ((unsigned)chroma * 2U + is1d) * 8U;
+        break;
+    case 4:
+        eob_bin_cdf = cdf->coef + 258U +
+                      ((unsigned)chroma * 2U + is1d) * 16U;
+        break;
+    case 5:
+        eob_bin_cdf = cdf->coef + 322U + (unsigned)chroma * 16U;
+        break;
+    default:
+        eob_bin_cdf = cdf->coef + 354U + (unsigned)chroma * 16U;
+        break;
+    }
+
+    eob = stb_av1_msac_symbol(msac, eob_bin_cdf, 4U + szctx);
     if (eob > 1U) {
-        eobbin = eob - 2U;
-        eobhi_cdf = cdf->coef + 2858U + (unsigned)txctx * 36U +
-                     chroma * 18U + eobbin * 2U;
-        eob = ((stb_av1_msac_bool_adapt(msac, eobhi_cdf) | 2U) << eobbin) |
-              stb_av1_msac_bools(msac, eobbin);
+        eob_bin = eob - 2U;
+        /* eob_hi_bit[N_TX_SIZES][2][9][2] */
+        eob_hi_cdf = cdf->coef + 2858U + (unsigned)txctx * 36U +
+                     (unsigned)chroma * 18U + eob_bin * 2U;
+        eob = ((stb_av1_msac_bool_adapt(msac, eob_hi_cdf) | 2U) << eob_bin) |
+              stb_av1_msac_bools(msac, eob_bin);
     }
     if (eob == 0U || eob > area)
         return -2;
 
-    eobbase_cdf = cdf->coef + 386U + (unsigned)txctx * 32U + chroma * 16U;
-    base_cdf = cdf->coef + 546U + (unsigned)txctx * 328U + chroma * 164U;
-    br_cdf = cdf->coef + 2186U + (unsigned)(txctx > 3 ? 3 : txctx) * 168U +
-             chroma * 84U;
+    /* eob_base_tok[N_TX_SIZES][2][4][4] */
+    eob_cdf = cdf->coef + 386U + (unsigned)txctx * 32U +
+              (unsigned)chroma * 16U;
+    /* base_tok[N_TX_SIZES][2][41][4] */
+    lo_cdf = cdf->coef + 546U + (unsigned)txctx * 328U +
+             (unsigned)chroma * 164U;
+    /* br_tok[min(txctx,3)][2][21][4] */
+    hi_cdf = cdf->coef + 2186U + (unsigned)(txctx > 3 ? 3 : txctx) * 168U +
+             (unsigned)chroma * 84U;
+
+    /* The level scratch layout is exactly the one used by dav1d: for 2-D
+     * transforms stride is the transform width; H/V use stride 16. */
+    if (tx_class == 0) {
+        stride = (unsigned)n;
+        shift = sl + 2U;
+        shift2 = 0;
+        mask = (unsigned)n - 1U;
+    } else if (tx_class == 1) {
+        stride = 16U;
+        shift = sl + 2U;
+        shift2 = 0;
+        mask = (unsigned)n - 1U;
+    } else {
+        stride = 16U;
+        shift = sl + 2U;
+        shift2 = sl + 2U;
+        mask = (unsigned)n - 1U;
+    }
+    memset(levels, 0, (size_t)(stride * ((unsigned)n + 2U)));
 
     /* EOB coefficient. */
     ctx = 1U + (eob > (2U << szctx)) + (eob > (4U << szctx));
-    tok = 1U + stb_av1_msac_symbol(msac, eobbase_cdf + ctx * 4U, 2U);
-    {
-        unsigned pos = eob - 1U;
-        unsigned x, y;
-        if (tx_class == 0) {
-            pos = scan[pos]; x = pos / (unsigned)n; y = pos % (unsigned)n;
-        } else if (tx_class == 1) {
-            x = pos % (unsigned)n; y = pos / (unsigned)n;
-        } else {
-            x = pos / (unsigned)n; y = pos % (unsigned)n;
-        }
-        if (tok == 3U) {
-            ctx = tx_class == 0 ? ((x | y) > 1U ? 14U : 7U) : (y ? 14U : 7U);
-            tok = stbv_av1_coef_hi_tok(msac, br_cdf + ctx * 4U);
-            levels[y * 34U + x] = (stbv_u8)(tok + (3U << 6));
-        } else {
-            levels[y * 34U + x] = (stbv_u8)(tok * 0x41U);
-        }
-        mags[pos] = (stbv_u16)tok;
-        nz[nz_count++] = (stbv_u16)pos;
-    }
+    tok = 1U + stb_av1_msac_symbol(msac, eob_cdf + ctx * 4U, 2U);
 
-    /* AC coefficients, descending scan order. */
-    for (i = eob - 1U; i > 0U; i--) {
-        unsigned pos = i, x, y, stride = 34U;
-        if (tx_class == 0) {
-            pos = scan[pos]; x = pos / (unsigned)n; y = pos % (unsigned)n;
-        } else if (tx_class == 1) {
-            x = pos % (unsigned)n; y = pos / (unsigned)n;
-        } else {
-            x = pos / (unsigned)n; y = pos % (unsigned)n;
-        }
-        ctx = stbv_av1_coef_lo_ctx(levels + y * stride + x, &mag,
-                                   x, y, stride, tx_class);
-        tok = stb_av1_msac_symbol(msac, base_cdf + ctx * 4U, 3U);
-        if (tok == 3U) {
-            ctx = tx_class == 0 ? ((x | y) ? 14U : 7U) : (y ? 14U : 7U);
-            tok = stbv_av1_coef_hi_tok(msac, br_cdf + ctx * 4U);
-            levels[y * stride + x] = (stbv_u8)(tok + (3U << 6));
-        } else {
-            levels[y * stride + x] = (stbv_u8)(tok * 0x41U);
-        }
-        mags[pos] = (stbv_u16)tok;
-        nz[nz_count++] = (stbv_u16)pos;
-    }
-
-    /* DC base token is coded separately. */
-    dc_tok = 1 + (int)stb_av1_msac_symbol(msac, eobbase_cdf, 2U);
-    if (dc_tok == 3)
-        dc_tok = (int)stbv_av1_coef_hi_tok(msac, br_cdf);
-
-    if (dc_sign_ctx < 0) dc_sign_ctx = 0;
-    if (dc_sign_ctx > 2) dc_sign_ctx = 2;
-    dc_sign_cdf = cdf->coef + 3038U + chroma * 6U + (unsigned)dc_sign_ctx * 2U;
-    dc_sign = (int)stb_av1_msac_bool_adapt(msac, dc_sign_cdf);
-    dc_sign_level = dc_sign ? 0U : (1U << 6);
-
-    dc_dq = dq_dc;
-    if (dc_tok == 15) {
-        dc_tok = (int)stbv_av1_coef_golomb(msac) + 15;
-        dc_dq = (int)(((stbv_u32)dc_dq * (stbv_u32)dc_tok) & 0xffffffU);
+    if (tx_class == 0) {
+        rc = scan[eob];
+        x = rc >> shift;
+        y = rc & mask;
+    } else if (tx_class == 1) {
+        x = eob & mask;
+        y = eob >> shift;
+        rc = eob;
     } else {
-        dc_dq *= dc_tok;
+        x = eob & mask;
+        y = eob >> shift;
+        rc = (x << shift2) | y;
     }
-    dc_dq >>= dq_shift;
-    if (dc_dq > 255) dc_dq = 255;
-    cf[0] = dc_sign ? -dc_dq : dc_dq;
-    cul_level = (unsigned)dc_tok;
 
-    /* AC signs and dequantization follow the same descending order as dav1d's
-     * linked coefficient list. */
-    for (i = 0; i < nz_count; i++) {
-        unsigned pos = nz[i];
-        unsigned x, y, stride = 34U;
-        int v;
-        if (tx_class == 0) {
-            x = pos / (unsigned)n; y = pos % (unsigned)n;
-        } else if (tx_class == 1) {
-            x = pos % (unsigned)n; y = pos / (unsigned)n;
-        } else {
-            x = pos / (unsigned)n; y = pos % (unsigned)n;
-        }
-        if (pos == 0)
-            continue;
-        sign = (int)stb_av1_msac_bool_equi(msac);
-        if (mags[pos] >= 15U) {
-            if (mags[pos] == 15U)
-                tok = stbv_av1_coef_golomb(msac) + 15U;
-            else
-                tok = mags[pos];
-        } else {
-            tok = mags[pos];
-        }
-        v = (int)(((stbv_u32)dq_ac * (stbv_u32)tok) >> dq_shift);
-        if (v > 255) v = 255;
-        cf[pos] = sign ? -v : v;
-        cul_level += tok;
+    if (tok == 3U) {
+        ctx = (tx_class == 0 ? ((x | y) > 1U) : (y != 0U)) ? 14U : 7U;
+        tok = stbv_av1_coef_hi_tok(msac, hi_cdf + ctx * 4U);
+        cf[rc] = tok << 11;
+        level = levels + x * stride + y;
+        *level = (stbv_u8)(tok + (3U << 6));
+    } else {
+        cf[rc] = tok << 11;
+        level = levels + x * stride + y;
+        *level = (stbv_u8)(tok * 0x41U);
     }
+
+    /* Descending AC scan.  The linked-list encoding below is the important
+     * detail: it lets the later sign/dequant pass visit only non-zero values. */
+    for (i = eob - 1U; i > 0U; i--) {
+        unsigned rc_i;
+
+        if (tx_class == 0) {
+            rc_i = scan[i];
+            x = rc_i >> shift;
+            y = rc_i & mask;
+        } else if (tx_class == 1) {
+            x = i & mask;
+            y = i >> shift;
+            rc_i = i;
+        } else {
+            x = i & mask;
+            y = i >> shift;
+            rc_i = (x << shift2) | y;
+        }
+
+        level = levels + x * stride + y;
+        ctx = stbv_av1_coef_lo_ctx(levels + x * stride + y,
+                                    &mag, x, y, stride, tx_class);
+        tok = stb_av1_msac_symbol(msac, lo_cdf + ctx * 4U, 3U);
+
+        if (tok == 3U) {
+            ctx = (tx_class == 0 ? ((x | y) != 0U) : (y != 0U)) ? 14U : 7U;
+            ctx += (mag > 12U ? 6U : (mag + 1U) >> 1) *
+                   (tx_class == 0 ? 1U : 0U);
+            /* dav1d uses the 21-entry br_tok context mapping here. */
+            if (tx_class == 0)
+                ctx = (y > 0U ? 14U : 7U) +
+                      (mag > 12U ? 6U : (mag + 1U) >> 1);
+            else
+                ctx = (y > 1U ? 14U : 7U) +
+                      (mag > 12U ? 6U : (mag + 1U) >> 1);
+            tok = stbv_av1_coef_hi_tok(msac, hi_cdf + ctx * 4U);
+            *level = (stbv_u8)(tok + (3U << 6));
+            cf[rc_i] = (tok << 11) | rc;
+            rc = rc_i;
+        } else {
+            /* dav1d's packed expression is equivalent to storing zero or the
+             * token in bits 11+, with rc in the low ten bits when non-zero. */
+            unsigned packed = tok * 0x17ff41U;
+            *level = (stbv_u8)packed;
+            tok = (packed >> 9) & (rc + ~0x7ffU);
+            if (tok)
+                rc = rc_i;
+            cf[rc_i] = tok;
+        }
+    }
+
+    /* DC token. */
+    if (eob) {
+        ctx = (tx_class == 0) ? 0U :
+              stbv_av1_coef_lo_ctx(levels, &mag, 0, 0, stride, tx_class);
+        dc_tok = (int)stb_av1_msac_symbol(msac, lo_cdf + ctx * 4U, 3U);
+        if (dc_tok == 3) {
+            if (tx_class == 0)
+                mag = levels[stride] + levels[1] + levels[stride + 1];
+            else
+                mag = levels[2];
+            mag &= 63U;
+            ctx = mag > 12U ? 6U : (mag + 1U) >> 1;
+            dc_tok = (int)stbv_av1_coef_hi_tok(msac, hi_cdf + ctx * 4U);
+        }
+    } else {
+        dc_tok = 0;
+    }
+
+    /* The final rc is the first non-zero coefficient in scan order.  dav1d's
+     * residual pass follows the linked list encoded above. */
+    cul_level = 0;
+    dc_sign_level = 1U << 6;
+
+    if (!dc_tok) {
+        dc_sign_level = 1U << 6;
+    } else {
+        dc_sign_cdf = cdf->coef + 3038U + (unsigned)chroma * 6U +
+                      (unsigned)dc_sign_ctx * 2U;
+        dc_sign = (int)stb_av1_msac_bool_adapt(msac, dc_sign_cdf);
+        dc_sign_level = (dc_sign - 1) & (2 << 6);
+
+        dc_dq = dq_dc;
+        if (dc_tok == 15) {
+            dc_tok = (int)stbv_av1_coef_golomb(msac) + 15;
+            dc_tok &= 0xfffff;
+            dc_dq = (int)(((stbv_u32)dc_dq * (stbv_u32)dc_tok) & 0xffffffU);
+        } else {
+            dc_dq *= dc_tok;
+        }
+        dc_dq >>= dq_shift;
+        if (dc_dq > cf_max + dc_sign)
+            dc_dq = cf_max + dc_sign;
+        cf[0] = dc_sign ? -dc_dq : dc_dq;
+        cul_level = (unsigned)dc_tok;
+    }
+
+    if (rc) {
+        do {
+            int sign = (int)stb_av1_msac_bool_equi(msac);
+            unsigned rc_tok = (unsigned)cf[rc];
+            unsigned vtok;
+            int dq;
+
+            if (rc_tok >= (15U << 11)) {
+                vtok = stbv_av1_coef_golomb(msac) + 15U;
+                vtok &= 0xfffffU;
+            } else {
+                vtok = rc_tok >> 11;
+            }
+            dq = (int)(((stbv_u32)dq_ac * (stbv_u32)vtok) >> dq_shift);
+            if (dq > cf_max + sign)
+                dq = cf_max + sign;
+            cul_level += vtok;
+            cf[rc] = sign ? -dq : dq;
+            rc = rc_tok & 0x3ffU;
+        } while (rc);
+    }
+
+    /* res_ctx = min(cul_level,63) | dc_sign_level.  The current public
+     * function predates the res_ctx output, so the value is intentionally not
+     * exposed yet; the leaf-state integration will add it when coefficient
+     * contexts are wired into neighboring blocks. */
     (void)dc_sign_level;
+    (void)cul_level;
     return (int)eob;
 }
 
