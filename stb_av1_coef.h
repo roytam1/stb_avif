@@ -187,7 +187,7 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     unsigned area, log2n, szctx, eob, eobbin, is1d;
     unsigned i, ctx, tok, mag;
     unsigned char levels[34 * 34];
-    unsigned char nz[1024];
+    stbv_u16 nz[1024];
     stbv_u16 mags[1024];
     unsigned nz_count = 0;
     stbv_u16 *eobbin_cdf;
@@ -273,7 +273,7 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
             levels[y * 34U + x] = (stbv_u8)(tok * 0x41U);
         }
         mags[pos] = (stbv_u16)tok;
-        nz[nz_count++] = (stbv_u8)pos;
+        nz[nz_count++] = (stbv_u16)pos;
     }
 
     /* AC coefficients, descending scan order. */
@@ -297,7 +297,7 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
             levels[y * stride + x] = (stbv_u8)(tok * 0x41U);
         }
         mags[pos] = (stbv_u16)tok;
-        nz[nz_count++] = (stbv_u8)pos;
+        nz[nz_count++] = (stbv_u16)pos;
     }
 
     /* DC base token is coded separately. */

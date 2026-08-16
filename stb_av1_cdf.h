@@ -1447,7 +1447,7 @@ typedef struct stbv_av1_cdf {
     stbv_u16 cfl_alpha[96];
     stbv_u16 txtp_intra1[208];
     stbv_u16 txtp_intra2[312];
-    stbv_u16 coef[2920];
+    stbv_u16 coef[3050];
 } stbv_av1_cdf;
 
 #define STBV_AV1_COEF_SKIP_OFF       0
