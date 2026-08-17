@@ -47,8 +47,8 @@ typedef unsigned long long stbv_u64;
 #include "stb_av1_ipred.h"
 #include "stb_av1_block.h"
 #include "stb_av1_leaf.h"
-#include "stb_av1_obu.h"
 #include "stb_av1_tile.h"
+#include "stb_av1_obu.h"
 #include "stb_av1_tile_decode.h"
 
 #endif

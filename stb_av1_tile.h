@@ -22,7 +22,13 @@ struct stb_av1_tile_span {
 /* AV1 byte_alignment(): one 1 bit followed by zero bits until aligned. */
 static int stb_av1_byte_align(struct stb_av1_getbits *gb)
 {
-    if (stb_av1_get_bit(gb) != 1)
+    int first;
+    if (!gb)
+        return -1;
+    if (!gb->bits_left)
+        return 0;
+    first = (int)stb_av1_get_bit(gb);
+    if (first != 1)
         return -1;
     while (gb->bits_left)
         if (stb_av1_get_bit(gb) != 0)
