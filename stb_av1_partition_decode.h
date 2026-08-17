@@ -255,8 +255,9 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
             if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by)) return -1;
             return stbv_av1_partition_decode_sb(d, bl + 1, bx + hsz, by);
         }
-        bs = stbv_av1_block_sizes[bl][STBV_AV1_PARTITION_H][0];
-        return stbv_av1_partition_emit(d, bl, bs, STBV_AV1_PARTITION_H, bx, by);
+        bs = stbv_av1_block_sizes[bl][STBV_AV1_PARTITION_V][0];
+        if (bs == 0xff) return -1;
+        return stbv_av1_partition_emit(d, bl, bs, STBV_AV1_PARTITION_V, bx, by);
     } else {
         unsigned int is_split;
         is_split = stb_av1_msac_bool(d->msac,
@@ -266,8 +267,9 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
             if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by)) return -1;
             return stbv_av1_partition_decode_sb(d, bl + 1, bx, by + hsz);
         }
-        bs = stbv_av1_block_sizes[bl][STBV_AV1_PARTITION_V][0];
-        return stbv_av1_partition_emit(d, bl, bs, STBV_AV1_PARTITION_V, bx, by);
+        bs = stbv_av1_block_sizes[bl][STBV_AV1_PARTITION_H][0];
+        if (bs == 0xff) return -1;
+        return stbv_av1_partition_emit(d, bl, bs, STBV_AV1_PARTITION_H, bx, by);
     }
 
     return 0;

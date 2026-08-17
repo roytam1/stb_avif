@@ -8,6 +8,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "stb_av1_scalar.h"
 
 struct sample_ctx {
@@ -16,6 +17,8 @@ struct sample_ctx {
     stbv_u8 left[32];
     unsigned long leaves;
     unsigned long nonzero;
+    unsigned long skipped;
+    unsigned long txtp[17];
 };
 
 static int sample_leaf(struct stb_av1_tile_decoder *td,
@@ -32,8 +35,9 @@ static int sample_leaf(struct stb_av1_tile_decoder *td,
     if (r)
         return r;
     c->leaves++;
-    if (out.eob)
-        c->nonzero++;
+    if (out.skipped) c->skipped++;
+    else c->nonzero++;
+    if (out.txtp >= 0 && out.txtp < 17) c->txtp[out.txtp]++;
     return 0;
 }
 
@@ -72,6 +76,8 @@ int main(int argc, char **argv)
 
     ctx.leaves = 0;
     ctx.nonzero = 0;
+    ctx.skipped = 0;
+    memset(ctx.txtp, 0, sizeof(ctx.txtp));
     stbv_av1_leaf_state_init(&ctx.state, ctx.above, 32, ctx.left, 32);
 
     r = stb_av1_decode_tile(&td, &st.seq, &st.frame,
@@ -83,6 +89,7 @@ int main(int argc, char **argv)
     printf("tile_bytes=%lu partition_leaves=%u syntax_leaves=%lu nonzero=%lu result=%d\n",
            (unsigned long)st.tile_size, td.leaves, ctx.leaves,
            ctx.nonzero, r);
+    printf("skipped=%lu non_skipped=%lu txtp0=%lu txtp1=%lu txtp9=%lu\n", ctx.skipped, ctx.nonzero, ctx.txtp[0], ctx.txtp[1], ctx.txtp[9]);
     free(data);
     return r ? 1 : 0;
 }

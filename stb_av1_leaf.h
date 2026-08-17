@@ -79,6 +79,9 @@ static int stbv_av1_get_skip_ctx_square(const stbv_av1_res_state *s,
     if (txh4 >= 4) ll |= ll >> 8;
     if (txh4 >= 2) ll |= ll >> 4;
 
+    /* bit 6 is the DC-sign flag; skip context uses magnitude only. */
+    la &= 0x3fU;
+    ll &= 0x3fU;
     la = la > 4 ? 4 : la;
     ll = ll > 4 ? 4 : ll;
     return stbv_av1_skip_ctx[la][ll];

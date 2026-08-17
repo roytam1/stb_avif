@@ -89,7 +89,7 @@ static void stb_av1_msac_norm(struct stb_av1_msac *s,
     s->rng = rng << d;
     s->cnt = cnt - d;
 
-    if ((unsigned int)cnt < (unsigned int)d)
+    if (cnt < d)
         stb_av1_msac_refill(s);
 }
 
