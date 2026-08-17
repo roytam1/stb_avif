@@ -83,7 +83,7 @@ static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
 
     uvcdf = cdf->uv_mode + ((cfl_allowed ? 1 : 0) * 13 + mode) * 16;
     sym = stb_av1_msac_symbol(msac, uvcdf, cfl_allowed ? 13 : 12);
-    if (sym > 12) return -3;
+    if (sym > (unsigned)(cfl_allowed ? 13 : 12)) return -3;
     b->uv_mode = (int)sym;
 
     if (b->uv_mode == STBV_AV1_INTRA_CFL) {

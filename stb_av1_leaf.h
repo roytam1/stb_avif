@@ -200,10 +200,28 @@ static int stbv_av1_leaf_tx_cb(int x4, int y4, int tx, void *opaque)
         c->out->skip_ctx = sctx;
     }
 
-    /* A skipped transform has the fixed residual context 0x40 in dav1d.
-     * Non-skipped coefficient decoding will replace this when it is wired in. */
-    stbv_av1_res_mark(&c->state->res, x4 & 31, y4 & 31,
-                      txw4, txh4, skip ? (stbv_u8)0x40 : (stbv_u8)0);
+    if (skip) {
+        /* A skipped transform has the fixed residual context 0x40. */
+        stbv_av1_res_mark(&c->state->res, x4 & 31, y4 & 31,
+                          txw4, txh4, (stbv_u8)0x40);
+    } else {
+        stbv_i32 cf[32 * 32];
+        int n = txw4 << 2;
+        int txclass = stbv_av1_tx_class(txtp);
+        int eob;
+
+        /* This first integration pass validates coefficient syntax and MSAC
+           consumption.  Quantization/reconstruction is still supplied by
+           the caller in the block layer. */
+        eob = stbv_av1_decode_coeffs_square(c->msac, c->cdf, tx, 0, txclass,
+                                             n, 1, 1, 0, sctx, 0, cf);
+        if (eob < 0)
+            return -2;
+        if (c->out)
+            c->out->eob = eob;
+        stbv_av1_res_mark(&c->state->res, x4 & 31, y4 & 31,
+                          txw4, txh4, (stbv_u8)(eob > 0 ? 1 : 0));
+    }
     return 0;
 }
 

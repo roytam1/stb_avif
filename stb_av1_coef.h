@@ -239,11 +239,9 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     memset(cf, 0, area * sizeof(*cf));
     memset(levels, 0, sizeof(levels));
 
-    /* skip[N_TX_SIZES][13][2] */
-    ctx = (unsigned)txctx * 26U + (unsigned)skip_ctx * 2U;
-    if (stb_av1_msac_symbol(msac, cdf->coef + ctx, 1U)) {
-        return 0;
-    }
+    /* Coefficient skip is decoded by the leaf-syntax layer immediately before
+       entering this function.  Do not consume it twice here. */
+    (void)skip_ctx;
 
     /* eob_bin_{16..1024}.  The first two dimensions are chroma and 1-D. */
     switch (szctx) {

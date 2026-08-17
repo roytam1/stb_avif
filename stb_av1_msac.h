@@ -137,22 +137,30 @@ static unsigned int stb_av1_msac_symbol(struct stb_av1_msac *s,
     unsigned int c = (unsigned int)(s->dif >>
                           (STB_AV1_MSAC_EC_WIN_SIZE - 16));
     unsigned int r = s->rng >> 8;
-    unsigned int u;
-    unsigned int v = s->rng;
-    unsigned int val = (unsigned int)-1;
+    unsigned int u = s->rng;
+    unsigned int v;
+    unsigned int val = 0;
     unsigned int count;
     unsigned int rate;
     unsigned int i;
 
-    /* n_symbols is the number of CDF boundaries. */
-    do {
-        val++;
-        u = v;
+    /* dav1d stores n_symbols CDF thresholds followed by the adaptation
+       count.  The implicit final threshold is zero, so the final symbol is
+       n_symbols.  Never interpret cdf[n_symbols] (the count) as a threshold. */
+    while (val < (unsigned int)n_symbols) {
         v = r * (cdf[val] >> STB_AV1_MSAC_EC_PROB_SHIFT);
         v >>= 7 - STB_AV1_MSAC_EC_PROB_SHIFT;
-        v += STB_AV1_MSAC_EC_MIN_PROB *
-             ((unsigned int)n_symbols - val);
-    } while (c < v);
+        if (c >= v)
+            break;
+        val++;
+    }
+
+    if (val < (unsigned int)n_symbols) {
+        v = r * (cdf[val] >> STB_AV1_MSAC_EC_PROB_SHIFT);
+        v >>= 7 - STB_AV1_MSAC_EC_PROB_SHIFT;
+    } else {
+        v = 0;
+    }
 
     stb_av1_msac_norm(s,
         s->dif - ((stbv_u64)v << (STB_AV1_MSAC_EC_WIN_SIZE - 16)),
