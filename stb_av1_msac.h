@@ -137,29 +137,31 @@ static unsigned int stb_av1_msac_symbol(struct stb_av1_msac *s,
     unsigned int c = (unsigned int)(s->dif >>
                           (STB_AV1_MSAC_EC_WIN_SIZE - 16));
     unsigned int r = s->rng >> 8;
-    unsigned int u = s->rng;
-    unsigned int v;
+    unsigned int u;
+    unsigned int v = s->rng;
     unsigned int val = 0;
     unsigned int count;
     unsigned int rate;
     unsigned int i;
 
     /* dav1d stores n_symbols CDF thresholds followed by the adaptation
-       count.  The implicit final threshold is zero, so the final symbol is
-       n_symbols.  Never interpret cdf[n_symbols] (the count) as a threshold. */
-    while (val < (unsigned int)n_symbols) {
+       count at cdf[n_symbols].  Never interpret that count as a threshold.
+       val runs over [0..n_symbols]; at val == n_symbols the min-prob term
+       (and the count itself, which is <= 32) makes v zero, so the loop is
+       guaranteed to terminate.  u tracks the previous cumulative range, so
+       the new range is u - v, matching dav1d_msac_decode_symbol_adapt_c. */
+    for (;;) {
+        u = v;
+        if (val >= (unsigned int)n_symbols) {
+            v = 0;
+            break;
+        }
         v = r * (cdf[val] >> STB_AV1_MSAC_EC_PROB_SHIFT);
         v >>= 7 - STB_AV1_MSAC_EC_PROB_SHIFT;
+        v += STB_AV1_MSAC_EC_MIN_PROB * ((unsigned int)n_symbols - val);
         if (c >= v)
             break;
         val++;
-    }
-
-    if (val < (unsigned int)n_symbols) {
-        v = r * (cdf[val] >> STB_AV1_MSAC_EC_PROB_SHIFT);
-        v >>= 7 - STB_AV1_MSAC_EC_PROB_SHIFT;
-    } else {
-        v = 0;
     }
 
     stb_av1_msac_norm(s,
