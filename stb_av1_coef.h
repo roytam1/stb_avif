@@ -220,7 +220,7 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     } else if (n == 16) {
         scan = stbv_av1_scan_16x16;
         sl = 2;
-    } else if (n == 32) {
+    } else if (n == 32 || n == 64) {
         scan = stbv_av1_scan_32x32;
         sl = 3;
     } else {
@@ -297,24 +297,26 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
              (unsigned)chroma * 84U;
 
     /* The level scratch layout is exactly the one used by dav1d: for 2-D
-     * transforms stride is the transform width; H/V use stride 16. */
+     * transforms stride is the coefficient-grid width (4 << sl), which for
+     * TX_64X64 is 32 while the real transform is 64 samples wide; H/V use
+     * stride 16. */
     if (tx_class == 0) {
-        stride = (unsigned)n;
+        stride = 4U << sl;
         shift = sl + 2U;
         shift2 = 0;
-        mask = (unsigned)n - 1U;
+        mask = (4U << sl) - 1U;
     } else if (tx_class == 1) {
         stride = 16U;
         shift = sl + 2U;
         shift2 = 0;
-        mask = (unsigned)n - 1U;
+        mask = (4U << sl) - 1U;
     } else {
         stride = 16U;
         shift = sl + 2U;
         shift2 = sl + 2U;
-        mask = (unsigned)n - 1U;
+        mask = (4U << sl) - 1U;
     }
-    memset(levels, 0, (size_t)(stride * ((unsigned)n + 2U)));
+    memset(levels, 0, (size_t)(stride * ((4U << sl) + 2U)));
 
     /* EOB coefficient and descending AC scan, only when eob > 0. */
     if (eob) {

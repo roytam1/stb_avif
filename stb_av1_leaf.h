@@ -251,7 +251,7 @@ static int stbv_av1_leaf_tx_cb(int x4, int y4, int tx, void *opaque)
         stbv_av1_res_mark(&c->state->res, x4 & 31, y4 & 31,
                           txw4, txh4, (stbv_u8)0x40);
     } else {
-        stbv_i32 cf[32 * 32];
+        stbv_i32 cf[64 * 64];
         int n = txw4 << 2;
         int txclass = stbv_av1_tx_class(txtp);
         int eob;
