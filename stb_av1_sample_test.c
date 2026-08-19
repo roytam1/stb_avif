@@ -19,6 +19,10 @@ struct sample_ctx {
     unsigned long nonzero;
     unsigned long skipped;
     unsigned long txtp[17];
+    int err;
+    int err_x4;
+    int err_y4;
+    int err_bs;
 };
 
 static int sample_leaf(struct stb_av1_tile_decoder *td,
@@ -32,8 +36,13 @@ static int sample_leaf(struct stb_av1_tile_decoder *td,
     r = stbv_av1_decode_leaf_syntax(&td->msac, &td->cdf, &c->state,
                                     td->frame, li->bs, li->bx, li->by,
                                     &out);
-    if (r)
+    if (r) {
+        c->err = r;
+        c->err_x4 = li->bx;
+        c->err_y4 = li->by;
+        c->err_bs = li->bs;
         return r;
+    }
     c->leaves++;
     if (out.skipped) c->skipped++;
     else c->nonzero++;
@@ -90,6 +99,9 @@ int main(int argc, char **argv)
            (unsigned long)st.tile_size, td.leaves, ctx.leaves,
            ctx.nonzero, r);
     printf("skipped=%lu non_skipped=%lu txtp0=%lu txtp1=%lu txtp9=%lu\n", ctx.skipped, ctx.nonzero, ctx.txtp[0], ctx.txtp[1], ctx.txtp[9]);
+    if (ctx.err)
+        printf("leaf error=%d at x4=%d y4=%d bs=%d\n",
+               ctx.err, ctx.err_x4, ctx.err_y4, ctx.err_bs);
     free(data);
     return r ? 1 : 0;
 }
