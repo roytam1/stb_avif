@@ -45,7 +45,7 @@ static int stbv_av1_recon_intra_block(struct stb_av1_msac *msac,
                                         n == 16 ? 2 : 3,
                                         chroma, 0, n, dq_dc, dq_ac,
                                         dq_shift, skip_ctx, dc_sign_ctx,
-                                        cf);
+                                        cf, NULL);
     if (eob < 0)
         return eob;
 

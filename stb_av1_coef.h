@@ -192,7 +192,8 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
                                           int txctx, int chroma, int tx_class,
                                           int n, int dq_dc, int dq_ac,
                                           int dq_shift, int skip_ctx, int dc_sign_ctx,
-                                          stbv_i32 *cf)
+                                          stbv_i32 *cf,
+                                          stbv_u8 *res_ctx_out)
 {
     const stbv_u16 *scan;
     stbv_u8 levels[34 * 34];
@@ -464,12 +465,11 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
         } while (rc);
     }
 
-    /* res_ctx = min(cul_level,63) | dc_sign_level.  The current public
-     * function predates the res_ctx output, so the value is intentionally not
-     * exposed yet; the leaf-state integration will add it when coefficient
-     * contexts are wired into neighboring blocks. */
-    (void)dc_sign_level;
-    (void)cul_level;
+    /* res_ctx = min(cul_level,63) | dc_sign_level, exactly like dav1d's
+     * decode_coefs() tail. */
+    if (res_ctx_out)
+        *res_ctx_out = (stbv_u8)((cul_level < 63U ? cul_level : 63U) |
+                                 dc_sign_level);
     return (int)eob;
 }
 
