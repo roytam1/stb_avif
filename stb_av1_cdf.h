@@ -1432,6 +1432,15 @@ static const stbv_u16 stb_av1_cdf_coef3_dc_sign[12] = {
     16000, 0, 13056, 0, 18816, 0, 15232, 0, 12928, 0, 17280, 0,
 };
 
+static const stbv_u16 stb_av1_cdf_pal_y[21] = {
+    31676, 3419, 1261, 31912, 2859, 980, 31823, 3400, 781, 32030, 3561, 904,
+    32309, 7337, 1462, 32265, 4015, 1521, 32450, 7946, 129,
+};
+
+static const stbv_u16 stb_av1_cdf_pal_uv[2] = {
+    32461, 21488,
+};
+
 typedef struct stbv_av1_cdf {
     stbv_u16 y_mode[64];
     stbv_u16 uv_mode[416];
@@ -1447,6 +1456,8 @@ typedef struct stbv_av1_cdf {
     stbv_u16 cfl_alpha[96];
     stbv_u16 txtp_intra1[208];
     stbv_u16 txtp_intra2[312];
+    stbv_u16 pal_y[21];
+    stbv_u16 pal_uv[2];
     stbv_u16 coef[3050];
 } stbv_av1_cdf;
 
@@ -1543,6 +1554,10 @@ static void stbv_av1_cdf_init(stbv_av1_cdf *c, unsigned qcat)
     stbv_av1_cdf_inv(c->txtp_intra1, stb_av1_cdf_txtp_intra1, 26, 8, 6);
     memcpy(c->txtp_intra2, stb_av1_cdf_txtp_intra2, sizeof(c->txtp_intra2));
     stbv_av1_cdf_inv(c->txtp_intra2, stb_av1_cdf_txtp_intra2, 39, 8, 4);
+    memcpy(c->pal_y, stb_av1_cdf_pal_y, sizeof(c->pal_y));
+    stbv_av1_cdf_inv(c->pal_y, stb_av1_cdf_pal_y, 21, 2, 1);
+    memcpy(c->pal_uv, stb_av1_cdf_pal_uv, sizeof(c->pal_uv));
+    stbv_av1_cdf_inv(c->pal_uv, stb_av1_cdf_pal_uv, 2, 2, 1);
     if (qcat > 3) qcat = 3;
     switch (qcat) {
     case 0: stbv_av1_cdf_copy_coef(c->coef, 0); break;

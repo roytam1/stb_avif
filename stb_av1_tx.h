@@ -30,6 +30,21 @@
 #define STBV_AV1_TX_16X16 2
 #define STBV_AV1_TX_32X32 3
 #define STBV_AV1_TX_64X64 4
+#define STBV_AV1_TX_4X8   5
+#define STBV_AV1_TX_8X4   6
+#define STBV_AV1_TX_8X16  7
+#define STBV_AV1_TX_16X8  8
+#define STBV_AV1_TX_16X32 9
+#define STBV_AV1_TX_32X16 10
+#define STBV_AV1_TX_32X64 11
+#define STBV_AV1_TX_64X32 12
+#define STBV_AV1_TX_4X16  13
+#define STBV_AV1_TX_16X4  14
+#define STBV_AV1_TX_8X32  15
+#define STBV_AV1_TX_32X8  16
+#define STBV_AV1_TX_16X64 17
+#define STBV_AV1_TX_64X16 18
+#define STBV_AV1_N_TX_SIZES 19
 
 #define STBV_AV1_TX_DCT_DCT               0
 #define STBV_AV1_TX_ADST_DCT              1
@@ -76,12 +91,53 @@ typedef struct stbv_av1_tx_dim {
     unsigned char ctx;
 } stbv_av1_tx_dim;
 
-static const stbv_av1_tx_dim stbv_av1_tx_dims[5] = {
+static const stbv_av1_tx_dim stbv_av1_tx_dims[STBV_AV1_N_TX_SIZES] = {
+    /* dav1d_txfm_dimensions[], in dav1d enum order. */
     { 1,  1, 0, 0, 0, 0, STBV_AV1_TX_4X4,   0 },
     { 2,  2, 1, 1, 1, 1, STBV_AV1_TX_4X4,   1 },
     { 4,  4, 2, 2, 2, 2, STBV_AV1_TX_8X8,   2 },
     { 8,  8, 3, 3, 3, 3, STBV_AV1_TX_16X16, 3 },
-    {16, 16, 4, 4, 4, 4, STBV_AV1_TX_32X32, 4 }
+    {16, 16, 4, 4, 4, 4, STBV_AV1_TX_32X32, 4 },
+    { 1,  2, 0, 1, 0, 1, STBV_AV1_TX_4X4,   1 },
+    { 2,  1, 1, 0, 0, 1, STBV_AV1_TX_4X4,   1 },
+    { 2,  4, 1, 2, 1, 2, STBV_AV1_TX_8X8,   2 },
+    { 4,  2, 2, 1, 1, 2, STBV_AV1_TX_8X8,   2 },
+    { 4,  8, 2, 3, 2, 3, STBV_AV1_TX_16X16, 3 },
+    { 8,  4, 3, 2, 2, 3, STBV_AV1_TX_16X16, 3 },
+    { 8, 16, 3, 4, 3, 4, STBV_AV1_TX_32X32, 4 },
+    {16,  8, 4, 3, 3, 4, STBV_AV1_TX_32X32, 4 },
+    { 1,  4, 0, 2, 0, 2, STBV_AV1_TX_4X8,   1 },
+    { 4,  1, 2, 0, 0, 2, STBV_AV1_TX_8X4,   1 },
+    { 2,  8, 1, 3, 1, 3, STBV_AV1_TX_8X16,  2 },
+    { 8,  2, 3, 1, 1, 3, STBV_AV1_TX_16X8,  2 },
+    { 4, 16, 2, 4, 2, 4, STBV_AV1_TX_16X32, 3 },
+    {16,  4, 4, 2, 2, 4, STBV_AV1_TX_32X16, 3 }
+};
+
+/* dav1d_max_txfm_size_for_bs[bs][plane]: y, 420, 422, 444. */
+static const stbv_u8 stbv_av1_max_tx_for_bs[STBV_AV1_N_BS_SIZES][4] = {
+    {STBV_AV1_TX_64X64, STBV_AV1_TX_32X32, STBV_AV1_TX_32X32, STBV_AV1_TX_32X32},
+    {STBV_AV1_TX_64X64, STBV_AV1_TX_32X32, STBV_AV1_TX_32X32, STBV_AV1_TX_32X32},
+    {STBV_AV1_TX_64X64, STBV_AV1_TX_32X32, STBV_AV1_TX_4X4,   STBV_AV1_TX_32X32},
+    {STBV_AV1_TX_64X64, STBV_AV1_TX_32X32, STBV_AV1_TX_32X32, STBV_AV1_TX_32X32},
+    {STBV_AV1_TX_64X32, STBV_AV1_TX_32X16, STBV_AV1_TX_32X32, STBV_AV1_TX_32X32},
+    {STBV_AV1_TX_64X16, STBV_AV1_TX_32X8,  STBV_AV1_TX_32X16, STBV_AV1_TX_32X16},
+    {STBV_AV1_TX_32X64, STBV_AV1_TX_16X32, STBV_AV1_TX_4X4,   STBV_AV1_TX_32X32},
+    {STBV_AV1_TX_32X32, STBV_AV1_TX_16X16, STBV_AV1_TX_16X32, STBV_AV1_TX_32X32},
+    {STBV_AV1_TX_32X16, STBV_AV1_TX_16X8,  STBV_AV1_TX_16X16, STBV_AV1_TX_32X16},
+    {STBV_AV1_TX_32X8,  STBV_AV1_TX_16X4,  STBV_AV1_TX_16X8,  STBV_AV1_TX_32X8},
+    {STBV_AV1_TX_16X64, STBV_AV1_TX_8X32,  STBV_AV1_TX_4X4,   STBV_AV1_TX_16X32},
+    {STBV_AV1_TX_16X32, STBV_AV1_TX_8X16,  STBV_AV1_TX_4X4,   STBV_AV1_TX_16X32},
+    {STBV_AV1_TX_16X16, STBV_AV1_TX_8X8,   STBV_AV1_TX_8X16,  STBV_AV1_TX_16X16},
+    {STBV_AV1_TX_16X8,  STBV_AV1_TX_8X4,   STBV_AV1_TX_8X8,   STBV_AV1_TX_16X8},
+    {STBV_AV1_TX_16X4,  STBV_AV1_TX_8X4,   STBV_AV1_TX_8X4,   STBV_AV1_TX_16X4},
+    {STBV_AV1_TX_8X32,  STBV_AV1_TX_4X16,  STBV_AV1_TX_4X4,   STBV_AV1_TX_8X32},
+    {STBV_AV1_TX_8X16,  STBV_AV1_TX_4X8,   STBV_AV1_TX_4X4,   STBV_AV1_TX_8X16},
+    {STBV_AV1_TX_8X8,   STBV_AV1_TX_4X4,   STBV_AV1_TX_4X8,   STBV_AV1_TX_8X8},
+    {STBV_AV1_TX_8X4,   STBV_AV1_TX_4X4,   STBV_AV1_TX_4X4,   STBV_AV1_TX_8X4},
+    {STBV_AV1_TX_4X16,  STBV_AV1_TX_4X8,   STBV_AV1_TX_4X4,   STBV_AV1_TX_4X16},
+    {STBV_AV1_TX_4X8,   STBV_AV1_TX_4X4,   STBV_AV1_TX_4X4,   STBV_AV1_TX_4X8},
+    {STBV_AV1_TX_4X4,   STBV_AV1_TX_4X4,   STBV_AV1_TX_4X4,   STBV_AV1_TX_4X4}
 };
 
 static int stbv_av1_tx_class(int tx_type)
@@ -100,6 +156,15 @@ static int stbv_av1_tx_class(int tx_type)
     }
 }
 
+/* dav1d_txtp_from_uvmode: chroma txtp derived from the intra UV mode. */
+static const unsigned char stbv_av1_txtp_from_uvmode[14] = {
+    STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_ADST_DCT, STBV_AV1_TX_DCT_ADST,
+    STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_ADST_DCT,
+    STBV_AV1_TX_DCT_ADST, STBV_AV1_TX_ADST_ADST, STBV_AV1_TX_DCT_DCT,
+    STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_DCT_DCT,
+    STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_DCT_DCT
+};
+
 /*
  * Decode one transform-size choice from dav1d's txsz CDF.
  *
@@ -115,24 +180,25 @@ static int stbv_av1_decode_tx_size(struct stb_av1_msac *msac,
                                    int tctx)
 {
     unsigned int depth;
-    int n;
+    int n, max2;
 
-    if (max_tx <= STBV_AV1_TX_4X4)
+    if (max_tx < 0 || max_tx >= STBV_AV1_N_TX_SIZES)
+        return STBV_AV1_TX_4X4;
+    /* dav1d: txsz[t_dim->max - 1][tctx], where t_dim->max is the square
+     * maximum of the block's largest transform (1..4). */
+    max2 = stbv_av1_tx_dims[max_tx].max;
+    if (max2 <= STBV_AV1_TX_4X4)
         return STBV_AV1_TX_4X4;
     if (tctx < 0) tctx = 0;
     if (tctx > 2) tctx = 2;
 
-    /* dav1d: txsz[max - 1][tctx], with max-1 selecting the CDF row.
-     * For the square transforms used here dav1d's txfm "max" equals our
-     * max_tx index (TX_8X8=1 .. TX_64X64=4), so a 64x64 maximum uses
-     * txsz[3] and a 32x32 maximum uses txsz[2]. */
-    n = max_tx < STBV_AV1_TX_16X16 ? max_tx : 2;
+    n = max2 < STBV_AV1_TX_16X16 ? max2 : 2;
     depth = stb_av1_msac_symbol(msac,
-             &cdf->txsz[(max_tx - 1) * 12 + tctx * 4],
+             &cdf->txsz[(max2 - 1) * 12 + tctx * 4],
              (size_t)n);
 
     while (depth-- > 0 && max_tx > STBV_AV1_TX_4X4)
-        max_tx--;
+        max_tx = stbv_av1_tx_dims[max_tx].sub;
     return max_tx;
 }
 
@@ -173,6 +239,10 @@ static int stbv_av1_decode_tx_split(struct stb_av1_msac *msac,
  * y_mode_nofilt is the ordinary directional/DC intra mode (FILTER_PRED has
  * already been converted to its underlying directional mode by the caller).
  * reduced_txtp_set selects dav1d's four-entry Intra2 set.
+ *
+ * The caller is responsible for dav1d's gating: no symbol is coded when the
+ * block is lossless, when t_dim->max + 1 >= TX_64X64, when qidx == 0, or for
+ * chroma planes (txtp is derived via stbv_av1_txtp_from_uvmode).
  */
 static int stbv_av1_decode_intra_txtp(struct stb_av1_msac *msac,
                                       stbv_av1_cdf *cdf,
@@ -181,17 +251,23 @@ static int stbv_av1_decode_intra_txtp(struct stb_av1_msac *msac,
                                       int reduced_txtp_set)
 {
     unsigned int idx;
+    int min2;
 
+    if (y_mode_nofilt < 0 || y_mode_nofilt > 12) y_mode_nofilt = STBV_AV1_INTRA_DC;
     if (reduced_txtp_set || tx_min == STBV_AV1_TX_16X16) {
+        /* txtp_intra2[min][y_mode], min in 0..2 */
+        min2 = tx_min > 2 ? 2 : (tx_min < 0 ? 0 : tx_min);
         idx = stb_av1_msac_symbol(msac,
-              &cdf->txtp_intra2[(tx_min - 1) * 104 + y_mode_nofilt * 8], 4);
+              &cdf->txtp_intra2[min2 * 104 + y_mode_nofilt * 8], 4);
         if (idx < 5)
             return stbv_av1_tx_set_intra2[idx];
         return STBV_AV1_TX_DCT_DCT;
     }
 
+    /* txtp_intra1[min][y_mode], min in 0..1 */
+    min2 = tx_min > 1 ? 1 : (tx_min < 0 ? 0 : tx_min);
     idx = stb_av1_msac_symbol(msac,
-          &cdf->txtp_intra1[tx_min * 104 + y_mode_nofilt * 8], 6);
+          &cdf->txtp_intra1[min2 * 104 + y_mode_nofilt * 8], 6);
     if (idx < 7)
         return stbv_av1_tx_set_intra1[idx];
     return STBV_AV1_TX_DCT_DCT;
