@@ -85,6 +85,11 @@ static void stb_av1_msac_norm(struct stb_av1_msac *s,
     int d = stb_av1_msac_norm_shift(rng);
     int cnt = s->cnt;
 
+    /* dav1d keeps rng in 16 bits: the update expressions v += ret*(r - 2*v)
+     * and u - v are allowed to go negative and wrap modulo 2^16.  Truncate
+     * here so the wrap matches dav1d instead of corrupting the high bits. */
+    rng &= 0xFFFFU;
+
     s->dif = dif << d;
     s->rng = rng << d;
     s->cnt = cnt - d;
