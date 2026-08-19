@@ -96,8 +96,6 @@ static int stb_av1_decode_tile(struct stb_av1_tile_decoder *td,
         return -4;
     if (seq->monochrome)
         return -5;
-    if (seq->hbd)
-        return -6;
 
     memset(td, 0, sizeof(*td));
     td->seq = seq;
@@ -138,7 +136,8 @@ static int stb_av1_decode_tile(struct stb_av1_tile_decoder *td,
         for (sy = 0; sy < sbh; sy++) {
             unsigned int sx;
             memset(pd.left, 0, sizeof(pd.left));
-            memset(pd.above, 0, sizeof(pd.above));
+            if (sy == 0)
+                memset(pd.above, 0, sizeof(pd.above));
             if (row_cb) row_cb(opaque);
             for (sx = 0; sx < sbw; sx++) {
                 int bl = seq->sb128 ? STBV_AV1_BL_128X128 :
