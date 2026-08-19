@@ -256,8 +256,10 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
     int txh4 = stbv_av1_tx_dims[tx].h;
     int sctx, txtp, max;
     unsigned skip;
+    int is_chroma = chroma != 0; /* dav1d: chroma = !!plane */
 
-    sctx = stbv_av1_get_skip_ctx(rs, x4, y4, bw4, bh4, txw4, txh4, chroma);
+    sctx = stbv_av1_get_skip_ctx(rs, x4, y4, bw4, bh4, txw4, txh4,
+                                 is_chroma);
     skip = stb_av1_msac_bool_adapt(
         msac, cdf->coef + stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2);
 
@@ -268,7 +270,7 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
             txtp = STBV_AV1_TX_WHT_WHT;
         else if (max + 1 >= STBV_AV1_TX_64X64) /* max + intra >= TX_64X64 */
             txtp = STBV_AV1_TX_DCT_DCT;
-        else if (chroma)
+        else if (is_chroma)
             /* inferred from the intra UV mode, never coded */
             txtp = stbv_av1_txtp_from_uvmode[c->intra ? c->intra->uv_mode : 0];
         else if (!c->qidx)
@@ -292,8 +294,9 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
         out->eob = 0;
         out->skip_ctx = sctx;
     }
-    fprintf(stderr, "L8 ch=%d x=%d y=%d tx=%d skip=%d r=%u\n", chroma,
-            x4, y4, tx, (int)skip, msac->rng);
+    fprintf(stderr, "L8 ch=%d x=%d y=%d tx=%d skip=%d sctx=%d r=%u dif=%llu\n",
+            chroma, x4, y4, tx, (int)skip, sctx, msac->rng,
+            (unsigned long long)msac->dif);
 
     if (skip) {
         /* A skipped transform has the fixed residual context 0x40. */
@@ -310,11 +313,14 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
         int s = 0;
         int i;
 
-        /* dav1d get_dc_sign_ctx: sum res_ctx >> 6 over the transform width,
+        /* dav1d get_dc_sign_ctx: sum res_ctx >> 6 over the transform width
+         * for the above row and the transform HEIGHT for the left column,
          * then subtract w4 and h4 and map to 0..2 via (s != 0) + (s > 0). */
         for (i = 0; i < txw4; i++) {
             if ((unsigned int)(x4 + i) < rs->above_n)
                 s += rs->above[x4 + i] >> 6;
+        }
+        for (i = 0; i < txh4; i++) {
             if ((unsigned int)(y4 + i) < rs->left_n)
                 s += rs->left[y4 + i] >> 6;
         }
@@ -325,7 +331,7 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
         /* This first integration pass validates coefficient syntax and MSAC
            consumption.  Quantization/reconstruction is still supplied by
            the caller in the block layer. */
-        eob = stbv_av1_decode_coeffs_square(msac, cdf, tx, chroma, txclass,
+        eob = stbv_av1_decode_coeffs_square(msac, cdf, tx, is_chroma, txclass,
                                              1, 1, 0, sctx, dc_sign_ctx, cf,
                                              &res_ctx);
         if (eob < 0)
@@ -504,7 +510,8 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                      stbv_av1_tx_dims[max_tx].lh,
                                      state->tx.left_n));
     }
-    fprintf(stderr, "L7 tx0=%d max=%d r=%u\n", tx0, max_tx, msac->rng);
+    fprintf(stderr, "L7 tx0=%d max=%d uv=%d layout=%d r=%u dif=%llu\n", tx0,
+            max_tx, uv_tx, layout, msac->rng, (unsigned long long)msac->dif);
 
     c.msac = msac;
     c.cdf = cdf;
@@ -550,7 +557,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                     for (cy4 = cby4; cy4 < cby4 + cbh4; cy4 += uv_txh4) {
                         for (cx4 = cbx4; cx4 < cbx4 + cbw4; cx4 += uv_txw4) {
                             r = stbv_av1_leaf_tx_plane(msac, cdf, &c, cx4, cy4,
-                                                       uv_tx, pl,
+                                                       uv_tx, pl + 1,
                                                        &state->cres[pl],
                                                        cbw4, cbh4, NULL);
                             if (r) return -4;
