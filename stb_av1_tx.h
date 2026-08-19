@@ -193,6 +193,10 @@ static int stbv_av1_decode_tx_size(struct stb_av1_msac *msac,
     if (tctx > 2) tctx = 2;
 
     n = max2 < STBV_AV1_TX_16X16 ? max2 : 2;
+    fprintf(stderr, "TXSZ max2=%d tctx=%d n=%d c0=%d c1=%d cnt=%d r0=%u\n",
+            max2, tctx, n, cdf->txsz[(max2 - 1) * 12 + tctx * 4],
+            cdf->txsz[(max2 - 1) * 12 + tctx * 4 + 1],
+            cdf->txsz[(max2 - 1) * 12 + tctx * 4 + 2], msac->rng);
     depth = stb_av1_msac_symbol(msac,
              &cdf->txsz[(max2 - 1) * 12 + tctx * 4],
              (size_t)n);
@@ -253,7 +257,7 @@ static int stbv_av1_decode_intra_txtp(struct stb_av1_msac *msac,
     unsigned int idx;
     int min2;
 
-    if (y_mode_nofilt < 0 || y_mode_nofilt > 12) y_mode_nofilt = STBV_AV1_INTRA_DC;
+    if (y_mode_nofilt < 0 || y_mode_nofilt > 12) y_mode_nofilt = 0; /* DC */
     if (reduced_txtp_set || tx_min == STBV_AV1_TX_16X16) {
         /* txtp_intra2[min][y_mode], min in 0..2 */
         min2 = tx_min > 2 ? 2 : (tx_min < 0 ? 0 : tx_min);

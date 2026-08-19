@@ -46,7 +46,7 @@ static int stb_av1_intra_state_decode_leaf(
     int cfl_allowed,
     struct stb_av1_intra_block *out)
 {
-    int bw4, bh4, above, left, x, y;
+    int bw4, bh4, above, left;
     if (!s || !out || bs < 0 || bs >= STBV_AV1_N_BS_SIZES)
         return -1;
     bw4 = stbv_av1_block_dimensions[bs][0];
@@ -63,14 +63,9 @@ static int stb_av1_intra_state_decode_leaf(
                                    bw4, bh4, cfl_allowed, out))
         return -2;
 
-    if (s->above_mode) {
-        for (x = 0; x < bw4 && (unsigned)(bx4 + x) < s->above_count; x++)
-            s->above_mode[bx4 + x] = (stbv_u8)out->y_mode;
-    }
-    if (s->left_mode) {
-        for (y = 0; y < bh4 && (unsigned)(by4 + y) < s->left_count; y++)
-            s->left_mode[by4 + y] = (stbv_u8)out->y_mode;
-    }
+    /* The mode maps are written by the caller after the filter-intra bool:
+     * dav1d stores y_mode_nofilt (FILTER_PRED is converted to its underlying
+     * directional mode before set_ctx). */
     return 0;
 }
 

@@ -1432,13 +1432,22 @@ static const stbv_u16 stb_av1_cdf_coef3_dc_sign[12] = {
     16000, 0, 13056, 0, 18816, 0, 15232, 0, 12928, 0, 17280, 0,
 };
 
-static const stbv_u16 stb_av1_cdf_pal_y[21] = {
-    31676, 3419, 1261, 31912, 2859, 980, 31823, 3400, 781, 32030, 3561, 904,
-    32309, 7337, 1462, 32265, 4015, 1521, 32450, 7946, 129,
+/* dav1d pal_y[7][3][2]: 7 size contexts x 3 palette contexts, each a 2-entry
+ * CDF1.  The leaf syntax only uses pal_ctx 0 for now, so the stride into the
+ * table is sz_ctx * 6 entries. */
+static const stbv_u16 stb_av1_cdf_pal_y[42] = {
+    31676, 32768,  3419, 32768,  1261, 32768,
+    31912, 32768,  2859, 32768,   980, 32768,
+    31823, 32768,  3400, 32768,   781, 32768,
+    32030, 32768,  3561, 32768,   904, 32768,
+    32309, 32768,  7337, 32768,  1462, 32768,
+    32265, 32768,  4015, 32768,  1521, 32768,
+    32450, 32768,  7946, 32768,   129, 32768,
 };
 
-static const stbv_u16 stb_av1_cdf_pal_uv[2] = {
-    32461, 21488,
+/* dav1d pal_uv[2][2]: 2 palette contexts, each a 2-entry CDF1. */
+static const stbv_u16 stb_av1_cdf_pal_uv[4] = {
+    32461, 32768, 21488, 32768,
 };
 
 typedef struct stbv_av1_cdf {
@@ -1456,8 +1465,8 @@ typedef struct stbv_av1_cdf {
     stbv_u16 cfl_alpha[96];
     stbv_u16 txtp_intra1[208];
     stbv_u16 txtp_intra2[312];
-    stbv_u16 pal_y[21];
-    stbv_u16 pal_uv[2];
+    stbv_u16 pal_y[42];
+    stbv_u16 pal_uv[4];
     stbv_u16 coef[3050];
 } stbv_av1_cdf;
 

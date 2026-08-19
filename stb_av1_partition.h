@@ -144,7 +144,7 @@ static const stbv_u8 stbv_av1_block_sizes[STBV_AV1_N_BL_LEVELS]
 };
 
 static const stbv_u8 stbv_av1_partition_type_count[STBV_AV1_N_BL_LEVELS] = {
-    7, 9, 9, 9, 4
+    7, 9, 9, 9, 3
 };
 
 /* Convert a partition-tree level to the corresponding CDF slice. */

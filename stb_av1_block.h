@@ -41,9 +41,10 @@ static int stbv_av1_recon_intra_block(struct stb_av1_msac *msac,
         return -1;
 
     eob = stbv_av1_decode_coeffs_square(msac, cdf,
-                                        n == 4 ? 0 : n == 8 ? 1 :
-                                        n == 16 ? 2 : 3,
-                                        chroma, 0, n, dq_dc, dq_ac,
+                                        n == 4 ? STBV_AV1_TX_4X4 : n == 8 ?
+                                        STBV_AV1_TX_8X8 : n == 16 ?
+                                        STBV_AV1_TX_16X16 : STBV_AV1_TX_32X32,
+                                        chroma, 0, dq_dc, dq_ac,
                                         dq_shift, skip_ctx, dc_sign_ctx,
                                         cf, NULL);
     if (eob < 0)

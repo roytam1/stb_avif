@@ -25,7 +25,10 @@
 
 static unsigned stbv_av1_coef_hi_tok(struct stb_av1_msac *s, stbv_u16 *cdf)
 {
-    unsigned t = stb_av1_msac_symbol(s, cdf, 3);
+    unsigned t;
+    fprintf(stderr, "HT c0=%d c1=%d c2=%d cnt=%d r0=%u\n",
+            cdf[0], cdf[1], cdf[2], cdf[3], s->rng);
+    t = stb_av1_msac_symbol(s, cdf, 3);
     unsigned v = 3 + t;
     if (t == 3) {
         t = stb_av1_msac_symbol(s, cdf, 3);
@@ -450,6 +453,8 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     }
 
     eob = stb_av1_msac_symbol(msac, eob_bin_cdf, 4U + szctx);
+    fprintf(stderr, "E1 szctx=%u ch=%d is1d=%d eob_bin=%u r=%u\n",
+            szctx, chroma, is1d, eob, msac->rng);
     if (eob > 1U) {
         eob_bin = eob - 2U;
         /* eob_hi_bit[N_TX_SIZES][2][9][2] */
@@ -457,6 +462,7 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
                      (unsigned)chroma * 18U + eob_bin * 2U;
         eob = ((stb_av1_msac_bool_adapt(msac, eob_hi_cdf) | 2U) << eob_bin) |
               stb_av1_msac_bools(msac, eob_bin);
+        fprintf(stderr, "E2 eob=%u r=%u\n", eob, msac->rng);
     }
     if (eob > area)
         return -2;
@@ -593,10 +599,14 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
         }
     } else {
         tok = stb_av1_msac_symbol(msac, eob_cdf + 0U, 2U);
+        fprintf(stderr, "E3a tok=%u r=%u\n", tok, msac->rng);
         dc_tok = (int)(1U + tok);
-        if (tok == 2U)
+        if (tok == 2U) {
             dc_tok = (int)stbv_av1_coef_hi_tok(msac, hi_cdf + 0U);
+            fprintf(stderr, "E3b dc_tok=%d r=%u\n", dc_tok, msac->rng);
+        }
     }
+    fprintf(stderr, "E3 eob=%u dc_tok=%d r=%u\n", eob, dc_tok, msac->rng);
 
     /* The final rc is the first non-zero coefficient in scan order.  dav1d's
      * residual pass follows the linked list encoded above. */
@@ -610,6 +620,9 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
                       (unsigned)dc_sign_ctx * 2U;
         dc_sign = (int)stb_av1_msac_bool_adapt(msac, dc_sign_cdf);
         dc_sign_level = (dc_sign - 1) & (2 << 6);
+        fprintf(stderr, "E4 dc_sign=%d r=%u c0=%d cnt=%d dctx=%d dif=%llu\n",
+                dc_sign, msac->rng, dc_sign_cdf[0], dc_sign_cdf[1],
+                dc_sign_ctx, (unsigned long long)msac->dif);
 
         dc_dq = dq_dc;
         if (dc_tok == 15) {

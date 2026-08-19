@@ -28,6 +28,18 @@
 #define STBV_AV1_INTRA_SMOOTH_H   11
 #define STBV_AV1_INTRA_PAETH      12
 #define STBV_AV1_INTRA_CFL        13
+#define STBV_AV1_INTRA_FILTER     14
+
+/* dav1d_filter_mode_to_y_mode: underlying directional mode of a filtered
+ * intra prediction mode. */
+static const unsigned char stbv_av1_filter_mode_to_y_mode[5] = {
+    STBV_AV1_INTRA_DC, STBV_AV1_INTRA_VERT, STBV_AV1_INTRA_HOR,
+    STBV_AV1_INTRA_DC, STBV_AV1_INTRA_DC
+};
+
+/* dav1d_cfl_allowed_mask: cfl is allowed for blocks no larger than 32x32
+ * (bits for BS_32x32 .. BS_4x4, dav1d tables.h). */
+#define STBV_AV1_CFL_ALLOWED_MASK 0x3FFF80u
 
 /* dav1d_intra_mode_context[], in the same order as N_INTRA_PRED_MODES. */
 static const stbv_u8 stbv_av1_intra_mode_ctx[13] = {

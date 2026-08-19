@@ -51,9 +51,12 @@ static int stbv_av1_tx_is_smaller(const stbv_u8 *edge, int pos4, int tx_dim,
 static int stbv_av1_tx_is_large(const stbv_u8 *edge, int pos4, int tx_dim,
                                 unsigned int n)
 {
+    /* dav1d's tx_intra is int8_t and reset to -1: a missing neighbour is
+     * never "larger or equal" than any real transform (log2 0..4).  The
+     * 0xff sentinel must therefore compare as false. */
     if (!edge || pos4 < 0 || (unsigned int)pos4 >= n)
         return 0;
-    return edge[pos4] >= tx_dim;
+    return edge[pos4] != 0xff && edge[pos4] >= tx_dim;
 }
 
 /* dav1d resets only the LEFT transform context at each superblock row;

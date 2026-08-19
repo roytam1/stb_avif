@@ -159,8 +159,9 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
     if (have_h_split && have_v_split) {
         bp = (int)stb_av1_msac_symbol(d->msac, pc,
                                       stbv_av1_partition_type_count[bl]);
-        STBV_AV1_PARTDBG("P y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%08x c=%d\n",
-                         by, bx, bl, ctx, bp, d->msac->rng, d->msac->dif,
+        STBV_AV1_PARTDBG("P y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%016llx c=%d\n",
+                         by, bx, bl, ctx, bp, d->msac->rng,
+                         (unsigned long long)d->msac->dif,
                          d->msac->cnt);
         if (bp < 0 || bp >= STBV_AV1_N_PARTITIONS) {
             STBV_AV1_PARTDBG("PARDEC bl=%d bx=%d by=%d sym=%d rng=%u dif=%08x cnt=%d\n",

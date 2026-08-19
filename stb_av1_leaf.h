@@ -60,17 +60,35 @@ static unsigned stbv_av1_res_merge(const stbv_u8 *p, int n)
     return v;
 }
 
-/* Luma skip context for square transforms.  This is the non-chroma branch of
- * dav1d's get_skip_ctx(), restricted to the initial square-transform path. */
-static int stbv_av1_get_skip_ctx_square(const stbv_av1_res_state *s,
-                                        int bx4, int by4,
-                                        int bw4, int bh4,
-                                        int txw4, int txh4)
+/* Skip context, following dav1d's get_skip_ctx().  chroma == 0: luma branch
+ * (equal block/transform dims give ctx 0, otherwise merge the residual
+ * contexts over the transform width/height and look up the table).  chroma
+ * != 0: the caller passes the chroma block/transform dims in chroma 4x4
+ * units and gets dav1d's 7 + not_one_blk*3 + ca + cl.  Coordinates are
+ * absolute (frame-wide arrays). */
+static int stbv_av1_get_skip_ctx(const stbv_av1_res_state *s,
+                                 int bx4, int by4,
+                                 int bw4, int bh4,
+                                 int txw4, int txh4,
+                                 int chroma)
 {
     stbv_u64 la, ll;
     int i;
 
     if (!s) return 0;
+    if (chroma) {
+        int not_one_blk, ca, cl;
+        la = 0;
+        ll = 0;
+        for (i = 0; i < txw4 && (unsigned int)(bx4 + i) < s->above_n; i++)
+            la |= s->above[bx4 + i];
+        for (i = 0; i < txh4 && (unsigned int)(by4 + i) < s->left_n; i++)
+            ll |= s->left[by4 + i];
+        not_one_blk = (bw4 != txw4) || (bh4 != txh4);
+        ca = (int)(la != 0x40);
+        cl = (int)(ll != 0x40);
+        return 7 + not_one_blk * 3 + ca + cl;
+    }
     if (bw4 == txw4 && bh4 == txh4)
         return 0;
 
@@ -110,31 +128,6 @@ static void stbv_av1_res_mark(stbv_av1_res_state *s,
         s->left[by4 + i] = res_ctx;
 }
 
-/* dav1d_max_txfm_size_for_bs[bs][0], for the square luma block sizes used by
- * this first pass.  Rectangular BS values return the largest corresponding
- * square transform and are therefore still safe for the syntax walker. */
-static int stbv_av1_max_tx_for_bs(int bs)
-{
-    switch (bs) {
-    case STBV_AV1_BS_128x128:
-    case STBV_AV1_BS_128x64:
-    case STBV_AV1_BS_64x128:
-    case STBV_AV1_BS_64x64:
-        return STBV_AV1_TX_64X64;
-    case STBV_AV1_BS_64x32:
-    case STBV_AV1_BS_32x64:
-    case STBV_AV1_BS_32x32:
-        return STBV_AV1_TX_32X32;
-    case STBV_AV1_BS_64x16:
-    case STBV_AV1_BS_32x16:
-    case STBV_AV1_BS_16x32:
-    case STBV_AV1_BS_16x16:
-        return STBV_AV1_TX_16X16;
-    default:
-        return STBV_AV1_TX_8X8;
-    }
-}
-
 typedef struct stbv_av1_leaf_state_arrays {
     stbv_u8 *above_mode;
     unsigned int above_mode_n;
@@ -152,24 +145,36 @@ typedef struct stbv_av1_leaf_state_arrays {
     unsigned int above_skip_n;
     stbv_u8 *left_skip;
     unsigned int left_skip_n;
+    stbv_u8 *above_cre[2];
+    unsigned int above_cre_n[2];
+    stbv_u8 *left_cre[2];
+    unsigned int left_cre_n[2];
 } stbv_av1_leaf_state_arrays;
 
 typedef struct stbv_av1_leaf_state {
     struct stb_av1_intra_state intra;
     stbv_av1_tx_state tx;
     stbv_av1_res_state res;
+    stbv_av1_res_state cres[2];
     stbv_u8 *above_skip;
     stbv_u8 *left_skip;
     unsigned int above_skip_n;
     unsigned int left_skip_n;
+    int cdef_sb_x;
+    int cdef_sb_y;
+    int cdef_idx[4];
 } stbv_av1_leaf_state;
 
 static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
                                      const stbv_av1_leaf_state_arrays *a)
 {
+    int pl;
     if (!s) return;
     if (!a) {
         memset(s, 0, sizeof(*s));
+        s->cdef_sb_x = s->cdef_sb_y = -1;
+        s->cdef_idx[0] = s->cdef_idx[1] = -1;
+        s->cdef_idx[2] = s->cdef_idx[3] = -1;
         return;
     }
     stb_av1_intra_state_init(&s->intra, a->above_mode, a->above_mode_n,
@@ -178,10 +183,17 @@ static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
                            a->left_tx, a->left_tx_n);
     stbv_av1_res_state_init(&s->res, a->above_res, a->above_res_n,
                             a->left_res, a->left_res_n);
+    for (pl = 0; pl < 2; pl++)
+        stbv_av1_res_state_init(&s->cres[pl], a->above_cre[pl],
+                                a->above_cre_n[pl], a->left_cre[pl],
+                                a->left_cre_n[pl]);
     s->above_skip = a->above_skip;
     s->left_skip = a->left_skip;
     s->above_skip_n = a->above_skip_n;
     s->left_skip_n = a->left_skip_n;
+    s->cdef_sb_x = s->cdef_sb_y = -1;
+    s->cdef_idx[0] = s->cdef_idx[1] = -1;
+    s->cdef_idx[2] = s->cdef_idx[3] = -1;
     if (a->above_skip) memset(a->above_skip, 0, a->above_skip_n);
     if (a->left_skip) memset(a->left_skip, 0, a->left_skip_n);
 }
@@ -191,9 +203,12 @@ static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
  * once per frame). */
 static void stbv_av1_leaf_state_reset_row(stbv_av1_leaf_state *s)
 {
+    int pl;
     if (!s) return;
     stbv_av1_tx_state_reset_row(&s->tx);
     if (s->res.left) memset(s->res.left, 0x40, s->res.left_n);
+    for (pl = 0; pl < 2; pl++)
+        if (s->cres[pl].left) memset(s->cres[pl].left, 0x40, s->cres[pl].left_n);
     if (s->left_skip) memset(s->left_skip, 0, s->left_skip_n);
     if (s->intra.left_mode)
         memset(s->intra.left_mode, STBV_AV1_INTRA_DC,
@@ -216,80 +231,78 @@ typedef struct stbv_av1_leaf_decode_ctx {
     const struct stb_av1_intra_block *intra;
     int bs;
     int bw4, bh4;
-    int max_tx;
-    int reduced_txtp_set;
+    int cbw4, cbh4;
+    int lossless;
+    int qidx;
+    int y_mode_nofilt;
     int block_skip;
-    stbv_av1_leaf_tx_result *out;
+    int reduced_txtp_set;
 } stbv_av1_leaf_decode_ctx;
 
-static int stbv_av1_leaf_tx_cb(int x4, int y4, int tx, void *opaque)
+/* Per-transform coefficient syntax for one plane (dav1d decode_coefs +
+ * read_coef_blocks): per-transform skip, then transform type (gated), then
+ * coefficients.  x4/y4 are plane-local 4x4 coordinates and bw4/bh4 the
+ * plane-local block dims in 4x4 units.  When out is non-NULL the first
+ * (luma) transform's results are recorded there. */
+static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
+                                  stbv_av1_cdf *cdf,
+                                  const stbv_av1_leaf_decode_ctx *c,
+                                  int x4, int y4, int tx, int chroma,
+                                  stbv_av1_res_state *rs,
+                                  int bw4, int bh4,
+                                  stbv_av1_leaf_tx_result *out)
 {
-    stbv_av1_leaf_decode_ctx *c = (stbv_av1_leaf_decode_ctx *)opaque;
     int txw4 = stbv_av1_tx_dims[tx].w;
     int txh4 = stbv_av1_tx_dims[tx].h;
-    int sctx;
+    int sctx, txtp, max;
     unsigned skip;
-    int txtp;
 
-    if (!c || !c->msac || !c->cdf || !c->state)
-        return -1;
-
-    if (c->block_skip) {
-        /* A block-level skip codes no per-transform symbols.  The residual
-         * context is the fixed "empty" value 0x40 (dav1d recon_b_intra). */
-        stbv_av1_res_mark(&c->state->res, x4, y4,
-                          txw4, txh4, (stbv_u8)0x40);
-        if (c->out) {
-            c->out->x4 = x4;
-            c->out->y4 = y4;
-            c->out->tx = tx;
-            c->out->skipped = 1;
-            c->out->txtp = STBV_AV1_TX_DCT_DCT;
-            c->out->eob = 0;
-            c->out->skip_ctx = 0;
-        }
-        return 0;
-    }
-
-    sctx = stbv_av1_get_skip_ctx_square(&c->state->res,
-                                        x4 & 31, y4 & 31,
-                                        c->bw4, c->bh4, txw4, txh4);
+    sctx = stbv_av1_get_skip_ctx(rs, x4, y4, bw4, bh4, txw4, txh4, chroma);
     skip = stb_av1_msac_bool_adapt(
-        c->msac,
-        c->cdf->coef + tx * 26 + sctx * 2);
+        msac, cdf->coef + stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2);
 
     txtp = STBV_AV1_TX_DCT_DCT;
     if (!skip) {
-        if (tx <= STBV_AV1_TX_16X16) {
-            int ymode = c->intra ? c->intra->y_mode : STBV_AV1_INTRA_DC;
-            txtp = stbv_av1_decode_intra_txtp(
-                c->msac, c->cdf,
-                stbv_av1_tx_dims[tx].min,
-                ymode,
+        max = stbv_av1_tx_dims[tx].max;
+        if (c->lossless)
+            txtp = STBV_AV1_TX_WHT_WHT;
+        else if (max + 1 >= STBV_AV1_TX_64X64) /* max + intra >= TX_64X64 */
+            txtp = STBV_AV1_TX_DCT_DCT;
+        else if (chroma)
+            /* inferred from the intra UV mode, never coded */
+            txtp = stbv_av1_txtp_from_uvmode[c->intra ? c->intra->uv_mode : 0];
+        else if (!c->qidx)
+            txtp = STBV_AV1_TX_DCT_DCT;
+        else
+            txtp = stbv_av1_decode_intra_txtp(msac, cdf,
+                stbv_av1_tx_dims[tx].min, c->y_mode_nofilt,
                 c->reduced_txtp_set);
-        }
+    } else {
+        /* dav1d: *txtp = lossless * WHT_WHT */
+        if (c->lossless)
+            txtp = STBV_AV1_TX_WHT_WHT;
     }
 
-    if (c->out) {
-        c->out->x4 = x4;
-        c->out->y4 = y4;
-        c->out->tx = tx;
-        c->out->skipped = (int)skip;
-        c->out->txtp = txtp;
-        c->out->eob = 0;
-        c->out->skip_ctx = sctx;
+    if (out) {
+        out->x4 = x4;
+        out->y4 = y4;
+        out->tx = tx;
+        out->skipped = (int)skip;
+        out->txtp = txtp;
+        out->eob = 0;
+        out->skip_ctx = sctx;
     }
+    fprintf(stderr, "L8 ch=%d x=%d y=%d tx=%d skip=%d r=%u\n", chroma,
+            x4, y4, tx, (int)skip, msac->rng);
 
     if (skip) {
-        printf("TX  (x4=%d y4=%d tx=%d) skip=1 txtp=%d sctx=%d rng=%u rem=%ld\n",
-               x4, y4, tx, txtp, sctx, c->msac->rng,
-               (long)(c->msac->buf_end - c->msac->buf_pos));
         /* A skipped transform has the fixed residual context 0x40. */
-        stbv_av1_res_mark(&c->state->res, x4, y4,
-                          txw4, txh4, (stbv_u8)0x40);
-    } else {
+        stbv_av1_res_mark(rs, x4, y4, txw4, txh4, (stbv_u8)0x40);
+        return 0;
+    }
+
+    {
         stbv_i32 cf[64 * 64];
-        int n = txw4 << 2;
         int txclass = stbv_av1_tx_class(txtp);
         int eob;
         stbv_u8 res_ctx;
@@ -300,10 +313,10 @@ static int stbv_av1_leaf_tx_cb(int x4, int y4, int tx, void *opaque)
         /* dav1d get_dc_sign_ctx: sum res_ctx >> 6 over the transform width,
          * then subtract w4 and h4 and map to 0..2 via (s != 0) + (s > 0). */
         for (i = 0; i < txw4; i++) {
-            if ((unsigned int)(x4 + i) < c->state->res.above_n)
-                s += c->state->res.above[x4 + i] >> 6;
-            if ((unsigned int)(y4 + i) < c->state->res.left_n)
-                s += c->state->res.left[y4 + i] >> 6;
+            if ((unsigned int)(x4 + i) < rs->above_n)
+                s += rs->above[x4 + i] >> 6;
+            if ((unsigned int)(y4 + i) < rs->left_n)
+                s += rs->left[y4 + i] >> 6;
         }
         s -= txw4;
         s -= txh4;
@@ -312,18 +325,14 @@ static int stbv_av1_leaf_tx_cb(int x4, int y4, int tx, void *opaque)
         /* This first integration pass validates coefficient syntax and MSAC
            consumption.  Quantization/reconstruction is still supplied by
            the caller in the block layer. */
-        eob = stbv_av1_decode_coeffs_square(c->msac, c->cdf, tx, 0, txclass,
-                                             n, 1, 1, 0, sctx, dc_sign_ctx, cf,
+        eob = stbv_av1_decode_coeffs_square(msac, cdf, tx, chroma, txclass,
+                                             1, 1, 0, sctx, dc_sign_ctx, cf,
                                              &res_ctx);
-        printf("TX  (x4=%d y4=%d tx=%d) skip=0 txtp=%d sctx=%d dcs=%d eob=%d rng=%u rem=%ld\n",
-               x4, y4, tx, txtp, sctx, dc_sign_ctx, eob, c->msac->rng,
-               (long)(c->msac->buf_end - c->msac->buf_pos));
         if (eob < 0)
             return -2;
-        if (c->out)
-            c->out->eob = eob;
-        stbv_av1_res_mark(&c->state->res, x4, y4,
-                          txw4, txh4, res_ctx);
+        if (out)
+            out->eob = eob;
+        stbv_av1_res_mark(rs, x4, y4, txw4, txh4, res_ctx);
     }
     return 0;
 }
@@ -331,14 +340,18 @@ static int stbv_av1_leaf_tx_cb(int x4, int y4, int tx, void *opaque)
 static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                        stbv_av1_cdf *cdf,
                                        stbv_av1_leaf_state *state,
+                                       const struct stb_av1_seqhdr *seq,
                                        const struct stb_av1_framehdr *frame,
                                        int bs, int bx4, int by4,
                                        stbv_av1_leaf_tx_result *out)
 {
     struct stb_av1_intra_block intra;
     stbv_av1_leaf_decode_ctx c;
-    int bw4, bh4, max_tx, tx0;
-    int cfl_allowed;
+    int bw4, bh4, max_tx, uv_tx, tx0;
+    int layout, ss_hor, ss_ver, sb_step;
+    int cfl_allowed, cbw4, cbh4, has_chroma;
+    int lossless, qidx;
+    int y_mode_nofilt, i;
     unsigned block_skip;
 
     if (!msac || !cdf || !state || bs < 0 || bs >= STBV_AV1_N_BS_SIZES)
@@ -348,56 +361,150 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     if (!bw4 || !bh4)
         return -2;
 
+    layout = seq ? (int)seq->layout : STB_AV1_LAYOUT_I444;
+    fprintf(stderr, "L1 bs=%d bx=%d by=%d r=%u\n", bs, bx4, by4,
+            msac->rng);
+    ss_hor = layout == STB_AV1_LAYOUT_I420 || layout == STB_AV1_LAYOUT_I422;
+    ss_ver = layout == STB_AV1_LAYOUT_I420;
+    sb_step = (seq && seq->sb128) ? 32 : 16;
+    lossless = frame ? (int)frame->segmentation.lossless[0] : 0;
+    qidx = frame ? (int)frame->segmentation.qidx[0] : 0;
+    cbw4 = (bw4 + ss_hor) >> ss_hor;
+    cbh4 = (bh4 + ss_ver) >> ss_ver;
+    has_chroma = layout != STB_AV1_LAYOUT_I400 &&
+                 (bw4 > ss_hor || (bx4 & 1)) && (bh4 > ss_ver || (by4 & 1));
+
+    /* Segment ids are not implemented; no coded bitstream in the sample set
+     * uses them (steam: segmentation disabled). */
+    if (frame && frame->segmentation.enabled && frame->segmentation.update_map)
+        return -5;
+
     /* Block-level skip, decoded before intra modes (dav1d decode_b). */
     {
         int sctx = 0;
-        int i;
         if (state->above_skip && (unsigned int)bx4 < state->above_skip_n &&
             state->above_skip[bx4])
             sctx += 1;
         if (state->left_skip && (unsigned int)by4 < state->left_skip_n &&
             state->left_skip[by4])
             sctx += 1;
-        if (bs == STBV_AV1_BS_64x128 && bx4 == 288 && by4 == 0)
-            printf("LEAFDBG pre-skip rng=%u f=%u f2=%u sctx=%d rem=%ld\n",
-                   msac->rng, (unsigned)cdf->skip[sctx * 2],
-                   (unsigned)cdf->skip[sctx * 2 + 1], sctx,
-                   (long)(msac->buf_end - msac->buf_pos));
         block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
-        if (bs == STBV_AV1_BS_64x128 && bx4 == 288 && by4 == 0)
-            printf("LEAFDBG bs_skip rng=%u rem=%ld\n", msac->rng,
-                   (long)(msac->buf_end - msac->buf_pos));
+        fprintf(stderr, "L2 skip r=%u\n", msac->rng);
         for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->above_skip_n; i++)
             state->above_skip[bx4 + i] = (stbv_u8)block_skip;
         for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->left_skip_n; i++)
             state->left_skip[by4 + i] = (stbv_u8)block_skip;
     }
 
-    cfl_allowed = 1;
+    /* cdef index, once per superblock, only when the block is not skipped.
+     * The slot state resets at each superblock start (dav1d decode_sb). */
+    if (frame) {
+        int sbx = bx4 & ~(sb_step - 1);
+        int sby = by4 & ~(sb_step - 1);
+        int idx;
+        if (state->cdef_sb_x != sbx || state->cdef_sb_y != sby) {
+            state->cdef_sb_x = sbx;
+            state->cdef_sb_y = sby;
+            state->cdef_idx[0] = state->cdef_idx[1] = -1;
+            state->cdef_idx[2] = state->cdef_idx[3] = -1;
+        }
+        idx = seq && seq->sb128 ? ((bx4 & 16) >> 4) + ((by4 & 16) >> 3) : 0;
+        if (!block_skip && state->cdef_idx[idx] == -1) {
+            int v = stb_av1_msac_bools(msac, frame->cdef.n_bits);
+            fprintf(stderr, "L3 cdef r=%u\n", msac->rng);
+            state->cdef_idx[idx] = v;
+            if (bw4 > 16) state->cdef_idx[idx + 1] = v;
+            if (bh4 > 16) state->cdef_idx[idx + 2] = v;
+            if (bw4 == 32 && bh4 == 32) state->cdef_idx[idx + 3] = v;
+        }
+    }
+
+    /* delta-q/lf at superblock origin; needs the delta_q CDFs which are not
+     * part of this integration pass. */
+    if (frame && frame->delta_q_present &&
+        !((bx4 | by4) & (sb_step - 1)))
+        return -6;
+
+    /* Intra flag: key frames without intrabc need no symbol. */
+    if (frame && frame->allow_intrabc)
+        return -6;
+
+    cfl_allowed = lossless ? (cbw4 == 1 && cbh4 == 1) :
+        !!(STBV_AV1_CFL_ALLOWED_MASK & (1U << bs));
     if (stb_av1_intra_state_decode_leaf(msac, cdf, &state->intra,
                                         bx4, by4, bs, cfl_allowed, &intra))
         return -3;
-    if (bs == STBV_AV1_BS_64x128 && bx4 == 288 && by4 == 0)
-        printf("LEAFDBG intra rng=%u rem=%ld ymode=%d\n", msac->rng,
-               (long)(msac->buf_end - msac->buf_pos), intra.y_mode);
+    fprintf(stderr, "L4 intra r=%u dif=%llu\n", msac->rng,
+            (unsigned long long)msac->dif);
 
-    max_tx = stbv_av1_max_tx_for_bs(bs);
-    if (frame && frame->txfm_mode == 0)
+    /* Palette presence bools.  Palette colors are not decoded in this pass;
+     * any actual use of a palette is reported as unsupported. */
+    if (frame && frame->allow_screen_content_tools &&
+        (bw4 > bh4 ? bw4 : bh4) <= 16 && bw4 + bh4 >= 4) {
+        int sz_ctx = stbv_av1_block_dimensions[bs][2] +
+                     stbv_av1_block_dimensions[bs][3] - 2;
+        if (intra.y_mode == STBV_AV1_INTRA_DC) {
+            /* pal_ctx = (a->pal_sz > 0) + (l.pal_sz > 0); always 0 here. */
+            if (stb_av1_msac_bool_adapt(msac, cdf->pal_y + sz_ctx * 6))
+                return -7;
+            fprintf(stderr, "L5 ypal r=%u\n", msac->rng);
+        }
+        if (has_chroma && intra.uv_mode == STBV_AV1_INTRA_DC) {
+            /* pal_ctx = b->pal_sz[0] > 0; always 0 here. */
+            if (stb_av1_msac_bool_adapt(msac, cdf->pal_uv))
+                return -8;
+            fprintf(stderr, "L5b uvpal r=%u\n", msac->rng);
+        }
+    }
+
+    /* Filter-intra bool (dav1d decode.c, after the palette bools). */
+    if (seq && seq->filter_intra && intra.y_mode == STBV_AV1_INTRA_DC &&
+        stbv_av1_block_dimensions[bs][2] <= 3 &&
+        stbv_av1_block_dimensions[bs][3] <= 3) {
+        if (stb_av1_msac_bool_adapt(msac, cdf->use_filter_intra + bs * 2)) {
+            intra.y_mode = STBV_AV1_INTRA_FILTER;
+            intra.y_angle = (int)stb_av1_msac_symbol(msac, cdf->filter_intra, 4);
+        }
+    }
+    fprintf(stderr, "L6 filt r=%u dif=%llu\n", msac->rng,
+            (unsigned long long)msac->dif);
+
+    /* dav1d stores y_mode_nofilt in the neighbour mode maps (set_ctx). */
+    y_mode_nofilt = intra.y_mode == STBV_AV1_INTRA_FILTER ?
+        stbv_av1_filter_mode_to_y_mode[
+            intra.y_angle < 0 ? 0 : (intra.y_angle > 4 ? 4 : intra.y_angle)] :
+        intra.y_mode;
+    if (state->intra.above_mode) {
+        for (i = 0; i < bw4 && (unsigned)(bx4 + i) < state->intra.above_count; i++)
+            state->intra.above_mode[bx4 + i] = (stbv_u8)y_mode_nofilt;
+    }
+    if (state->intra.left_mode) {
+        for (i = 0; i < bh4 && (unsigned)(by4 + i) < state->intra.left_count; i++)
+            state->intra.left_mode[by4 + i] = (stbv_u8)y_mode_nofilt;
+    }
+
+    /* Transform size.  dav1d: lossless blocks are forced to TX_4X4; the
+     * maximum otherwise comes from max_txfm_size_for_bs[bs][plane]; with
+     * TX_SWITCHABLE a tx-size symbol is coded when max > TX_4X4. */
+    if (lossless) {
         tx0 = STBV_AV1_TX_4X4;
-    else
-        tx0 = max_tx;
-
-    if (frame && frame->txfm_mode == 1 && max_tx > STBV_AV1_TX_4X4)
-        tx0 = stbv_av1_decode_tx_size(msac, cdf, max_tx,
-            stbv_av1_tx_is_large(state->tx.above_tx, bx4,
-                                 stbv_av1_tx_dims[max_tx].lw,
-                                 state->tx.above_n) +
-            stbv_av1_tx_is_large(state->tx.left_tx, by4,
-                                 stbv_av1_tx_dims[max_tx].lh,
-                                 state->tx.left_n));
-    if (bs == STBV_AV1_BS_64x128 && bx4 == 288 && by4 == 0)
-        printf("LEAFDBG txsize rng=%u rem=%ld tx0=%d\n", msac->rng,
-               (long)(msac->buf_end - msac->buf_pos), tx0);
+        uv_tx = STBV_AV1_TX_4X4;
+        max_tx = STBV_AV1_TX_4X4;
+    } else {
+        tx0 = stbv_av1_max_tx_for_bs[bs][0];
+        uv_tx = stbv_av1_max_tx_for_bs[bs][layout];
+        max_tx = tx0;
+        if (frame && frame->txfm_mode == 1 &&
+            stbv_av1_tx_dims[max_tx].max > STBV_AV1_TX_4X4)
+            tx0 = stbv_av1_decode_tx_size(msac, cdf, max_tx,
+                stbv_av1_tx_is_large(state->tx.above_tx, bx4,
+                                     stbv_av1_tx_dims[max_tx].lw,
+                                     state->tx.above_n) +
+                stbv_av1_tx_is_large(state->tx.left_tx, by4,
+                                     stbv_av1_tx_dims[max_tx].lh,
+                                     state->tx.left_n));
+    }
+    fprintf(stderr, "L7 tx0=%d max=%d r=%u\n", tx0, max_tx, msac->rng);
 
     c.msac = msac;
     c.cdf = cdf;
@@ -407,23 +514,72 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     c.bs = bs;
     c.bw4 = bw4;
     c.bh4 = bh4;
-    c.max_tx = max_tx;
+    c.cbw4 = cbw4;
+    c.cbh4 = cbh4;
+    c.lossless = lossless;
+    c.qidx = qidx;
+    c.y_mode_nofilt = y_mode_nofilt;
     c.reduced_txtp_set = frame ? (int)frame->reduced_txtp_set : 0;
     c.block_skip = (int)block_skip;
-    c.out = out;
 
-    /* Intra blocks use one transform size across the whole block; no var-tx
-     * tree is coded (dav1d decode_b + recon_b_intra).  Coefficients are
-     * decoded in raster order at tx0 size. */
+    /* Coefficients: intra blocks use one transform size across the whole
+     * block, decoded in raster order (dav1d read_coef_blocks).  The luma
+     * plane first, then the two chroma planes at uv_tx. */
     {
         int txw4 = stbv_av1_tx_dims[tx0].w;
         int txh4 = stbv_av1_tx_dims[tx0].h;
-        int y4, x4, i, r;
+        int y4, x4, cx4, cy4, pl, r;
+        int uv_txw4 = stbv_av1_tx_dims[uv_tx].w;
+        int uv_txh4 = stbv_av1_tx_dims[uv_tx].h;
+        int cbx4 = bx4 >> ss_hor;
+        int cby4 = by4 >> ss_ver;
+        int first = 1;
 
-        for (y4 = by4; y4 < by4 + bh4; y4 += txh4) {
-            for (x4 = bx4; x4 < bx4 + bw4; x4 += txw4) {
-                r = stbv_av1_leaf_tx_cb(x4, y4, tx0, &c);
-                if (r) return -4;
+        if (!block_skip) {
+            for (y4 = by4; y4 < by4 + bh4; y4 += txh4) {
+                for (x4 = bx4; x4 < bx4 + bw4; x4 += txw4) {
+                    r = stbv_av1_leaf_tx_plane(msac, cdf, &c, x4, y4,
+                                               tx0, 0, &state->res,
+                                               bw4, bh4, first ? out : NULL);
+                    first = 0;
+                    if (r) return -4;
+                }
+            }
+            if (has_chroma) {
+                for (pl = 0; pl < 2; pl++) {
+                    for (cy4 = cby4; cy4 < cby4 + cbh4; cy4 += uv_txh4) {
+                        for (cx4 = cbx4; cx4 < cbx4 + cbw4; cx4 += uv_txw4) {
+                            r = stbv_av1_leaf_tx_plane(msac, cdf, &c, cx4, cy4,
+                                                       uv_tx, pl,
+                                                       &state->cres[pl],
+                                                       cbw4, cbh4, NULL);
+                            if (r) return -4;
+                        }
+                    }
+                }
+            }
+        } else {
+            /* dav1d read_coef_blocks marks the full block edges 0x40. */
+            for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->res.above_n; i++)
+                state->res.above[bx4 + i] = 0x40;
+            for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->res.left_n; i++)
+                state->res.left[by4 + i] = 0x40;
+            if (has_chroma) {
+                for (pl = 0; pl < 2; pl++) {
+                    for (i = 0; i < cbw4 && (unsigned int)(cbx4 + i) < state->cres[pl].above_n; i++)
+                        state->cres[pl].above[cbx4 + i] = 0x40;
+                    for (i = 0; i < cbh4 && (unsigned int)(cby4 + i) < state->cres[pl].left_n; i++)
+                        state->cres[pl].left[cby4 + i] = 0x40;
+                }
+            }
+            if (out) {
+                out->x4 = bx4;
+                out->y4 = by4;
+                out->tx = tx0;
+                out->skipped = 1;
+                out->txtp = lossless ? STBV_AV1_TX_WHT_WHT : STBV_AV1_TX_DCT_DCT;
+                out->eob = 0;
+                out->skip_ctx = 0;
             }
         }
 

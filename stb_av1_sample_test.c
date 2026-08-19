@@ -23,6 +23,8 @@ struct sample_ctx {
     int err_y4;
     int err_bs;
     int bypass;
+    const struct stb_av1_seqhdr *seq_expect;
+    const struct stb_av1_framehdr *frame_expect;
 };
 
 static int sample_leaf(struct stb_av1_tile_decoder *td,
@@ -32,6 +34,13 @@ static int sample_leaf(struct stb_av1_tile_decoder *td,
     struct sample_ctx *c = (struct sample_ctx *)opaque;
     stbv_av1_leaf_tx_result out;
     int r;
+
+    if (c->seq_expect && td->seq != c->seq_expect)
+        printf("CANARY seq corrupt at leaf (bx=%d by=%d bs=%d) seq=%p\n",
+               li->bx, li->by, li->bs, (void *)td->seq);
+    if (c->frame_expect && td->frame != c->frame_expect)
+        printf("CANARY frame corrupt at leaf (bx=%d by=%d bs=%d)\n",
+               li->bx, li->by, li->bs);
 
     if (c->bypass) {
         c->leaves++;
@@ -48,8 +57,8 @@ static int sample_leaf(struct stb_av1_tile_decoder *td,
     }
 
     r = stbv_av1_decode_leaf_syntax(&td->msac, &td->cdf, &c->state,
-                                    td->frame, li->bs, li->bx, li->by,
-                                    &out);
+                                    td->seq, td->frame, li->bs, li->bx,
+                                    li->by, &out);
     if (r) {
         c->err = r;
         c->err_x4 = li->bx;
@@ -147,12 +156,19 @@ int main(int argc, char **argv)
     ctx.nonzero = 0;
     ctx.skipped = 0;
     ctx.bypass = getenv("STB_AV1_BYPASS_LEAF") != NULL;
+    ctx.seq_expect = &st.seq;
+    ctx.frame_expect = &st.frame;
     memset(ctx.txtp, 0, sizeof(ctx.txtp));
 
     {
         /* Frame-wide leaf neighbour maps, indexed in 4x4 units. */
         unsigned int above_n = (unsigned int)((st.frame.width[0] + 3U) >> 2);
         unsigned int left_n = (unsigned int)((st.frame.height + 3U) >> 2);
+        int ss_hor = st.seq.layout == STB_AV1_LAYOUT_I420 ||
+                     st.seq.layout == STB_AV1_LAYOUT_I422;
+        int ss_ver = st.seq.layout == STB_AV1_LAYOUT_I420;
+        unsigned int cabove_n = (above_n + (unsigned)ss_hor) >> ss_hor;
+        unsigned int cleft_n = (left_n + (unsigned)ss_ver) >> ss_ver;
         stbv_u8 *ab_mode = (stbv_u8 *)malloc(above_n ? above_n : 1);
         stbv_u8 *l_mode = (stbv_u8 *)malloc(left_n ? left_n : 1);
         stbv_u8 *ab_tx = (stbv_u8 *)malloc(above_n ? above_n : 1);
@@ -161,9 +177,14 @@ int main(int argc, char **argv)
         stbv_u8 *l_res = (stbv_u8 *)malloc(left_n ? left_n : 1);
         stbv_u8 *ab_skip = (stbv_u8 *)malloc(above_n ? above_n : 1);
         stbv_u8 *l_skip = (stbv_u8 *)malloc(left_n ? left_n : 1);
+        stbv_u8 *ab_cre0 = (stbv_u8 *)malloc(cabove_n ? cabove_n : 1);
+        stbv_u8 *l_cre0 = (stbv_u8 *)malloc(cleft_n ? cleft_n : 1);
+        stbv_u8 *ab_cre1 = (stbv_u8 *)malloc(cabove_n ? cabove_n : 1);
+        stbv_u8 *l_cre1 = (stbv_u8 *)malloc(cleft_n ? cleft_n : 1);
         stbv_av1_leaf_state_arrays a;
         if (!ab_mode || !l_mode || !ab_tx || !l_tx ||
-            !ab_res || !l_res || !ab_skip || !l_skip) {
+            !ab_res || !l_res || !ab_skip || !l_skip ||
+            !ab_cre0 || !l_cre0 || !ab_cre1 || !l_cre1) {
             fprintf(stderr, "leaf state alloc failed\n");
             free(data);
             return 1;
@@ -184,6 +205,14 @@ int main(int argc, char **argv)
         a.above_skip_n = above_n;
         a.left_skip = l_skip;
         a.left_skip_n = left_n;
+        a.above_cre[0] = ab_cre0;
+        a.above_cre_n[0] = cabove_n;
+        a.left_cre[0] = l_cre0;
+        a.left_cre_n[0] = cleft_n;
+        a.above_cre[1] = ab_cre1;
+        a.above_cre_n[1] = cabove_n;
+        a.left_cre[1] = l_cre1;
+        a.left_cre_n[1] = cleft_n;
         stbv_av1_leaf_state_init(&ctx.state, &a);
 
         r = stb_av1_decode_tile(&td, &st.seq, &st.frame,
@@ -206,6 +235,10 @@ int main(int argc, char **argv)
         free(l_res);
         free(ab_skip);
         free(l_skip);
+        free(ab_cre0);
+        free(l_cre0);
+        free(ab_cre1);
+        free(l_cre1);
     }
     printf("size=%ux%u q=%u tiles=%ux%u\n",
            st.frame.width[0], st.frame.height, st.frame.quant.yac,
