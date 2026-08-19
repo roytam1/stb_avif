@@ -58,7 +58,7 @@ static int stbv_av1_get_skip_ctx_square(const stbv_av1_res_state *s,
                                         int bw4, int bh4,
                                         int txw4, int txh4)
 {
-    unsigned la, ll;
+    stbv_u64 la, ll;
     int i;
 
     if (!s) return 0;
@@ -72,19 +72,21 @@ static int stbv_av1_get_skip_ctx_square(const stbv_av1_res_state *s,
     for (i = 0; i < txh4 && by4 + i < 32; i++)
         ll |= s->left[by4 + i];
 
-    if (txw4 >= 8) la |= la >> 16;
-    if (txw4 >= 4) la |= la >> 8;
-    if (txw4 >= 2) la |= la >> 4;
-    if (txh4 >= 8) ll |= ll >> 16;
-    if (txh4 >= 4) ll |= ll >> 8;
-    if (txh4 >= 2) ll |= ll >> 4;
+    /* Collapse every context byte into the low byte, exactly like dav1d's
+       MERGE_CTX (read N bytes, then OR-fold with >>16/>>8). */
+    la |= la >> 32;
+    la |= la >> 16;
+    la |= la >> 8;
+    ll |= ll >> 32;
+    ll |= ll >> 16;
+    ll |= ll >> 8;
 
     /* bit 6 is the DC-sign flag; skip context uses magnitude only. */
     la &= 0x3fU;
     ll &= 0x3fU;
     la = la > 4 ? 4 : la;
     ll = ll > 4 ? 4 : ll;
-    return stbv_av1_skip_ctx[la][ll];
+    return stbv_av1_skip_ctx[(int)la][(int)ll];
 }
 
 static void stbv_av1_res_mark(stbv_av1_res_state *s,
@@ -128,6 +130,8 @@ typedef struct stbv_av1_leaf_state {
     struct stb_av1_intra_state intra;
     stbv_av1_tx_state tx;
     stbv_av1_res_state res;
+    stbv_u8 above_skip[32];
+    stbv_u8 left_skip[32];
 } stbv_av1_leaf_state;
 
 static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
@@ -139,6 +143,8 @@ static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
                              left_mode, left_n);
     stbv_av1_tx_state_init(&s->tx);
     stbv_av1_res_state_init(&s->res);
+    memset(s->above_skip, 0, sizeof(s->above_skip));
+    memset(s->left_skip, 0, sizeof(s->left_skip));
 }
 
 typedef struct stbv_av1_leaf_tx_result {
@@ -159,6 +165,7 @@ typedef struct stbv_av1_leaf_decode_ctx {
     int bw4, bh4;
     int max_tx;
     int reduced_txtp_set;
+    int block_skip;
     stbv_av1_leaf_tx_result *out;
 } stbv_av1_leaf_decode_ctx;
 
@@ -173,6 +180,23 @@ static int stbv_av1_leaf_tx_cb(int x4, int y4, int tx, void *opaque)
 
     if (!c || !c->msac || !c->cdf || !c->state)
         return -1;
+
+    if (c->block_skip) {
+        /* A block-level skip codes no per-transform symbols.  The residual
+         * context is the fixed "empty" value 0x40 (dav1d recon_b_intra). */
+        stbv_av1_res_mark(&c->state->res, x4 & 31, y4 & 31,
+                          txw4, txh4, (stbv_u8)0x40);
+        if (c->out) {
+            c->out->x4 = x4;
+            c->out->y4 = y4;
+            c->out->tx = tx;
+            c->out->skipped = 1;
+            c->out->txtp = STBV_AV1_TX_DCT_DCT;
+            c->out->eob = 0;
+            c->out->skip_ctx = 0;
+        }
+        return 0;
+    }
 
     sctx = stbv_av1_get_skip_ctx_square(&c->state->res,
                                         x4 & 31, y4 & 31,
@@ -212,18 +236,20 @@ static int stbv_av1_leaf_tx_cb(int x4, int y4, int tx, void *opaque)
         int n = txw4 << 2;
         int txclass = stbv_av1_tx_class(txtp);
         int eob;
+        stbv_u8 res_ctx;
 
         /* This first integration pass validates coefficient syntax and MSAC
            consumption.  Quantization/reconstruction is still supplied by
            the caller in the block layer. */
         eob = stbv_av1_decode_coeffs_square(c->msac, c->cdf, tx, 0, txclass,
-                                             n, 1, 1, 0, sctx, 0, cf);
+                                             n, 1, 1, 0, sctx, 0, cf,
+                                             &res_ctx);
         if (eob < 0)
             return -2;
         if (c->out)
             c->out->eob = eob;
         stbv_av1_res_mark(&c->state->res, x4 & 31, y4 & 31,
-                          txw4, txh4, (stbv_u8)(eob > 0 ? 1 : 0));
+                          txw4, txh4, res_ctx);
     }
     return 0;
 }
@@ -239,6 +265,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     stbv_av1_leaf_decode_ctx c;
     int bw4, bh4, max_tx, tx0;
     int cfl_allowed;
+    unsigned block_skip;
 
     if (!msac || !cdf || !state || bs < 0 || bs >= STBV_AV1_N_BS_SIZES)
         return -1;
@@ -246,6 +273,18 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     bh4 = stbv_av1_block_dimensions[bs][1];
     if (!bw4 || !bh4)
         return -2;
+
+    /* Block-level skip, decoded before intra modes (dav1d decode_b). */
+    {
+        int sctx = (state->above_skip[bx4 & 31] ? 1 : 0) +
+                   (state->left_skip[by4 & 31] ? 1 : 0);
+        int i;
+        block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
+        for (i = 0; i < bw4; i++)
+            state->above_skip[(bx4 + i) & 31] = (stbv_u8)block_skip;
+        for (i = 0; i < bh4; i++)
+            state->left_skip[(by4 + i) & 31] = (stbv_u8)block_skip;
+    }
 
     cfl_allowed = 1;
     if (stb_av1_intra_state_decode_leaf(msac, cdf, &state->intra,
@@ -275,11 +314,34 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     c.bh4 = bh4;
     c.max_tx = max_tx;
     c.reduced_txtp_set = frame ? (int)frame->reduced_txtp_set : 0;
+    c.block_skip = (int)block_skip;
     c.out = out;
 
-    return stbv_av1_decode_tx_tree(msac, cdf, &state->tx,
-                                   tx0, bx4, by4,
-                                   stbv_av1_leaf_tx_cb, &c);
+    /* Intra blocks use one transform size across the whole block; no var-tx
+     * tree is coded (dav1d decode_b + recon_b_intra).  Coefficients are
+     * decoded in raster order at tx0 size. */
+    {
+        int txw4 = stbv_av1_tx_dims[tx0].w;
+        int txh4 = stbv_av1_tx_dims[tx0].h;
+        int y4, x4, i, r;
+
+        for (y4 = by4; y4 < by4 + bh4; y4 += txh4) {
+            for (x4 = bx4; x4 < bx4 + bw4; x4 += txw4) {
+                r = stbv_av1_leaf_tx_cb(x4, y4, tx0, &c);
+                if (r) return -4;
+            }
+        }
+
+        /* Tx neighbour map: dav1d sets it to the block tx dimensions over the
+         * whole block edge after reconstruction. */
+        for (i = 0; i < bw4 && (bx4 + i) < 32; i++)
+            state->tx.above_tx[(bx4 + i) & 31] =
+                (stbv_u8)stbv_av1_tx_dims[tx0].lw;
+        for (i = 0; i < bh4 && (by4 + i) < 32; i++)
+            state->tx.left_tx[(by4 + i) & 31] =
+                (stbv_u8)stbv_av1_tx_dims[tx0].lh;
+    }
+    return 0;
 }
 
 #endif /* STB_AV1_LEAF_H */
