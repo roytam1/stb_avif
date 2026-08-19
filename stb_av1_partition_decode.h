@@ -43,8 +43,10 @@ static const stbv_u8 stbv_av1_al_part_ctx[2][STBV_AV1_N_BL_LEVELS]
 };
 
 /* Set the top/left partition contexts exactly in the form used by dav1d's
- * case_set_upto16(). The context arrays are indexed in 8x8 units. */
+ * case_set_upto16(). The context arrays are frame-wide, indexed in 8x8
+ * units. */
 static void stbv_av1_partition_set_context(stbv_u8 *above, stbv_u8 *left,
+                                            int above_n, int left_n,
                                             int bx8, int by8, int hsz,
                                             int bl, int bp)
 {
@@ -65,9 +67,9 @@ static void stbv_av1_partition_set_context(stbv_u8 *above, stbv_u8 *left,
         n = 16;
 
     for (i = 0; i < n; i++) {
-        if (bx8 + i < 32)
+        if (bx8 + i >= 0 && bx8 + i < above_n)
             above[bx8 + i] = av;
-        if (by8 + i < 32)
+        if (by8 + i >= 0 && by8 + i < left_n)
             left[by8 + i] = lv;
     }
 }
@@ -108,8 +110,10 @@ struct stbv_av1_partition_decoder {
     stbv_av1_cdf *cdf;
     int frame_w4;
     int frame_h4;
-    stbv_u8 above[32];
-    stbv_u8 left[32];
+    stbv_u8 *above;
+    stbv_u8 *left;
+    int above_n;
+    int left_n;
     stbv_av1_partition_leaf_fn leaf;
     void *opaque;
 };
@@ -119,14 +123,15 @@ static int stbv_av1_partition_emit(stbv_av1_partition_decoder *d,
                                     int bx, int by)
 {
     int hsz = 16 >> bl;
-    int bx8 = (bx & 31) >> 1;
-    int by8 = (by & 31) >> 1;
+    int bx8 = bx >> 1;
+    int by8 = by >> 1;
     int r;
 
     r = d->leaf(d, bl, bs, bp, bx, by, d->opaque);
     if (r) return r;
     if (bp != STBV_AV1_PARTITION_SPLIT || bl == STBV_AV1_BL_8X8)
-        stbv_av1_partition_set_context(d->above, d->left, bx8, by8,
+        stbv_av1_partition_set_context(d->above, d->left, d->above_n,
+                                       d->left_n, bx8, by8,
                                        hsz, bl, bp);
     return 0;
 }
@@ -152,8 +157,10 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         return stbv_av1_partition_decode_sb(d, bl + 1, bx, by);
     }
 
-    bx8 = (bx & 31) >> 1;
-    by8 = (by & 31) >> 1;
+    bx8 = bx >> 1;
+    by8 = by >> 1;
+    if (bx8 < 0 || bx8 >= d->above_n || by8 < 0 || by8 >= d->left_n)
+        return -1;
     ctx = ((d->above[bx8] >> (4 - bl)) & 1) |
           (((d->left[by8] >> (4 - bl)) & 1) << 1);
     pc = stbv_av1_partition_cdf(d->cdf->partition, bl, ctx);
@@ -301,20 +308,21 @@ static void stbv_av1_partition_decoder_init(stbv_av1_partition_decoder *d,
                                              struct stb_av1_msac *msac,
                                              stbv_av1_cdf *cdf,
                                              int frame_w4, int frame_h4,
+                                             stbv_u8 *above, int above_n,
+                                             stbv_u8 *left, int left_n,
                                              stbv_av1_partition_leaf_fn leaf,
                                              void *opaque)
 {
-    int i;
     d->msac = msac;
     d->cdf = cdf;
     d->frame_w4 = frame_w4;
     d->frame_h4 = frame_h4;
+    d->above = above;
+    d->left = left;
+    d->above_n = above_n;
+    d->left_n = left_n;
     d->leaf = leaf;
     d->opaque = opaque;
-    for (i = 0; i < 32; i++) {
-        d->above[i] = 0;
-        d->left[i] = 0;
-    }
 }
 
 #endif /* STB_AV1_PARTITION_DECODE_H */

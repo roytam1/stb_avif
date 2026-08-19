@@ -14,8 +14,6 @@
 
 struct sample_ctx {
     stbv_av1_leaf_state state;
-    stbv_u8 above[32];
-    stbv_u8 left[32];
     unsigned long leaves;
     unsigned long nonzero;
     unsigned long skipped;
@@ -150,11 +148,57 @@ int main(int argc, char **argv)
     ctx.skipped = 0;
     ctx.bypass = getenv("STB_AV1_BYPASS_LEAF") != NULL;
     memset(ctx.txtp, 0, sizeof(ctx.txtp));
-    stbv_av1_leaf_state_init(&ctx.state, ctx.above, 32, ctx.left, 32);
 
-    r = stb_av1_decode_tile(&td, &st.seq, &st.frame,
-                            st.tile_data, st.tile_size,
-                            sample_leaf, &ctx, sample_row_start);
+    {
+        /* Frame-wide leaf neighbour maps, indexed in 4x4 units. */
+        unsigned int above_n = (unsigned int)((st.frame.width[0] + 3U) >> 2);
+        unsigned int left_n = (unsigned int)((st.frame.height + 3U) >> 2);
+        stbv_u8 *ab_mode = (stbv_u8 *)malloc(above_n ? above_n : 1);
+        stbv_u8 *l_mode = (stbv_u8 *)malloc(left_n ? left_n : 1);
+        stbv_u8 *ab_tx = (stbv_u8 *)malloc(above_n ? above_n : 1);
+        stbv_u8 *l_tx = (stbv_u8 *)malloc(left_n ? left_n : 1);
+        stbv_u8 *ab_res = (stbv_u8 *)malloc(above_n ? above_n : 1);
+        stbv_u8 *l_res = (stbv_u8 *)malloc(left_n ? left_n : 1);
+        stbv_u8 *ab_skip = (stbv_u8 *)malloc(above_n ? above_n : 1);
+        stbv_u8 *l_skip = (stbv_u8 *)malloc(left_n ? left_n : 1);
+        stbv_av1_leaf_state_arrays a;
+        if (!ab_mode || !l_mode || !ab_tx || !l_tx ||
+            !ab_res || !l_res || !ab_skip || !l_skip) {
+            fprintf(stderr, "leaf state alloc failed\n");
+            free(data);
+            return 1;
+        }
+        a.above_mode = ab_mode;
+        a.above_mode_n = above_n;
+        a.left_mode = l_mode;
+        a.left_mode_n = left_n;
+        a.above_tx = ab_tx;
+        a.above_tx_n = above_n;
+        a.left_tx = l_tx;
+        a.left_tx_n = left_n;
+        a.above_res = ab_res;
+        a.above_res_n = above_n;
+        a.left_res = l_res;
+        a.left_res_n = left_n;
+        a.above_skip = ab_skip;
+        a.above_skip_n = above_n;
+        a.left_skip = l_skip;
+        a.left_skip_n = left_n;
+        stbv_av1_leaf_state_init(&ctx.state, &a);
+
+        r = stb_av1_decode_tile(&td, &st.seq, &st.frame,
+                                st.tile_data, st.tile_size,
+                                sample_leaf, &ctx, sample_row_start);
+
+        free(ab_mode);
+        free(l_mode);
+        free(ab_tx);
+        free(l_tx);
+        free(ab_res);
+        free(l_res);
+        free(ab_skip);
+        free(l_skip);
+    }
     printf("size=%ux%u q=%u tiles=%ux%u\n",
            st.frame.width[0], st.frame.height, st.frame.quant.yac,
            st.frame.tiling.cols, st.frame.tiling.rows);

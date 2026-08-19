@@ -16,43 +16,52 @@
 #error "include stb_av1_tx.h first"
 #endif
 
-#define STBV_AV1_TXSTATE_MAX4 32
-
 typedef struct stbv_av1_tx_state {
-    stbv_u8 above_tx[STBV_AV1_TXSTATE_MAX4];
-    stbv_u8 left_tx[STBV_AV1_TXSTATE_MAX4];
+    stbv_u8 *above_tx;
+    stbv_u8 *left_tx;
+    unsigned int above_n;
+    unsigned int left_n;
 } stbv_av1_tx_state;
 
-static void stbv_av1_tx_state_init(stbv_av1_tx_state *s)
+static void stbv_av1_tx_state_init(stbv_av1_tx_state *s,
+                                   stbv_u8 *above_tx, unsigned int above_n,
+                                   stbv_u8 *left_tx, unsigned int left_n)
 {
     if (!s) return;
-    /* dav1d resets tx_intra to -1 (0xff) at the start of each superblock
-     * row; a missing neighbour therefore compares "larger or equal" to any
-     * real transform and contributes 1 to the tx-size context. */
-    memset(s->above_tx, 0xff, sizeof(s->above_tx));
-    memset(s->left_tx,  0xff, sizeof(s->left_tx));
+    s->above_tx = above_tx;
+    s->left_tx = left_tx;
+    s->above_n = above_n;
+    s->left_n = left_n;
+    /* dav1d resets the above contexts once per frame (reset_context(&f->a));
+     * a missing neighbour reads 0xff, compares "larger or equal" to any real
+     * transform, and contributes 1 to the tx-size context.  The left context
+     * is also reset at frame start; per row only the left is re-reset. */
+    if (above_tx) memset(above_tx, 0xff, above_n);
+    if (left_tx) memset(left_tx, 0xff, left_n);
 }
 
-static int stbv_av1_tx_is_smaller(const stbv_u8 *edge, int pos4, int tx_dim)
+static int stbv_av1_tx_is_smaller(const stbv_u8 *edge, int pos4, int tx_dim,
+                                  unsigned int n)
 {
-    if (!edge || pos4 < 0 || pos4 >= STBV_AV1_TXSTATE_MAX4)
+    if (!edge || pos4 < 0 || (unsigned int)pos4 >= n)
         return 0;
     return edge[pos4] < tx_dim;
 }
 
-static int stbv_av1_tx_is_large(const stbv_u8 *edge, int pos4, int tx_dim)
+static int stbv_av1_tx_is_large(const stbv_u8 *edge, int pos4, int tx_dim,
+                                unsigned int n)
 {
-    if (!edge || pos4 < 0 || pos4 >= STBV_AV1_TXSTATE_MAX4)
+    if (!edge || pos4 < 0 || (unsigned int)pos4 >= n)
         return 0;
     return edge[pos4] >= tx_dim;
 }
 
-/* dav1d resets the transform neighbour state at each superblock row. */
+/* dav1d resets only the LEFT transform context at each superblock row;
+ * the above contexts persist across rows (reset once per frame). */
 static void stbv_av1_tx_state_reset_row(stbv_av1_tx_state *s)
 {
     if (!s) return;
-    memset(s->above_tx, 0xff, sizeof(s->above_tx));
-    memset(s->left_tx,  0xff, sizeof(s->left_tx));
+    if (s->left_tx) memset(s->left_tx, 0xff, s->left_n);
 }
 
 /*
@@ -92,8 +101,8 @@ static int stbv_av1_tx_tree_rec(struct stb_av1_msac *msac,
         /* This is exactly the context used by dav1d read_tx_tree():
          * a = above tx is smaller than txw, l = left tx is smaller than txh.
          */
-        a = stbv_av1_tx_is_smaller(s->above_tx, x4 & 31, txw);
-        l = stbv_av1_tx_is_smaller(s->left_tx,  y4 & 31, txh);
+        a = stbv_av1_tx_is_smaller(s->above_tx, x4, txw, s->above_n);
+        l = stbv_av1_tx_is_smaller(s->left_tx,  y4, txh, s->left_n);
         cat = 2 * (STBV_AV1_TX_64X64 - stbv_av1_tx_dims[from].max) - depth;
         if (cat < 0) cat = 0;
         if (cat > 6) cat = 6;
@@ -127,10 +136,10 @@ static int stbv_av1_tx_tree_rec(struct stb_av1_msac *msac,
     /* dav1d updates the above and left tx maps at every leaf. */
     {
         int i;
-        for (i = 0; i < txw && ((x4 & 31) + i) < STBV_AV1_TXSTATE_MAX4; i++)
-            s->above_tx[(x4 & 31) + i] = (stbv_u8)(split ? STBV_AV1_TX_4X4 : txw);
-        for (i = 0; i < txh && ((y4 & 31) + i) < STBV_AV1_TXSTATE_MAX4; i++)
-            s->left_tx[(y4 & 31) + i] = (stbv_u8)(split ? STBV_AV1_TX_4X4 : txh);
+        for (i = 0; i < txw && (unsigned int)(x4 + i) < s->above_n; i++)
+            s->above_tx[x4 + i] = (stbv_u8)(split ? STBV_AV1_TX_4X4 : txw);
+        for (i = 0; i < txh && (unsigned int)(y4 + i) < s->left_n; i++)
+            s->left_tx[y4 + i] = (stbv_u8)(split ? STBV_AV1_TX_4X4 : txh);
     }
 
     if (leaf)

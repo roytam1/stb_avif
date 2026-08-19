@@ -9,6 +9,7 @@
 #define STB_AV1_TILE_DECODE_H
 
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef STB_AV1_PARTITION_DECODE_H
@@ -84,6 +85,9 @@ static int stb_av1_decode_tile(struct stb_av1_tile_decoder *td,
     unsigned int sb_size;
     unsigned int sbw, sbh;
     int qcat;
+    int above_n, left_n;
+    stbv_u8 *above, *left;
+    int rc = 0;
 
     if (!td || !seq || !frame || !data || !size)
         return -1;
@@ -115,29 +119,47 @@ static int stb_av1_decode_tile(struct stb_av1_tile_decoder *td,
     sbw = (frame->width[0] + sb_size - 1U) >> sb_log2;
     sbh = (frame->height + sb_size - 1U) >> sb_log2;
 
-    /* The partition decoder expects dimensions in 4x4 units. */
+    /* The partition decoder expects dimensions in 4x4 units.  Its above/left
+     * context maps are frame-wide (8x8 units), matching dav1d's f->a
+     * BlockContexts; the +1 cell covers the last half-SB block. */
     pd.msac = &td->msac;
     pd.cdf = &td->cdf;
     pd.frame_w4 = (int)((frame->width[0] + 3U) >> 2);
     pd.frame_h4 = (int)((frame->height + 3U) >> 2);
-    memset(pd.above, 0, sizeof(pd.above));
-    memset(pd.left, 0, sizeof(pd.left));
+    above_n = (pd.frame_w4 >> 1) + 1;
+    left_n = (pd.frame_h4 >> 1) + 1;
+    above = (stbv_u8 *)malloc((size_t)above_n);
+    left = (stbv_u8 *)malloc((size_t)left_n);
+    if (!above || !left) {
+        if (above) free(above);
+        if (left) free(left);
+        return -6;
+    }
+    memset(above, 0, (size_t)above_n);
+    memset(left, 0, (size_t)left_n);
+    pd.above = above;
+    pd.left = left;
+    pd.above_n = above_n;
+    pd.left_n = left_n;
     w.td = td;
     w.cb = cb;
     w.opaque = opaque;
     pd.leaf = stb_av1_tile_leaf_dispatch;
     pd.opaque = &w;
 
-    if (!sbw || !sbh)
+    if (!sbw || !sbh) {
+        free(above);
+        free(left);
         return -1;
+    }
 
     {
         unsigned int sy;
         for (sy = 0; sy < sbh; sy++) {
             unsigned int sx;
-            memset(pd.left, 0, sizeof(pd.left));
+            memset(left, 0, (size_t)left_n);
             if (sy == 0)
-                memset(pd.above, 0, sizeof(pd.above));
+                memset(above, 0, (size_t)above_n);
             if (row_cb) row_cb(opaque);
             for (sx = 0; sx < sbw; sx++) {
                 int bl = seq->sb128 ? STBV_AV1_BL_128X128 :
@@ -146,12 +168,17 @@ static int stb_av1_decode_tile(struct stb_av1_tile_decoder *td,
                 int by = (int)(sy * (sb_size >> 2));
                 if (stbv_av1_partition_decode_sb(&pd, bl, bx, by)) {
                     td->error = 1;
-                    return -1;
+                    rc = -1;
+                    goto done;
                 }
             }
         }
     }
-    return td->msac.buf_pos <= td->msac.buf_end ? 0 : -1;
+    rc = td->msac.buf_pos <= td->msac.buf_end ? 0 : -1;
+done:
+    free(above);
+    free(left);
+    return rc;
 }
 
 #endif
