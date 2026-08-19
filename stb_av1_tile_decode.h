@@ -106,13 +106,14 @@ static int stb_av1_decode_tile(struct stb_av1_tile_decoder *td,
     td->frame = frame;
 
     /* qcat is the coefficient-CDF category.  dav1d derives this from the
-       frame quantizer; the four categories cover the 8-bit still path. */
-    qcat = frame->quant.yac < 20 ? 0 :
-           frame->quant.yac < 40 ? 1 :
-           frame->quant.yac < 80 ? 2 : 3;
+       frame quantizer with (qidx > 20) + (qidx > 60) + (qidx > 120). */
+    qcat = (frame->quant.yac > 20) + (frame->quant.yac > 60) +
+           (frame->quant.yac > 120);
     stbv_av1_cdf_init(&td->cdf, (unsigned)qcat);
     stb_av1_msac_init(&td->msac, data, size,
                       (int)frame->disable_cdf_update);
+    fprintf(stderr, "MSAC0 r=%x d=%016llx c=%d\n", td->msac.rng,
+            (unsigned long long)td->msac.dif, td->msac.cnt);
 
     sb_log2 = 6U + seq->sb128;
     sb_size = 1U << sb_log2;
