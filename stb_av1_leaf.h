@@ -245,8 +245,9 @@ static int stbv_av1_leaf_tx_cb(int x4, int y4, int tx, void *opaque)
     }
 
     if (skip) {
-        printf("TX  (x4=%d y4=%d tx=%d) skip=1 txtp=%d sctx=%d rng=%u\n",
-               x4, y4, tx, txtp, sctx, c->msac->rng);
+        printf("TX  (x4=%d y4=%d tx=%d) skip=1 txtp=%d sctx=%d rng=%u rem=%ld\n",
+               x4, y4, tx, txtp, sctx, c->msac->rng,
+               (long)(c->msac->buf_end - c->msac->buf_pos));
         /* A skipped transform has the fixed residual context 0x40. */
         stbv_av1_res_mark(&c->state->res, x4 & 31, y4 & 31,
                           txw4, txh4, (stbv_u8)0x40);
@@ -276,8 +277,9 @@ static int stbv_av1_leaf_tx_cb(int x4, int y4, int tx, void *opaque)
         eob = stbv_av1_decode_coeffs_square(c->msac, c->cdf, tx, 0, txclass,
                                              n, 1, 1, 0, sctx, dc_sign_ctx, cf,
                                              &res_ctx);
-        printf("TX  (x4=%d y4=%d tx=%d) skip=0 txtp=%d sctx=%d dcs=%d eob=%d rng=%u\n",
-               x4, y4, tx, txtp, sctx, dc_sign_ctx, eob, c->msac->rng);
+        printf("TX  (x4=%d y4=%d tx=%d) skip=0 txtp=%d sctx=%d dcs=%d eob=%d rng=%u rem=%ld\n",
+               x4, y4, tx, txtp, sctx, dc_sign_ctx, eob, c->msac->rng,
+               (long)(c->msac->buf_end - c->msac->buf_pos));
         if (eob < 0)
             return -2;
         if (c->out)
@@ -313,7 +315,15 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         int sctx = (state->above_skip[bx4 & 31] ? 1 : 0) +
                    (state->left_skip[by4 & 31] ? 1 : 0);
         int i;
+        if (bs == STBV_AV1_BS_64x128 && bx4 == 288 && by4 == 0)
+            printf("LEAFDBG pre-skip rng=%u f=%u f2=%u sctx=%d rem=%ld\n",
+                   msac->rng, (unsigned)cdf->skip[sctx * 2],
+                   (unsigned)cdf->skip[sctx * 2 + 1], sctx,
+                   (long)(msac->buf_end - msac->buf_pos));
         block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
+        if (bs == STBV_AV1_BS_64x128 && bx4 == 288 && by4 == 0)
+            printf("LEAFDBG bs_skip rng=%u rem=%ld\n", msac->rng,
+                   (long)(msac->buf_end - msac->buf_pos));
         for (i = 0; i < bw4; i++)
             state->above_skip[(bx4 + i) & 31] = (stbv_u8)block_skip;
         for (i = 0; i < bh4; i++)
@@ -324,6 +334,9 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     if (stb_av1_intra_state_decode_leaf(msac, cdf, &state->intra,
                                         bx4, by4, bs, cfl_allowed, &intra))
         return -3;
+    if (bs == STBV_AV1_BS_64x128 && bx4 == 288 && by4 == 0)
+        printf("LEAFDBG intra rng=%u rem=%ld ymode=%d\n", msac->rng,
+               (long)(msac->buf_end - msac->buf_pos), intra.y_mode);
 
     max_tx = stbv_av1_max_tx_for_bs(bs);
     if (frame && frame->txfm_mode == 0)
@@ -337,6 +350,9 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                  stbv_av1_tx_dims[max_tx].lw) +
             stbv_av1_tx_is_large(state->tx.left_tx, by4 & 31,
                                  stbv_av1_tx_dims[max_tx].lh));
+    if (bs == STBV_AV1_BS_64x128 && bx4 == 288 && by4 == 0)
+        printf("LEAFDBG txsize rng=%u rem=%ld tx0=%d\n", msac->rng,
+               (long)(msac->buf_end - msac->buf_pos), tx0);
 
     c.msac = msac;
     c.cdf = cdf;
