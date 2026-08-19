@@ -1464,31 +1464,85 @@ typedef struct stbv_av1_cdf {
 #define STBV_AV1_COEF_EOBHI_OFF      2858
 #define STBV_AV1_COEF_DCSIGN_OFF     3038
 
+/* dav1d stores its CDFs in inverted form: each entry is 32768 minus the
+ * spec probability, i.e. the tail probability P(symbol > i).  The static
+ * tables above are spec-form, so every group is inverted at init time.
+ * Groups hold n symbol values followed by an adaptation count slot (0) and
+ * padding; the count and pad entries must not be inverted. */
+static void stbv_av1_cdf_inv(stbv_u16 *d, const stbv_u16 *s,
+                             int groups, int stride, int n)
+{
+    int g, i;
+    for (g = 0; g < groups; g++)
+        for (i = 0; i < n; i++)
+            d[g * stride + i] = (stbv_u16)(32768U - s[g * stride + i]);
+}
+
 static void stbv_av1_cdf_copy_coef(stbv_u16 *d, unsigned q)
 {
-#define STBV_CPY(field,off,count) do { const stbv_u16 *s; switch(q){case 0:s=stb_av1_cdf_coef0_##field;break;case 1:s=stb_av1_cdf_coef1_##field;break;case 2:s=stb_av1_cdf_coef2_##field;break;default:s=stb_av1_cdf_coef3_##field;break;} memcpy(d+(off),s,(count)*sizeof(stbv_u16)); } while(0)
-    STBV_CPY(skip,0,130); STBV_CPY(eob_bin_16,130,32); STBV_CPY(eob_bin_32,162,32); STBV_CPY(eob_bin_64,194,32); STBV_CPY(eob_bin_128,226,32);
-    STBV_CPY(eob_bin_256,258,64); STBV_CPY(eob_bin_512,322,32); STBV_CPY(eob_bin_1024,354,32); STBV_CPY(eob_base_tok,386,160); STBV_CPY(base_tok,546,1640);
-    STBV_CPY(br_tok,2186,672); STBV_CPY(eob_hi_bit,2858,180); STBV_CPY(dc_sign,3038,12);
+    const stbv_u16 *s;
+#define STBV_SRC(field) (q == 0 ? stb_av1_cdf_coef0_##field : \
+                         q == 1 ? stb_av1_cdf_coef1_##field : \
+                         q == 2 ? stb_av1_cdf_coef2_##field : \
+                                  stb_av1_cdf_coef3_##field)
+#define STBV_CPY(field,off,count,groups,stride,n) do { \
+        s = STBV_SRC(field); \
+        memcpy(d + (off), s, (count) * sizeof(stbv_u16)); \
+        stbv_av1_cdf_inv(d + (off), s, (groups), (stride), (n)); \
+    } while (0)
+    STBV_CPY(skip,0,130,65,2,1);
+    STBV_CPY(eob_bin_16,130,32,4,8,4);
+    STBV_CPY(eob_bin_32,162,32,4,8,4);
+    STBV_CPY(eob_bin_64,194,32,4,8,4);
+    STBV_CPY(eob_bin_128,226,32,4,8,4);
+    STBV_CPY(eob_bin_256,258,64,4,16,8);
+    STBV_CPY(eob_bin_512,322,32,2,16,9);
+    STBV_CPY(eob_bin_1024,354,32,2,16,10);
+    STBV_CPY(eob_base_tok,386,160,40,4,2);
+    STBV_CPY(base_tok,546,1640,410,4,3);
+    STBV_CPY(br_tok,2186,672,168,4,3);
+    STBV_CPY(eob_hi_bit,2858,180,90,2,1);
+    STBV_CPY(dc_sign,3038,12,6,2,1);
 #undef STBV_CPY
+#undef STBV_SRC
 }
 
 static void stbv_av1_cdf_init(stbv_av1_cdf *c, unsigned qcat)
 {
+    static const int part_n[5] = { 7, 9, 9, 9, 3 };
+    int g, i;
+
     memcpy(c->y_mode, stb_av1_cdf_y_mode, sizeof(c->y_mode));
+    stbv_av1_cdf_inv(c->y_mode, stb_av1_cdf_y_mode, 4, 16, 12);
     memcpy(c->uv_mode, stb_av1_cdf_uv_mode, sizeof(c->uv_mode));
+    stbv_av1_cdf_inv(c->uv_mode, stb_av1_cdf_uv_mode, 26, 16, 12);
     memcpy(c->kfym, stb_av1_cdf_kfym, sizeof(c->kfym));
+    stbv_av1_cdf_inv(c->kfym, stb_av1_cdf_kfym, 25, 16, 13);
     memcpy(c->partition, stb_av1_cdf_partition, sizeof(c->partition));
+    for (g = 0; g < 20; g++)
+        for (i = 0; i < part_n[g / 4]; i++)
+            c->partition[g * 16 + i] =
+                (stbv_u16)(32768U - stb_av1_cdf_partition[g * 16 + i]);
     memcpy(c->angle_delta, stb_av1_cdf_angle_delta, sizeof(c->angle_delta));
+    stbv_av1_cdf_inv(c->angle_delta, stb_av1_cdf_angle_delta, 8, 8, 6);
     memcpy(c->filter_intra, stb_av1_cdf_filter_intra, sizeof(c->filter_intra));
+    stbv_av1_cdf_inv(c->filter_intra, stb_av1_cdf_filter_intra, 1, 8, 5);
     memcpy(c->use_filter_intra, stb_av1_cdf_use_filter_intra, sizeof(c->use_filter_intra));
+    stbv_av1_cdf_inv(c->use_filter_intra, stb_av1_cdf_use_filter_intra, 22, 2, 1);
     memcpy(c->txsz, stb_av1_cdf_txsz, sizeof(c->txsz));
+    stbv_av1_cdf_inv(c->txsz, stb_av1_cdf_txsz, 12, 4, 3);
     memcpy(c->txpart, stb_av1_cdf_txpart, sizeof(c->txpart));
+    stbv_av1_cdf_inv(c->txpart, stb_av1_cdf_txpart, 21, 2, 1);
     memcpy(c->skip, stb_av1_cdf_skip, sizeof(c->skip));
+    stbv_av1_cdf_inv(c->skip, stb_av1_cdf_skip, 3, 2, 1);
     memcpy(c->cfl_sign, stb_av1_cdf_cfl_sign, sizeof(c->cfl_sign));
+    stbv_av1_cdf_inv(c->cfl_sign, stb_av1_cdf_cfl_sign, 1, 8, 7);
     memcpy(c->cfl_alpha, stb_av1_cdf_cfl_alpha, sizeof(c->cfl_alpha));
+    stbv_av1_cdf_inv(c->cfl_alpha, stb_av1_cdf_cfl_alpha, 6, 16, 15);
     memcpy(c->txtp_intra1, stb_av1_cdf_txtp_intra1, sizeof(c->txtp_intra1));
+    stbv_av1_cdf_inv(c->txtp_intra1, stb_av1_cdf_txtp_intra1, 26, 8, 6);
     memcpy(c->txtp_intra2, stb_av1_cdf_txtp_intra2, sizeof(c->txtp_intra2));
+    stbv_av1_cdf_inv(c->txtp_intra2, stb_av1_cdf_txtp_intra2, 39, 8, 4);
     if (qcat > 3) qcat = 3;
     switch (qcat) {
     case 0: stbv_av1_cdf_copy_coef(c->coef, 0); break;
