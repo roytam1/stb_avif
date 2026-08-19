@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "stb_av1_scalar.h"
+#include "stb_av1_avifbox.h"
 
 struct sample_ctx {
     stbv_av1_leaf_state state;
@@ -23,6 +24,7 @@ struct sample_ctx {
     int err_x4;
     int err_y4;
     int err_bs;
+    int bypass;
 };
 
 static int sample_leaf(struct stb_av1_tile_decoder *td,
@@ -32,6 +34,20 @@ static int sample_leaf(struct stb_av1_tile_decoder *td,
     struct sample_ctx *c = (struct sample_ctx *)opaque;
     stbv_av1_leaf_tx_result out;
     int r;
+
+    if (c->bypass) {
+        c->leaves++;
+        c->skipped++;
+        return 0;
+    }
+
+    if (li->bx == 288 && li->by == 0 && li->bs == 2) {
+        const unsigned char *p = (const unsigned char *)&td->msac;
+        int i;
+        printf("SAMPLE pre-msac hex:");
+        for (i = 0; i < 40; i++) printf(" %02x", p[i]);
+        printf("\n");
+    }
 
     r = stbv_av1_decode_leaf_syntax(&td->msac, &td->cdf, &c->state,
                                     td->frame, li->bs, li->bx, li->by,
@@ -44,8 +60,16 @@ static int sample_leaf(struct stb_av1_tile_decoder *td,
         printf("LEAF (bx=%d by=%d bs=%d): r=%d\n", li->bx, li->by, li->bs, r);
         return r;
     }
-    printf("LEAF (bx=%d by=%d bs=%d): skip=%d txtp=%d eob=%d\n",
-           li->bx, li->by, li->bs, out.skipped, out.txtp, out.eob);
+    if (li->bx == 272 && li->by == 16 && li->bs == 3) {
+        const unsigned char *p = (const unsigned char *)&td->msac;
+        int i;
+        printf("SAMPLE post-(272,16) hex:");
+        for (i = 0; i < 40; i++) printf(" %02x", p[i]);
+        printf("\n");
+    }
+    printf("LEAF (bx=%d by=%d bs=%d): skip=%d txtp=%d eob=%d rng=%u\n",
+           li->bx, li->by, li->bs, out.skipped, out.txtp, out.eob,
+           td->msac.rng);
     c->leaves++;
     if (out.skipped) c->skipped++;
     else c->nonzero++;
@@ -86,6 +110,27 @@ int main(int argc, char **argv)
     }
     fclose(f);
 
+    /* If the input is an .avif, unwrap the container first. */
+    {
+        size_t narg = strlen(argv[1]);
+        const stbv_u8 *stream = data;
+        size_t stream_size = (size_t)n;
+        if (narg >= 5 &&
+            argv[1][narg - 5] == '.' && argv[1][narg - 4] == 'a' &&
+            argv[1][narg - 3] == 'v' && argv[1][narg - 2] == 'i' &&
+            argv[1][narg - 1] == 'f') {
+            if (stbv_av1_extract_avif_item(data, (size_t)n, &stream,
+                                            &stream_size)) {
+                fprintf(stderr, "AVIF container parse failed\n");
+                free(data);
+                return 1;
+            }
+            printf("avif: item_data=%ld bytes\n", (long)stream_size);
+            memmove(data, stream, stream_size);   /* keep malloc base for free() */
+            n = (long)stream_size;
+        }
+    }
+
     r = stb_av1_parse_internal_stream(&st, data, (size_t)n);
     if (r) {
         fprintf(stderr, "OBU/header parse failed: %d\n", r);
@@ -103,6 +148,7 @@ int main(int argc, char **argv)
     ctx.leaves = 0;
     ctx.nonzero = 0;
     ctx.skipped = 0;
+    ctx.bypass = getenv("STB_AV1_BYPASS_LEAF") != NULL;
     memset(ctx.txtp, 0, sizeof(ctx.txtp));
     stbv_av1_leaf_state_init(&ctx.state, ctx.above, 32, ctx.left, 32);
 
