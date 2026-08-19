@@ -10,6 +10,9 @@
 #ifndef STB_AV1_PARTITION_DECODE_H
 #define STB_AV1_PARTITION_DECODE_H
 
+#include <stdio.h>
+#define STBV_AV1_PARTDBG(...) fprintf(stderr, __VA_ARGS__)
+
 #ifndef STB_AV1_PARTITION_H
 #error "include stb_av1_partition.h first"
 #endif
@@ -158,8 +161,11 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
     if (have_h_split && have_v_split) {
         bp = (int)stb_av1_msac_symbol(d->msac, pc,
                                       stbv_av1_partition_type_count[bl]);
-        if (bp < 0 || bp >= STBV_AV1_N_PARTITIONS)
+        if (bp < 0 || bp >= STBV_AV1_N_PARTITIONS) {
+            STBV_AV1_PARTDBG("PARDEC bl=%d bx=%d by=%d sym=%d rng=%u dif=%08x cnt=%d\n",
+                             bl, bx, by, bp, d->msac->rng, d->msac->dif, d->msac->cnt);
             return -1;
+        }
 
         if (bp == STBV_AV1_PARTITION_SPLIT) {
             if (bl == STBV_AV1_BL_8X8) {
@@ -251,26 +257,40 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         is_split = stb_av1_msac_bool(d->msac,
                                      stbv_av1_gather_top_partition_prob(pc, bl));
         if (is_split) {
-            if (bl >= STBV_AV1_BL_8X8) return -1;
+            if (bl >= STBV_AV1_BL_8X8) {
+                STBV_AV1_PARTDBG("PARDEC-H bl=%d bx=%d by=%d split-at-8x8 rng=%u\n",
+                                 bl, bx, by, d->msac->rng);
+                return -1;
+            }
             if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by)) return -1;
             return stbv_av1_partition_decode_sb(d, bl + 1, bx + hsz, by);
         }
         /* Bottom edge: the only legal non-split partition is H. */
         bs = stbv_av1_block_sizes[bl][STBV_AV1_PARTITION_H][0];
-        if (bs == 0xff) return -1;
+        if (bs == 0xff) {
+            STBV_AV1_PARTDBG("PARDEC-H bs=ff bl=%d bx=%d by=%d\n", bl, bx, by);
+            return -1;
+        }
         return stbv_av1_partition_emit(d, bl, bs, STBV_AV1_PARTITION_H, bx, by);
     } else {
         unsigned int is_split;
         is_split = stb_av1_msac_bool(d->msac,
                                      stbv_av1_gather_left_partition_prob(pc, bl));
         if (is_split) {
-            if (bl >= STBV_AV1_BL_8X8) return -1;
+            if (bl >= STBV_AV1_BL_8X8) {
+                STBV_AV1_PARTDBG("PARDEC-V bl=%d bx=%d by=%d split-at-8x8 rng=%u\n",
+                                 bl, bx, by, d->msac->rng);
+                return -1;
+            }
             if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by)) return -1;
             return stbv_av1_partition_decode_sb(d, bl + 1, bx, by + hsz);
         }
         /* Right edge: the only legal non-split partition is V. */
         bs = stbv_av1_block_sizes[bl][STBV_AV1_PARTITION_V][0];
-        if (bs == 0xff) return -1;
+        if (bs == 0xff) {
+            STBV_AV1_PARTDBG("PARDEC-V bs=ff bl=%d bx=%d by=%d\n", bl, bx, by);
+            return -1;
+        }
         return stbv_av1_partition_emit(d, bl, bs, STBV_AV1_PARTITION_V, bx, by);
     }
 
