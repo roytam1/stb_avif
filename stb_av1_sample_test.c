@@ -190,6 +190,14 @@ int main(int argc, char **argv)
                                 st.tile_data, st.tile_size,
                                 sample_leaf, &ctx, sample_row_start);
 
+        if (st.tile_size >= 8) {
+            unsigned int k;
+            fprintf(stderr, "TILE0:");
+            for (k = 0; k < 8; k++)
+                fprintf(stderr, " %02x", st.tile_data[k]);
+            fprintf(stderr, " (off=%u)\n", st.tile_start);
+        }
+
         free(ab_mode);
         free(l_mode);
         free(ab_tx);
