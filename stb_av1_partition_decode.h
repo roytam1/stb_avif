@@ -55,8 +55,10 @@ static void stbv_av1_partition_set_context(stbv_u8 *above, stbv_u8 *left,
 
     av = stbv_av1_al_part_ctx[0][bl][bp];
     lv = stbv_av1_al_part_ctx[1][bl][bp];
-    if (av == 0xff || lv == 0xff)
-        return;
+    /* Note: dav1d writes the context unconditionally, even when the value
+     * is 0xff (SPLIT at 128x128..16x16).  0xff makes every later reader see
+     * "neighbour is smaller" (bit (4-bl) set), which is exactly what a
+     * split parent must convey to the blocks below/beside it. */
 
     /* hsz is 4x4 units. dav1d's case_set_upto16(ulog2(hsz)) writes
      * 1,2,4,8,16 entries. */
@@ -122,18 +124,7 @@ static int stbv_av1_partition_emit(stbv_av1_partition_decoder *d,
                                     int bl, int bs, int bp,
                                     int bx, int by)
 {
-    int hsz = 16 >> bl;
-    int bx8 = bx >> 1;
-    int by8 = by >> 1;
-    int r;
-
-    r = d->leaf(d, bl, bs, bp, bx, by, d->opaque);
-    if (r) return r;
-    if (bp != STBV_AV1_PARTITION_SPLIT || bl == STBV_AV1_BL_8X8)
-        stbv_av1_partition_set_context(d->above, d->left, d->above_n,
-                                       d->left_n, bx8, by8,
-                                       hsz, bl, bp);
-    return 0;
+    return d->leaf(d, bl, bs, bp, bx, by, d->opaque);
 }
 
 static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
@@ -183,13 +174,15 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
                 if (r) return r;
                 r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by + 1);
                 if (r) return r;
-                return stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp,
-                                   bx + 1, by + 1);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp,
+                                            bx + 1, by + 1);
+                if (r) return r;
+            } else {
+                if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by)) return -1;
+                if (stbv_av1_partition_decode_sb(d, bl + 1, bx + hsz, by)) return -1;
+                if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by + hsz)) return -1;
+                if (stbv_av1_partition_decode_sb(d, bl + 1, bx + hsz, by + hsz)) return -1;
             }
-            if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by)) return -1;
-            if (stbv_av1_partition_decode_sb(d, bl + 1, bx + hsz, by)) return -1;
-            if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by + hsz)) return -1;
-            if (stbv_av1_partition_decode_sb(d, bl + 1, bx + hsz, by + hsz)) return -1;
         } else {
             bs = stbv_av1_block_sizes[bl][bp][0];
             if (bs == 0xff)
@@ -199,66 +192,73 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
             if (bp == STBV_AV1_PARTITION_H) {
                 int r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by);
                 if (r) return r;
-                return stbv_av1_partition_emit(d, bl, bs, bp, bx, by + hsz);
-            }
-            if (bp == STBV_AV1_PARTITION_V) {
-                int r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by);
+                r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by + hsz);
                 if (r) return r;
-                return stbv_av1_partition_emit(d, bl, bs, bp, bx + hsz, by);
-            }
-            if (bp == STBV_AV1_PARTITION_T_TOP_SPLIT) {
+            } else if (bp == STBV_AV1_PARTITION_V) {
                 int r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by);
                 if (r) return r;
                 r = stbv_av1_partition_emit(d, bl, bs, bp, bx + hsz, by);
                 if (r) return r;
-                return stbv_av1_partition_emit(d, bl, stbv_av1_block_sizes[bl][bp][1], bp,
-                                               bx, by + hsz);
-            }
-            if (bp == STBV_AV1_PARTITION_T_BOTTOM_SPLIT) {
+            } else if (bp == STBV_AV1_PARTITION_T_TOP_SPLIT) {
+                int r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by);
+                if (r) return r;
+                r = stbv_av1_partition_emit(d, bl, bs, bp, bx + hsz, by);
+                if (r) return r;
+                r = stbv_av1_partition_emit(d, bl, stbv_av1_block_sizes[bl][bp][1], bp,
+                                            bx, by + hsz);
+                if (r) return r;
+            } else if (bp == STBV_AV1_PARTITION_T_BOTTOM_SPLIT) {
                 int r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by);
                 if (r) return r;
                 r = stbv_av1_partition_emit(d, bl, stbv_av1_block_sizes[bl][bp][1], bp,
                                             bx, by + hsz);
                 if (r) return r;
-                return stbv_av1_partition_emit(d, bl, stbv_av1_block_sizes[bl][bp][1], bp,
-                                               bx + hsz, by + hsz);
-            }
-            if (bp == STBV_AV1_PARTITION_T_LEFT_SPLIT) {
+                r = stbv_av1_partition_emit(d, bl, stbv_av1_block_sizes[bl][bp][1], bp,
+                                            bx + hsz, by + hsz);
+                if (r) return r;
+            } else if (bp == STBV_AV1_PARTITION_T_LEFT_SPLIT) {
                 int r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by);
                 if (r) return r;
                 r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by + hsz);
                 if (r) return r;
-                return stbv_av1_partition_emit(d, bl, stbv_av1_block_sizes[bl][bp][1], bp,
-                                               bx + hsz, by);
-            }
-            if (bp == STBV_AV1_PARTITION_T_RIGHT_SPLIT) {
+                r = stbv_av1_partition_emit(d, bl, stbv_av1_block_sizes[bl][bp][1], bp,
+                                            bx + hsz, by);
+                if (r) return r;
+            } else if (bp == STBV_AV1_PARTITION_T_RIGHT_SPLIT) {
                 int r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by);
                 if (r) return r;
                 r = stbv_av1_partition_emit(d, bl, stbv_av1_block_sizes[bl][bp][1], bp,
                                             bx + hsz, by);
                 if (r) return r;
-                return stbv_av1_partition_emit(d, bl, stbv_av1_block_sizes[bl][bp][1], bp,
-                                               bx + hsz, by + hsz);
-            }
-            if (bp == STBV_AV1_PARTITION_H4) {
+                r = stbv_av1_partition_emit(d, bl, stbv_av1_block_sizes[bl][bp][1], bp,
+                                            bx + hsz, by + hsz);
+                if (r) return r;
+            } else if (bp == STBV_AV1_PARTITION_H4) {
                 int i, r;
                 for (i = 0; i < 4; i++) {
                     if (by + i * (hsz / 4) >= d->frame_h4) break;
                     r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by + i * (hsz / 4));
                     if (r) return r;
                 }
-                return 0;
-            }
-            if (bp == STBV_AV1_PARTITION_V4) {
+            } else if (bp == STBV_AV1_PARTITION_V4) {
                 int i, r;
                 for (i = 0; i < 4; i++) {
                     if (bx + i * (hsz / 4) >= d->frame_w4) break;
                     r = stbv_av1_partition_emit(d, bl, bs, bp, bx + i * (hsz / 4), by);
                     if (r) return r;
                 }
-                return 0;
+            } else {
+                return -1;
             }
         }
+
+        /* Context write: exactly like dav1d, once per level, over the parent
+         * span (case_set_upto16(ulog2(hsz)) cells from the parent bx8/by8),
+         * and only when the parent is not an un-split SPLIT. */
+        if (bp != STBV_AV1_PARTITION_SPLIT || bl == STBV_AV1_BL_8X8)
+            stbv_av1_partition_set_context(d->above, d->left, d->above_n,
+                                           d->left_n, bx8, by8,
+                                           hsz, bl, bp);
     } else if (have_h_split) {
         unsigned int is_split;
         is_split = stb_av1_msac_bool(d->msac,
@@ -278,7 +278,14 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
             STBV_AV1_PARTDBG("PARDEC-H bs=ff bl=%d bx=%d by=%d\n", bl, bx, by);
             return -1;
         }
-        return stbv_av1_partition_emit(d, bl, bs, STBV_AV1_PARTITION_H, bx, by);
+        {
+            int r = stbv_av1_partition_emit(d, bl, bs, STBV_AV1_PARTITION_H, bx, by);
+            if (r) return r;
+            stbv_av1_partition_set_context(d->above, d->left, d->above_n,
+                                           d->left_n, bx8, by8,
+                                           hsz, bl, STBV_AV1_PARTITION_H);
+            return 0;
+        }
     } else {
         unsigned int is_split;
         is_split = stb_av1_msac_bool(d->msac,
@@ -298,7 +305,14 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
             STBV_AV1_PARTDBG("PARDEC-V bs=ff bl=%d bx=%d by=%d\n", bl, bx, by);
             return -1;
         }
-        return stbv_av1_partition_emit(d, bl, bs, STBV_AV1_PARTITION_V, bx, by);
+        {
+            int r = stbv_av1_partition_emit(d, bl, bs, STBV_AV1_PARTITION_V, bx, by);
+            if (r) return r;
+            stbv_av1_partition_set_context(d->above, d->left, d->above_n,
+                                           d->left_n, bx8, by8,
+                                           hsz, bl, STBV_AV1_PARTITION_V);
+            return 0;
+        }
     }
 
     return 0;
