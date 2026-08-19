@@ -176,7 +176,7 @@ static const stbv_u16 stb_av1_cdf_txpart[42] = {
 };
 
 static const stbv_u16 stb_av1_cdf_skip[6] = {
-    1097, 0, 16253, 0, 28192, 0,
+    31671, 0, 16515, 0, 4576, 0,
 };
 
 static const stbv_u16 stb_av1_cdf_cfl_sign[8] = {
