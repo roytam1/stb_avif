@@ -147,6 +147,23 @@ static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
     memset(s->left_skip, 0, sizeof(s->left_skip));
 }
 
+/* dav1d resets every above/left context at the start of each superblock
+ * row (reset_context() per row).  The scalar decoder must do the same. */
+static void stbv_av1_leaf_state_reset_row(stbv_av1_leaf_state *s)
+{
+    if (!s) return;
+    stbv_av1_tx_state_reset_row(&s->tx);
+    stbv_av1_res_state_init(&s->res);
+    memset(s->above_skip, 0, sizeof(s->above_skip));
+    memset(s->left_skip, 0, sizeof(s->left_skip));
+    if (s->intra.above_mode)
+        memset(s->intra.above_mode, STBV_AV1_INTRA_DC,
+               (size_t)s->intra.above_count);
+    if (s->intra.left_mode)
+        memset(s->intra.left_mode, STBV_AV1_INTRA_DC,
+               (size_t)s->intra.left_count);
+}
+
 typedef struct stbv_av1_leaf_tx_result {
     int x4, y4, tx;
     int skipped;
@@ -228,6 +245,8 @@ static int stbv_av1_leaf_tx_cb(int x4, int y4, int tx, void *opaque)
     }
 
     if (skip) {
+        printf("TX  (x4=%d y4=%d tx=%d) skip=1 txtp=%d sctx=%d rng=%u\n",
+               x4, y4, tx, txtp, sctx, c->msac->rng);
         /* A skipped transform has the fixed residual context 0x40. */
         stbv_av1_res_mark(&c->state->res, x4 & 31, y4 & 31,
                           txw4, txh4, (stbv_u8)0x40);
@@ -237,13 +256,28 @@ static int stbv_av1_leaf_tx_cb(int x4, int y4, int tx, void *opaque)
         int txclass = stbv_av1_tx_class(txtp);
         int eob;
         stbv_u8 res_ctx;
+        int dc_sign_ctx = 0;
+        int s = 0;
+        int i;
+
+        /* dav1d get_dc_sign_ctx: sum res_ctx >> 6 over the transform width,
+         * then subtract w4 and h4 and map to 0..2 via (s != 0) + (s > 0). */
+        for (i = 0; i < txw4; i++) {
+            s += c->state->res.above[(x4 + i) & 31] >> 6;
+            s += c->state->res.left[(y4 + i) & 31] >> 6;
+        }
+        s -= txw4;
+        s -= txh4;
+        dc_sign_ctx = (s != 0) + (s > 0);
 
         /* This first integration pass validates coefficient syntax and MSAC
            consumption.  Quantization/reconstruction is still supplied by
            the caller in the block layer. */
         eob = stbv_av1_decode_coeffs_square(c->msac, c->cdf, tx, 0, txclass,
-                                             n, 1, 1, 0, sctx, 0, cf,
+                                             n, 1, 1, 0, sctx, dc_sign_ctx, cf,
                                              &res_ctx);
+        printf("TX  (x4=%d y4=%d tx=%d) skip=0 txtp=%d sctx=%d dcs=%d eob=%d rng=%u\n",
+               x4, y4, tx, txtp, sctx, dc_sign_ctx, eob, c->msac->rng);
         if (eob < 0)
             return -2;
         if (c->out)
@@ -299,10 +333,10 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
 
     if (frame && frame->txfm_mode == 1 && max_tx > STBV_AV1_TX_4X4)
         tx0 = stbv_av1_decode_tx_size(msac, cdf, max_tx,
-            stbv_av1_tx_is_smaller(state->tx.above_tx, bx4 & 31,
-                                   stbv_av1_tx_dims[max_tx].lw) +
-            stbv_av1_tx_is_smaller(state->tx.left_tx, by4 & 31,
-                                   stbv_av1_tx_dims[max_tx].lh));
+            stbv_av1_tx_is_large(state->tx.above_tx, bx4 & 31,
+                                 stbv_av1_tx_dims[max_tx].lw) +
+            stbv_av1_tx_is_large(state->tx.left_tx, by4 & 31,
+                                 stbv_av1_tx_dims[max_tx].lh));
 
     c.msac = msac;
     c.cdf = cdf;

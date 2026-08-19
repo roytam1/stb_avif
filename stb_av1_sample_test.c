@@ -41,13 +41,22 @@ static int sample_leaf(struct stb_av1_tile_decoder *td,
         c->err_x4 = li->bx;
         c->err_y4 = li->by;
         c->err_bs = li->bs;
+        printf("LEAF (bx=%d by=%d bs=%d): r=%d\n", li->bx, li->by, li->bs, r);
         return r;
     }
+    printf("LEAF (bx=%d by=%d bs=%d): skip=%d txtp=%d eob=%d\n",
+           li->bx, li->by, li->bs, out.skipped, out.txtp, out.eob);
     c->leaves++;
     if (out.skipped) c->skipped++;
     else c->nonzero++;
     if (out.txtp >= 0 && out.txtp < 17) c->txtp[out.txtp]++;
     return 0;
+}
+
+static void sample_row_start(void *opaque)
+{
+    struct sample_ctx *c = (struct sample_ctx *)opaque;
+    stbv_av1_leaf_state_reset_row(&c->state);
 }
 
 int main(int argc, char **argv)
@@ -82,6 +91,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "OBU/header parse failed: %d\n", r);
         free(data); return 1;
     }
+    printf("seq: sb128=%u hbd=%u monochrome=%u reduced_still=%u\n",
+           st.seq.sb128, st.seq.hbd, st.seq.monochrome,
+           st.seq.reduced_still_picture_header);
+    printf("frm: frame_type=%u disable_cdf_update=%u allow_screen_content=%u\n",
+           st.frame.frame_type, st.frame.disable_cdf_update,
+           st.frame.allow_screen_content_tools);
+    printf("frm: txfm_mode=%u reduced_txtp_set=%u\n",
+           st.frame.txfm_mode, st.frame.reduced_txtp_set);
 
     ctx.leaves = 0;
     ctx.nonzero = 0;
@@ -91,7 +108,7 @@ int main(int argc, char **argv)
 
     r = stb_av1_decode_tile(&td, &st.seq, &st.frame,
                             st.tile_data, st.tile_size,
-                            sample_leaf, &ctx);
+                            sample_leaf, &ctx, sample_row_start);
     printf("size=%ux%u q=%u tiles=%ux%u\n",
            st.frame.width[0], st.frame.height, st.frame.quant.yac,
            st.frame.tiling.cols, st.frame.tiling.rows);

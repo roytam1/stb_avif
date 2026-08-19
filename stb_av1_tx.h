@@ -119,13 +119,13 @@ static int stbv_av1_decode_tx_size(struct stb_av1_msac *msac,
 
     if (max_tx <= STBV_AV1_TX_4X4)
         return STBV_AV1_TX_4X4;
-
-    if (max_tx > STBV_AV1_TX_32X32)
-        max_tx = STBV_AV1_TX_32X32;
     if (tctx < 0) tctx = 0;
     if (tctx > 2) tctx = 2;
 
-    /* dav1d: txsz[max - 1][tctx], with max-1 selecting the CDF row. */
+    /* dav1d: txsz[max - 1][tctx], with max-1 selecting the CDF row.
+     * For the square transforms used here dav1d's txfm "max" equals our
+     * max_tx index (TX_8X8=1 .. TX_64X64=4), so a 64x64 maximum uses
+     * txsz[3] and a 32x32 maximum uses txsz[2]. */
     n = max_tx < STBV_AV1_TX_16X16 ? max_tx : 2;
     depth = stb_av1_msac_symbol(msac,
              &cdf->txsz[(max_tx - 1) * 12 + tctx * 4],

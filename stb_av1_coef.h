@@ -283,7 +283,7 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
         eob = ((stb_av1_msac_bool_adapt(msac, eob_hi_cdf) | 2U) << eob_bin) |
               stb_av1_msac_bools(msac, eob_bin);
     }
-    if (eob == 0U || eob > area)
+    if (eob > area)
         return -2;
 
     /* eob_base_tok[N_TX_SIZES][2][4][4] */
@@ -316,88 +316,91 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     }
     memset(levels, 0, (size_t)(stride * ((unsigned)n + 2U)));
 
-    /* EOB coefficient. */
-    ctx = 1U + (eob > (2U << szctx)) + (eob > (4U << szctx));
-    tok = 1U + stb_av1_msac_symbol(msac, eob_cdf + ctx * 4U, 2U);
-
-    if (tx_class == 0) {
-        rc = scan[eob];
-        x = rc >> shift;
-        y = rc & mask;
-    } else if (tx_class == 1) {
-        x = eob & mask;
-        y = eob >> shift;
-        rc = eob;
-    } else {
-        x = eob & mask;
-        y = eob >> shift;
-        rc = (x << shift2) | y;
-    }
-
-    if (tok == 3U) {
-        ctx = (tx_class == 0 ? ((x | y) > 1U) : (y != 0U)) ? 14U : 7U;
-        tok = stbv_av1_coef_hi_tok(msac, hi_cdf + ctx * 4U);
-        cf[rc] = tok << 11;
-        level = levels + x * stride + y;
-        *level = (stbv_u8)(tok + (3U << 6));
-    } else {
-        cf[rc] = tok << 11;
-        level = levels + x * stride + y;
-        *level = (stbv_u8)(tok * 0x41U);
-    }
-
-    /* Descending AC scan.  The linked-list encoding below is the important
-     * detail: it lets the later sign/dequant pass visit only non-zero values. */
-    for (i = eob - 1U; i > 0U; i--) {
-        unsigned rc_i;
+    /* EOB coefficient and descending AC scan, only when eob > 0. */
+    if (eob) {
+        ctx = 1U + (eob > (2U << szctx)) + (eob > (4U << szctx));
+        tok = 1U + stb_av1_msac_symbol(msac, eob_cdf + ctx * 4U, 2U);
 
         if (tx_class == 0) {
-            rc_i = scan[i];
-            x = rc_i >> shift;
-            y = rc_i & mask;
+            rc = scan[eob];
+            x = rc >> shift;
+            y = rc & mask;
         } else if (tx_class == 1) {
-            x = i & mask;
-            y = i >> shift;
-            rc_i = i;
+            x = eob & mask;
+            y = eob >> shift;
+            rc = eob;
         } else {
-            x = i & mask;
-            y = i >> shift;
-            rc_i = (x << shift2) | y;
+            x = eob & mask;
+            y = eob >> shift;
+            rc = (x << shift2) | y;
         }
-
-        level = levels + x * stride + y;
-        ctx = stbv_av1_coef_lo_ctx(levels + x * stride + y,
-                                    &mag, x, y, stride, tx_class);
-        tok = stb_av1_msac_symbol(msac, lo_cdf + ctx * 4U, 3U);
 
         if (tok == 3U) {
-            ctx = (tx_class == 0 ? ((x | y) != 0U) : (y != 0U)) ? 14U : 7U;
-            ctx += (mag > 12U ? 6U : (mag + 1U) >> 1) *
-                   (tx_class == 0 ? 1U : 0U);
-            /* dav1d uses the 21-entry br_tok context mapping here. */
-            if (tx_class == 0)
-                ctx = (y > 0U ? 14U : 7U) +
-                      (mag > 12U ? 6U : (mag + 1U) >> 1);
-            else
-                ctx = (y > 1U ? 14U : 7U) +
-                      (mag > 12U ? 6U : (mag + 1U) >> 1);
+            ctx = (tx_class == 0 ? ((x | y) > 1U) : (y != 0U)) ? 14U : 7U;
             tok = stbv_av1_coef_hi_tok(msac, hi_cdf + ctx * 4U);
+            cf[rc] = tok << 11;
+            level = levels + x * stride + y;
             *level = (stbv_u8)(tok + (3U << 6));
-            cf[rc_i] = (tok << 11) | rc;
-            rc = rc_i;
         } else {
-            /* dav1d's packed expression is equivalent to storing zero or the
-             * token in bits 11+, with rc in the low ten bits when non-zero. */
-            unsigned packed = tok * 0x17ff41U;
-            *level = (stbv_u8)packed;
-            tok = (packed >> 9) & (rc + ~0x7ffU);
-            if (tok)
-                rc = rc_i;
-            cf[rc_i] = tok;
+            cf[rc] = tok << 11;
+            level = levels + x * stride + y;
+            *level = (stbv_u8)(tok * 0x41U);
         }
+
+        /* Descending AC scan.  The linked-list encoding below is the important
+         * detail: it lets the later sign/dequant pass visit only non-zero
+         * values. */
+        for (i = eob - 1U; i > 0U; i--) {
+            unsigned rc_i;
+
+            if (tx_class == 0) {
+                rc_i = scan[i];
+                x = rc_i >> shift;
+                y = rc_i & mask;
+            } else if (tx_class == 1) {
+                x = i & mask;
+                y = i >> shift;
+                rc_i = i;
+            } else {
+                x = i & mask;
+                y = i >> shift;
+                rc_i = (x << shift2) | y;
+            }
+
+            level = levels + x * stride + y;
+            ctx = stbv_av1_coef_lo_ctx(levels + x * stride + y,
+                                        &mag, x, y, stride, tx_class);
+            tok = stb_av1_msac_symbol(msac, lo_cdf + ctx * 4U, 3U);
+
+            if (tok == 3U) {
+                /* dav1d ORs x into y for 2-D and compares y > 1; H/V compares
+                 * y != 0.  mag is masked to 63 before the binarization
+                 * context. */
+                mag &= 63U;
+                ctx = (tx_class == 0 ? ((x | y) > 1U) : (y != 0U)) ? 14U : 7U;
+                ctx += mag > 12U ? 6U : (mag + 1U) >> 1;
+                tok = stbv_av1_coef_hi_tok(msac, hi_cdf + ctx * 4U);
+                *level = (stbv_u8)(tok + (3U << 6));
+                cf[rc_i] = (tok << 11) | rc;
+                rc = rc_i;
+            } else {
+                /* dav1d's packed expression is equivalent to storing zero or
+                 * the token in bits 11+, with rc in the low ten bits when
+                 * non-zero. */
+                unsigned packed = tok * 0x17ff41U;
+                *level = (stbv_u8)packed;
+                tok = (packed >> 9) & (rc + ~0x7ffU);
+                if (tok)
+                    rc = rc_i;
+                cf[rc_i] = tok;
+            }
+        }
+    } else {
+        rc = 0;
     }
 
-    /* DC token. */
+    /* DC token.  For dc-only blocks (eob == 0) dav1d still reads a token from
+     * eob_base_tok[0], with a possible hi token. */
     if (eob) {
         ctx = (tx_class == 0) ? 0U :
               stbv_av1_coef_lo_ctx(levels, &mag, 0, 0, stride, tx_class);
@@ -412,7 +415,10 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
             dc_tok = (int)stbv_av1_coef_hi_tok(msac, hi_cdf + ctx * 4U);
         }
     } else {
-        dc_tok = 0;
+        tok = stb_av1_msac_symbol(msac, eob_cdf + 0U, 2U);
+        dc_tok = (int)(1U + tok);
+        if (tok == 2U)
+            dc_tok = (int)stbv_av1_coef_hi_tok(msac, hi_cdf + 0U);
     }
 
     /* The final rc is the first non-zero coefficient in scan order.  dav1d's

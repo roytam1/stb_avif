@@ -46,6 +46,8 @@ struct stb_av1_tile_walk_ctx {
     void *opaque;
 };
 
+typedef void (*stb_av1_tile_row_cb)(void *opaque);
+
 static int stb_av1_tile_leaf_dispatch(stbv_av1_partition_decoder *pd,
                                        int bl, int bs, int bp,
                                        int bx, int by, void *opaque)
@@ -73,7 +75,8 @@ static int stb_av1_decode_tile(struct stb_av1_tile_decoder *td,
                                const struct stb_av1_seqhdr *seq,
                                const struct stb_av1_framehdr *frame,
                                const stbv_u8 *data, size_t size,
-                               stb_av1_tile_leaf_cb cb, void *opaque)
+                               stb_av1_tile_leaf_cb cb, void *opaque,
+                               stb_av1_tile_row_cb row_cb)
 {
     stbv_av1_partition_decoder pd;
     struct stb_av1_tile_walk_ctx w;
@@ -135,6 +138,8 @@ static int stb_av1_decode_tile(struct stb_av1_tile_decoder *td,
         for (sy = 0; sy < sbh; sy++) {
             unsigned int sx;
             memset(pd.left, 0, sizeof(pd.left));
+            memset(pd.above, 0, sizeof(pd.above));
+            if (row_cb) row_cb(opaque);
             for (sx = 0; sx < sbw; sx++) {
                 int bl = seq->sb128 ? STBV_AV1_BL_128X128 :
                                        STBV_AV1_BL_64X64;

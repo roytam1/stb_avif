@@ -26,8 +26,11 @@ typedef struct stbv_av1_tx_state {
 static void stbv_av1_tx_state_init(stbv_av1_tx_state *s)
 {
     if (!s) return;
-    memset(s->above_tx, STBV_AV1_TX_4X4, sizeof(s->above_tx));
-    memset(s->left_tx,  STBV_AV1_TX_4X4, sizeof(s->left_tx));
+    /* dav1d resets tx_intra to -1 (0xff) at the start of each superblock
+     * row; a missing neighbour therefore compares "larger or equal" to any
+     * real transform and contributes 1 to the tx-size context. */
+    memset(s->above_tx, 0xff, sizeof(s->above_tx));
+    memset(s->left_tx,  0xff, sizeof(s->left_tx));
 }
 
 static int stbv_av1_tx_is_smaller(const stbv_u8 *edge, int pos4, int tx_dim)
@@ -35,6 +38,21 @@ static int stbv_av1_tx_is_smaller(const stbv_u8 *edge, int pos4, int tx_dim)
     if (!edge || pos4 < 0 || pos4 >= STBV_AV1_TXSTATE_MAX4)
         return 0;
     return edge[pos4] < tx_dim;
+}
+
+static int stbv_av1_tx_is_large(const stbv_u8 *edge, int pos4, int tx_dim)
+{
+    if (!edge || pos4 < 0 || pos4 >= STBV_AV1_TXSTATE_MAX4)
+        return 0;
+    return edge[pos4] >= tx_dim;
+}
+
+/* dav1d resets the transform neighbour state at each superblock row. */
+static void stbv_av1_tx_state_reset_row(stbv_av1_tx_state *s)
+{
+    if (!s) return;
+    memset(s->above_tx, 0xff, sizeof(s->above_tx));
+    memset(s->left_tx,  0xff, sizeof(s->left_tx));
 }
 
 /*
