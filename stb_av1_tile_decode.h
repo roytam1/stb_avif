@@ -112,8 +112,6 @@ static int stb_av1_decode_tile(struct stb_av1_tile_decoder *td,
     stbv_av1_cdf_init(&td->cdf, (unsigned)qcat);
     stb_av1_msac_init(&td->msac, data, size,
                       (int)frame->disable_cdf_update);
-    fprintf(stderr, "MSAC0 r=%x d=%016llx c=%d\n", td->msac.rng,
-            (unsigned long long)td->msac.dif, td->msac.cnt);
 
     sb_log2 = 6U + seq->sb128;
     sb_size = 1U << sb_log2;

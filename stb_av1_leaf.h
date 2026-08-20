@@ -327,12 +327,6 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
 
     sctx = stbv_av1_get_skip_ctx(rs, x4, y4, bw4, bh4, txw4, txh4,
                                  is_chroma);
-    fprintf(stderr, "SKP ch=%d ctx=%d sctx=%d off=%d pre_cdf=%u pre_cnt=%u r=%u dif=%llu cnt=%d\n",
-            chroma, stbv_av1_tx_dims[tx].ctx, sctx,
-            stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2,
-            cdf->coef[stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2],
-            cdf->coef[stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2 + 1],
-            msac->rng, (unsigned long long)msac->dif, msac->cnt);
     skip = stb_av1_msac_bool_adapt(
         msac, cdf->coef + stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2);
     if (!skip) {
@@ -365,11 +359,6 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
         out->eob = 0;
         out->skip_ctx = sctx;
     }
-    fprintf(stderr, "L8 ch=%d x=%d y=%d tx=%d skip=%d sctx=%d r=%u dif=%llu cdf=%u cnt=%u\n",
-            chroma, x4, y4, tx, (int)skip, sctx, msac->rng,
-            (unsigned long long)msac->dif,
-            cdf->coef[stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2],
-            cdf->coef[stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2 + 1]);
 
     if (skip) {
         /* A skipped transform has the fixed residual context 0x40. */
@@ -442,17 +431,7 @@ static int stbv_av1_palette_read_plane(struct stb_av1_msac *msac,
     pal_sz = (int)stb_av1_msac_symbol(msac,
                                       cdf->pal_sz + (pl * 7 + sz_ctx) * 8,
                                       6) + 2;
-    fprintf(stderr, "PAL sz=%d pl=%d szctx=%d pre_cdf=%u/%u/%u/%u/%u/%u r=%u\n",
-            pal_sz, pl, sz_ctx,
-            cdf->pal_sz[(pl * 7 + sz_ctx) * 8],
-            cdf->pal_sz[(pl * 7 + sz_ctx) * 8 + 1],
-            cdf->pal_sz[(pl * 7 + sz_ctx) * 8 + 2],
-            cdf->pal_sz[(pl * 7 + sz_ctx) * 8 + 3],
-            cdf->pal_sz[(pl * 7 + sz_ctx) * 8 + 4],
-            cdf->pal_sz[(pl * 7 + sz_ctx) * 8 + 5], msac->rng);
     if (pal_sz > 8) return -1;
-    fprintf(stderr, "PAL sz=%d pl=%d szctx=%d post r=%u\n",
-            pal_sz, pl, sz_ctx, msac->rng);
     l_cache = pl ? (state->left_pal_uv &&
                     (unsigned)by4 < state->left_pal_uv_n ?
                     state->left_pal_uv[by4] : 0)
@@ -470,13 +449,6 @@ static int stbv_av1_palette_read_plane(struct stb_av1_msac *msac,
         state->left_pal[pl] + by4 * 8 : NULL;
     a = (state->above_pal[pl] && (unsigned)bx4 < state->above_pal_n) ?
         state->above_pal[pl] + bx4 * 8 : NULL;
-    fprintf(stderr, "PALC l0=%d a0=%d n=%d bx=%d by=%d\n", l_cache, a_cache,
-            state->left_pal_n, bx4, by4);
-    { int _c; fprintf(stderr, "PALC L:");
-      for (_c = 0; _c < l_cache; _c++) fprintf(stderr, " %x", l[_c]);
-      fprintf(stderr, " A:");
-      for (_c = 0; _c < a_cache; _c++) fprintf(stderr, " %x", a[_c]);
-      fprintf(stderr, "\n"); }
 
     while (l_cache && a_cache) {
         if (*l < *a) {
@@ -512,43 +484,25 @@ static int stbv_av1_palette_read_plane(struct stb_av1_msac *msac,
     i = 0;
     {
         int n;
-        fprintf(stderr, "PALC cache n_cache=%d l_cache=%d a_cache=%d pal_sz=%d pre=%u dif=%016llx\n",
-                n_cache, l_cache, a_cache, pal_sz, msac->rng,
-                (unsigned long long)msac->dif);
-        { int _c; fprintf(stderr, "PALC cachev n=%d:", n_cache);
-          for (_c = 0; _c < n_cache; _c++) fprintf(stderr, " %x", cache[_c]);
-          fprintf(stderr, "\n"); }
         for (n = 0; n < n_cache && i < pal_sz; n++)
             if (stb_av1_msac_bool_equi(msac)) {
-                fprintf(stderr, "PALC usedbit n=%d v=%x\n", n, cache[n]);
                 used[i++] = cache[n];
             }
     }
     n_used = i;
-    fprintf(stderr, "PALC used=%d r=%u dif=%016llx\n", n_used, msac->rng,
-            (unsigned long long)msac->dif);
-    { int _c; fprintf(stderr, "PALC usedv n=%d:", n_used);
-      for (_c = 0; _c < n_used; _c++) fprintf(stderr, " %x", used[_c]);
-      fprintf(stderr, "\n"); }
 
     if (i < pal_sz) {
         int n, m;
-        fprintf(stderr, "PALC pre=%u dif=%016llx\n", msac->rng,
-                (unsigned long long)msac->dif);
         prev = (int)stb_av1_msac_bools(msac, (unsigned)bpc);
         pal_out[i++] = (stbv_u16)prev;
-        fprintf(stderr, "PALC first=%d r=%u\n", prev, msac->rng);
         if (i < pal_sz) {
             bits = bpc - 3 + (int)stb_av1_msac_bools(msac, 2);
             max = (1 << bpc) - 1;
-            fprintf(stderr, "PALC bits=%d r=%u\n", bits, msac->rng);
             do {
                 int delta = (int)stb_av1_msac_bools(msac, (unsigned)bits);
                 prev += delta + (pl ? 0 : 1);
                 if (prev > max) prev = max;
                 pal_out[i++] = (stbv_u16)prev;
-                fprintf(stderr, "PALC delta=%d prev=%d r=%u\n", delta, prev,
-                        msac->rng);
                 if (prev + (pl ? 0 : 1) >= max) {
                     for (; i < pal_sz; i++)
                         pal_out[i] = (stbv_u16)max;
@@ -572,9 +526,6 @@ static int stbv_av1_palette_read_plane(struct stb_av1_msac *msac,
         for (i = 0; i < n_used; i++)
             pal_out[i] = used[i];
     }
-    { int _c; fprintf(stderr, "PALC merged pl=%d n=%d:", pl, pal_sz);
-      for (_c = 0; _c < pal_sz; _c++) fprintf(stderr, " %x", pal_out[_c]);
-      fprintf(stderr, "\n"); }
 
     if (pal_sz_out) *pal_sz_out = pal_sz;
     return 0;
@@ -680,9 +631,7 @@ static int stbv_av1_palette_indices(struct stb_av1_msac *msac,
     int i, j, m, first, last;
     stbv_u16 *color_map_cdf;
 
-    fprintf(stderr, "UNI pre_r=%u n=%d\n", msac->rng, pal_sz);
     pal_tmp[0] = stb_av1_msac_uniform(msac, (unsigned)pal_sz);
-    fprintf(stderr, "UNI post_r=%u v=%d\n", msac->rng, pal_tmp[0]);
     color_map_cdf = cdf->color_map + (pl * 7 + (pal_sz - 2)) * 40;
     for (i = 1; i < wpx + hpx - 1; i++) {
         first = i < wpx - 1 ? i : wpx - 1;
@@ -691,10 +640,6 @@ static int stbv_av1_palette_indices(struct stb_av1_msac *msac,
         for (j = first, m = 0; j >= last; j--, m++) {
             int color_idx = (int)stb_av1_msac_symbol(
                 msac, color_map_cdf + ctx[m] * 8, (size_t)(pal_sz - 1));
-            if (i < 3)
-                fprintf(stderr, "PALI i=%d j=%d ctx=%d cdf=%u ci=%d r=%u\n",
-                        i, j, ctx[m], color_map_cdf[ctx[m] * 8], color_idx,
-                        msac->rng);
             pal_tmp[(i - j) * stride + j] = order[m][color_idx];
         }
     }
@@ -726,8 +671,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         return -2;
 
     layout = seq ? (int)seq->layout : STB_AV1_LAYOUT_I444;
-    fprintf(stderr, "L1 bs=%d bx=%d by=%d r=%u\n", bs, bx4, by4,
-            msac->rng);
     ss_hor = layout == STB_AV1_LAYOUT_I420 || layout == STB_AV1_LAYOUT_I422;
     ss_ver = layout == STB_AV1_LAYOUT_I420;
     sb_step = (seq && seq->sb128) ? 32 : 16;
@@ -753,7 +696,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
             state->left_skip[by4])
             sctx += 1;
         block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
-        fprintf(stderr, "L2 skip r=%u\n", msac->rng);
         for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->above_skip_n; i++)
             state->above_skip[bx4 + i] = (stbv_u8)block_skip;
         for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->left_skip_n; i++)
@@ -775,11 +717,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         idx = seq && seq->sb128 ? ((bx4 & 16) >> 4) + ((by4 & 16) >> 3) : 0;
         if (!block_skip && state->cdef_idx[idx] == -1) {
             int v;
-            fprintf(stderr, "L3 cdef pre r=%u d=%016llx cnt=%d\n", msac->rng,
-                    (unsigned long long)msac->dif, msac->cnt);
             v = stb_av1_msac_bools(msac, frame->cdef.n_bits);
-            fprintf(stderr, "L3 cdef post r=%u d=%016llx cnt=%d\n", msac->rng,
-                    (unsigned long long)msac->dif, msac->cnt);
             state->cdef_idx[idx] = v;
             if (bw4 > 16) state->cdef_idx[idx + 1] = v;
             if (bh4 > 16) state->cdef_idx[idx + 2] = v;
@@ -802,8 +740,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     if (stb_av1_intra_state_decode_leaf(msac, cdf, &state->intra,
                                         bx4, by4, bs, cfl_allowed, &intra))
         return -3;
-    fprintf(stderr, "L4 intra r=%u dif=%llu\n", msac->rng,
-            (unsigned long long)msac->dif);
 
     /* Palette: presence bools, size, colors and index map (dav1d decode.c
      * 1126-1193 + recon_tmpl read_pal_plane/read_pal_uv/read_pal_indices). */
@@ -829,12 +765,9 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                                 &state->pal_sz_y))
                     return -7;
             }
-            fprintf(stderr, "L5 ypal r=%u\n", msac->rng);
         }
         if (has_chroma && intra.uv_mode == STBV_AV1_INTRA_DC) {
             int pal_ctx = state->pal_sz_y > 0;
-            fprintf(stderr, "UVP pre=%u f=%u cnt=%u\n", msac->rng,
-                    cdf->pal_uv[pal_ctx * 2], cdf->pal_uv[pal_ctx * 2 + 1]);
             if (stb_av1_msac_bool_adapt(msac, cdf->pal_uv + pal_ctx * 2)) {
                 if (stbv_av1_palette_read_plane(msac, cdf, state, 1, sz_ctx,
                                                 bx4, by4, bpc, state->pal_u,
@@ -843,7 +776,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                 stbv_av1_palette_read_uv_v(msac, bpc, state->pal_sz_uv,
                                            state->pal_v);
             }
-            fprintf(stderr, "L5b uvpal r=%u\n", msac->rng);
         }
     }
 
@@ -852,21 +784,11 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         !state->pal_sz_y &&
         stbv_av1_block_dimensions[bs][2] <= 3 &&
         stbv_av1_block_dimensions[bs][3] <= 3) {
-        fprintf(stderr, "UF bs=%d bx=%d by=%d pre=%u f=%u cnt=%u\n", bs,
-                bx4, by4, msac->rng, cdf->use_filter_intra[bs * 2],
-                cdf->use_filter_intra[bs * 2 + 1]);
         if (stb_av1_msac_bool_adapt(msac, cdf->use_filter_intra + bs * 2)) {
-            fprintf(stderr, "FI pre=%u c0=%u c1=%u c2=%u c3=%u cnt=%u\n",
-                    msac->rng, cdf->filter_intra[0], cdf->filter_intra[1],
-                    cdf->filter_intra[2], cdf->filter_intra[3],
-                    cdf->filter_intra[4]);
             intra.y_mode = STBV_AV1_INTRA_FILTER;
             intra.y_angle = (int)stb_av1_msac_symbol(msac, cdf->filter_intra, 4);
-            fprintf(stderr, "FI sym=%d post=%u\n", intra.y_angle, msac->rng);
         }
     }
-    fprintf(stderr, "L6 filt r=%u dif=%llu\n", msac->rng,
-            (unsigned long long)msac->dif);
 
     /* Palette index maps come after filter-intra (dav1d read_pal_indices
      * is called after the filter-intra bool in decode.c). */
@@ -894,9 +816,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     if (state->intra.left_mode) {
         for (i = 0; i < bh4 && (unsigned)(by4 + i) < state->intra.left_count; i++)
             state->intra.left_mode[by4 + i] = (stbv_u8)y_mode_nofilt;
-        fprintf(stderr, "MODE-W bx4=%d by4=%d bh4=%d nofilt=%d lm8=%d lm9=%d\n",
-                bx4, by4, bh4, y_mode_nofilt, state->intra.left_mode[8],
-                state->intra.left_mode[9]);
     }
 
     /* Palette neighbour state (dav1d set_ctx: pal_sz maps + al_pal copies;
@@ -959,10 +878,8 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                      state->tx.above_n) +
                 stbv_av1_tx_is_large(state->tx.left_tx, by4,
                                      stbv_av1_tx_dims[max_tx].lh,
-                                     state->tx.left_n));
+                                      state->tx.left_n));
     }
-    fprintf(stderr, "L7 tx0=%d max=%d uv=%d layout=%d r=%u dif=%llu\n", tx0,
-            max_tx, uv_tx, layout, msac->rng, (unsigned long long)msac->dif);
 
     c.msac = msac;
     c.cdf = cdf;

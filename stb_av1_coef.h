@@ -26,8 +26,6 @@
 static unsigned stbv_av1_coef_hi_tok(struct stb_av1_msac *s, stbv_u16 *cdf)
 {
     unsigned t;
-    fprintf(stderr, "HT c0=%d c1=%d c2=%d cnt=%d r0=%u\n",
-            cdf[0], cdf[1], cdf[2], cdf[3], s->rng);
     t = stb_av1_msac_symbol(s, cdf, 3);
     unsigned v = 3 + t;
     if (t == 3) {
@@ -453,10 +451,6 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     }
 
     eob = stb_av1_msac_symbol(msac, eob_bin_cdf, 4U + szctx);
-    fprintf(stderr, "E1 szctx=%u ch=%d is1d=%d eob_bin=%u r=%u dif=%llu postcdf=%u/%u/%u/%u/%u postcnt=%u\n",
-            szctx, chroma, is1d, eob, msac->rng,
-            (unsigned long long)msac->dif, eob_bin_cdf[0], eob_bin_cdf[1],
-            eob_bin_cdf[2], eob_bin_cdf[3], eob_bin_cdf[4], eob_bin_cdf[6]);
     if (eob > 1U) {
         eob_bin = eob - 2U;
         /* eob_hi_bit[N_TX_SIZES][2][9][2] */
@@ -464,7 +458,6 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
                      (unsigned)chroma * 18U + eob_bin * 2U;
         eob = ((stb_av1_msac_bool_adapt(msac, eob_hi_cdf) | 2U) << eob_bin) |
               stb_av1_msac_bools(msac, eob_bin);
-        fprintf(stderr, "E2 eob=%u r=%u\n", eob, msac->rng);
     }
     if (eob > area)
         return -2;
@@ -505,9 +498,6 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     if (eob) {
         ctx = 1U + (eob > (2U << szctx)) + (eob > (4U << szctx));
         tok = 1U + stb_av1_msac_symbol(msac, eob_cdf + ctx * 4U, 2U);
-        fprintf(stderr, "E3b ctx=%u sym=%u r=%u c0=%u c1=%u cnt=%u\n",
-                ctx, tok - 1U, msac->rng, eob_cdf[ctx * 4U],
-                eob_cdf[ctx * 4U + 1U], eob_cdf[ctx * 4U + 3U]);
         dc_tok = (int)tok;
 
         if (tx_class == 0) {
@@ -561,10 +551,6 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
             ctx = stbv_av1_coef_lo_ctx(levels + x * stride + y,
                                         &mag, x, y, stride, tx_class, lo_ctx);
             tok = stb_av1_msac_symbol(msac, lo_cdf + ctx * 4U, 3U);
-            if (eob == 120U)
-                fprintf(stderr, "AC i=%u ctx=%u sym=%u r=%u c0=%u c1=%u c2=%u\n",
-                        i, ctx, tok, msac->rng, lo_cdf[ctx * 4U],
-                        lo_cdf[ctx * 4U + 1U], lo_cdf[ctx * 4U + 2U]);
 
             if (tok == 3U) {
                 /* dav1d ORs x into y for 2-D and compares y > 1; H/V compares
@@ -605,9 +591,6 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
             levels, &mag, 0, 0, stride, tx_class, lo_ctx);
         tok = stb_av1_msac_symbol(msac, lo_cdf + ctx * 4U, 3U);
         dc_tok = (int)tok;
-        fprintf(stderr, "E3d ctx=%u sym=%u r=%u c0=%u c1=%u c2=%u mag=%u\n",
-                ctx, tok, msac->rng, lo_cdf[ctx * 4U], lo_cdf[ctx * 4U + 1U],
-                lo_cdf[ctx * 4U + 2U], mag);
         if (tok == 3U) {
             if (tx_class == 0U)
                 mag = levels[0 * stride + 1U] + levels[1 * stride + 0U]
@@ -622,7 +605,6 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
         if (tok == 2U)
             dc_tok = (int)stbv_av1_coef_hi_tok(msac, hi_cdf + 0U);
     }
-    fprintf(stderr, "E3 eob=%u dc_tok=%d r=%u\n", eob, dc_tok, msac->rng);
 
     /* The final rc is the first non-zero coefficient in scan order.  dav1d's
      * residual pass follows the linked list encoded above. */
@@ -636,16 +618,12 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
                       (unsigned)dc_sign_ctx * 2U;
         dc_sign = (int)stb_av1_msac_bool_adapt(msac, dc_sign_cdf);
         dc_sign_level = (dc_sign - 1) & (2 << 6);
-        fprintf(stderr, "E4 dc_sign=%d r=%u c0=%d cnt=%d dctx=%d dif=%llu\n",
-                dc_sign, msac->rng, dc_sign_cdf[0], dc_sign_cdf[1],
-                dc_sign_ctx, (unsigned long long)msac->dif);
 
         dc_dq = dq_dc;
         if (dc_tok == 15) {
             dc_tok = (int)stbv_av1_coef_golomb(msac) + 15;
             dc_tok &= 0xfffff;
             dc_dq = (int)(((stbv_u32)dc_dq * (stbv_u32)dc_tok) & 0xffffffU);
-            fprintf(stderr, "GOL val=%d r=%u\n", dc_tok, msac->rng);
         } else {
             dc_dq *= dc_tok;
         }

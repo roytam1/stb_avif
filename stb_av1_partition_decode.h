@@ -10,8 +10,12 @@
 #ifndef STB_AV1_PARTITION_DECODE_H
 #define STB_AV1_PARTITION_DECODE_H
 
+#ifdef STB_AV1_PARTITION_DEBUG
 #include <stdio.h>
 #define STBV_AV1_PARTDBG(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define STBV_AV1_PARTDBG(...)
+#endif
 
 #ifndef STB_AV1_PARTITION_H
 #error "include stb_av1_partition.h first"

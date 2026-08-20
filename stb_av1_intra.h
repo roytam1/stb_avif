@@ -75,11 +75,7 @@ static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
     ac = stbv_av1_intra_mode_ctx[above_mode];
     lc = stbv_av1_intra_mode_ctx[left_mode];
     ycdf = cdf->kfym + (ac * 5 + lc) * 16;
-    fprintf(stderr, "YM a=%d l=%d ac=%d lc=%d pre_r=%u c0=%u cnt=%u dif=%016llx mcnt=%d\n",
-            above_mode, left_mode, ac, lc, msac->rng, ycdf[0], ycdf[12],
-            (unsigned long long)msac->dif, msac->cnt);
     sym = stb_av1_msac_symbol(msac, ycdf, 12);
-    fprintf(stderr, "YM sym=%u post_r=%u\n", sym, msac->rng);
     if (sym > 12) return -2;
     mode = (int)sym;
     b->y_mode = mode;
@@ -91,25 +87,19 @@ static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
 
     if (cbw4 * cbh4 >= 4 && mode >= STBV_AV1_INTRA_VERT &&
         mode <= STBV_AV1_INTRA_VL) {
-        fprintf(stderr, "ANGL pre_r=%u\n", msac->rng);
         sym = stb_av1_msac_symbol(msac,
                                   cdf->angle_delta + (mode - STBV_AV1_INTRA_VERT) * 8,
                                   6);
-        fprintf(stderr, "ANGL sym=%u post_r=%u\n", sym, msac->rng);
         b->y_angle = (int)sym - 3;
     }
 
     uvcdf = cdf->uv_mode + ((cfl_allowed ? 1 : 0) * 13 + mode) * 16;
     sym = stb_av1_msac_symbol(msac, uvcdf, cfl_allowed ? 13 : 12);
-    fprintf(stderr, "UVM cfl=%d mode=%d sym=%u r=%u c0=%u c12=%u cnt=%u\n",
-            cfl_allowed, mode, sym, msac->rng, uvcdf[0], uvcdf[12],
-            uvcdf[13]);
     if (sym > (unsigned)(cfl_allowed ? 13 : 12)) return -3;
     b->uv_mode = (int)sym;
 
     if (b->uv_mode == STBV_AV1_INTRA_CFL) {
         sym = stb_av1_msac_symbol(msac, cdf->cfl_sign, 7);
-        fprintf(stderr, "CFL sign=%u r=%u\n", sym, msac->rng);
         sign = (int)sym + 1;
         sign_u = sign / 3;
         sign_v = sign - sign_u * 3;
