@@ -181,14 +181,38 @@ int main(int argc, char **argv)
         stbv_u8 *l_cre0 = (stbv_u8 *)malloc(cleft_n ? cleft_n : 1);
         stbv_u8 *ab_cre1 = (stbv_u8 *)malloc(cabove_n ? cabove_n : 1);
         stbv_u8 *l_cre1 = (stbv_u8 *)malloc(cleft_n ? cleft_n : 1);
+        stbv_u8 *ab_pal_sz = (stbv_u8 *)malloc(above_n ? above_n : 1);
+        stbv_u8 *l_pal_sz = (stbv_u8 *)malloc(left_n ? left_n : 1);
+        stbv_u8 *ab_pal_uv = (stbv_u8 *)malloc(above_n ? above_n : 1);
+        stbv_u8 *l_pal_uv = (stbv_u8 *)malloc(left_n ? left_n : 1);
+        stbv_u16 *ab_pal0 = (stbv_u16 *)malloc((above_n ? above_n : 1) * 8 * 2);
+        stbv_u16 *l_pal0 = (stbv_u16 *)malloc((left_n ? left_n : 1) * 8 * 2);
+        stbv_u16 *ab_pal1 = (stbv_u16 *)malloc((above_n ? above_n : 1) * 8 * 2);
+        stbv_u16 *l_pal1 = (stbv_u16 *)malloc((left_n ? left_n : 1) * 8 * 2);
         stbv_av1_leaf_state_arrays a;
         if (!ab_mode || !l_mode || !ab_tx || !l_tx ||
             !ab_res || !l_res || !ab_skip || !l_skip ||
-            !ab_cre0 || !l_cre0 || !ab_cre1 || !l_cre1) {
+            !ab_cre0 || !l_cre0 || !ab_cre1 || !l_cre1 ||
+            !ab_pal_sz || !l_pal_sz || !ab_pal_uv || !l_pal_uv ||
+            !ab_pal0 || !l_pal0 || !ab_pal1 || !l_pal1) {
             fprintf(stderr, "leaf state alloc failed\n");
             free(data);
             return 1;
         }
+        a.above_pal_sz = ab_pal_sz;
+        a.above_pal_sz_n = above_n;
+        a.left_pal_sz = l_pal_sz;
+        a.left_pal_sz_n = left_n;
+        a.above_pal_uv = ab_pal_uv;
+        a.above_pal_uv_n = above_n;
+        a.left_pal_uv = l_pal_uv;
+        a.left_pal_uv_n = left_n;
+        a.above_pal[0] = ab_pal0;
+        a.above_pal[1] = ab_pal1;
+        a.above_pal_n = above_n;
+        a.left_pal[0] = l_pal0;
+        a.left_pal[1] = l_pal1;
+        a.left_pal_n = left_n;
         a.above_mode = ab_mode;
         a.above_mode_n = above_n;
         a.left_mode = l_mode;

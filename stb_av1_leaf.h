@@ -149,6 +149,18 @@ typedef struct stbv_av1_leaf_state_arrays {
     unsigned int above_cre_n[2];
     stbv_u8 *left_cre[2];
     unsigned int left_cre_n[2];
+    stbv_u8 *above_pal_sz;
+    unsigned int above_pal_sz_n;
+    stbv_u8 *left_pal_sz;
+    unsigned int left_pal_sz_n;
+    stbv_u8 *above_pal_uv;
+    unsigned int above_pal_uv_n;
+    stbv_u8 *left_pal_uv;
+    unsigned int left_pal_uv_n;
+    stbv_u16 *above_pal[2];
+    unsigned int above_pal_n;
+    stbv_u16 *left_pal[2];
+    unsigned int left_pal_n;
 } stbv_av1_leaf_state_arrays;
 
 typedef struct stbv_av1_leaf_state {
@@ -163,6 +175,28 @@ typedef struct stbv_av1_leaf_state {
     int cdef_sb_x;
     int cdef_sb_y;
     int cdef_idx[4];
+    stbv_u8 *above_pal_sz;
+    stbv_u8 *left_pal_sz;
+    unsigned int above_pal_sz_n;
+    unsigned int left_pal_sz_n;
+    stbv_u8 *above_pal_uv;
+    stbv_u8 *left_pal_uv;
+    unsigned int above_pal_uv_n;
+    unsigned int left_pal_uv_n;
+    stbv_u16 *above_pal[2];
+    stbv_u16 *left_pal[2];
+    unsigned int above_pal_n;
+    unsigned int left_pal_n;
+    stbv_u16 pal_y[8];
+    stbv_u16 pal_u[8];
+    stbv_u16 pal_v[8];
+    stbv_u16 cache[8];
+    stbv_u16 used_cache[8];
+    stbv_u8 pal_tmp[64 * 64];
+    stbv_u8 pal_order[64][8];
+    stbv_u8 pal_ctxs[64];
+    int pal_sz_y;
+    int pal_sz_uv;
 } stbv_av1_leaf_state;
 
 static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
@@ -191,6 +225,32 @@ static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
     s->left_skip = a->left_skip;
     s->above_skip_n = a->above_skip_n;
     s->left_skip_n = a->left_skip_n;
+    s->above_pal_sz = a->above_pal_sz;
+    s->left_pal_sz = a->left_pal_sz;
+    s->above_pal_sz_n = a->above_pal_sz_n;
+    s->left_pal_sz_n = a->left_pal_sz_n;
+    s->above_pal_uv = a->above_pal_uv;
+    s->left_pal_uv = a->left_pal_uv;
+    s->above_pal_uv_n = a->above_pal_uv_n;
+    s->left_pal_uv_n = a->left_pal_uv_n;
+    s->above_pal[0] = a->above_pal[0];
+    s->above_pal[1] = a->above_pal[1];
+    s->left_pal[0] = a->left_pal[0];
+    s->left_pal[1] = a->left_pal[1];
+    s->above_pal_n = a->above_pal_n;
+    s->left_pal_n = a->left_pal_n;
+    if (a->above_pal_sz) memset(a->above_pal_sz, 0, a->above_pal_sz_n);
+    if (a->left_pal_sz) memset(a->left_pal_sz, 0, a->left_pal_sz_n);
+    if (a->above_pal_uv) memset(a->above_pal_uv, 0, a->above_pal_uv_n);
+    if (a->left_pal_uv) memset(a->left_pal_uv, 0, a->left_pal_uv_n);
+    if (a->above_pal[0])
+        memset(a->above_pal[0], 0, a->above_pal_n * 8U * sizeof(stbv_u16));
+    if (a->above_pal[1])
+        memset(a->above_pal[1], 0, a->above_pal_n * 8U * sizeof(stbv_u16));
+    if (a->left_pal[0])
+        memset(a->left_pal[0], 0, a->left_pal_n * 8U * sizeof(stbv_u16));
+    if (a->left_pal[1])
+        memset(a->left_pal[1], 0, a->left_pal_n * 8U * sizeof(stbv_u16));
     s->cdef_sb_x = s->cdef_sb_y = -1;
     s->cdef_idx[0] = s->cdef_idx[1] = -1;
     s->cdef_idx[2] = s->cdef_idx[3] = -1;
@@ -213,6 +273,12 @@ static void stbv_av1_leaf_state_reset_row(stbv_av1_leaf_state *s)
     if (s->intra.left_mode)
         memset(s->intra.left_mode, STBV_AV1_INTRA_DC,
                (size_t)s->intra.left_count);
+    if (s->left_pal_sz) memset(s->left_pal_sz, 0, s->left_pal_sz_n);
+    if (s->left_pal_uv) memset(s->left_pal_uv, 0, s->left_pal_uv_n);
+    if (s->left_pal[0])
+        memset(s->left_pal[0], 0, s->left_pal_n * 8U * sizeof(stbv_u16));
+    if (s->left_pal[1])
+        memset(s->left_pal[1], 0, s->left_pal_n * 8U * sizeof(stbv_u16));
 }
 
 typedef struct stbv_av1_leaf_tx_result {
@@ -349,6 +415,265 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
     return 0;
 }
 
+static int stbv_av1_ulog2(unsigned int v)
+{
+    int n = 0;
+    while (v >>= 1) n++;
+    return n;
+}
+
+/* Palette size + colors for one plane (dav1d dav1d_read_pal_plane).
+ * The cache is the merge of the above/left neighbor palettes; entries are
+ * reused via equi-probability flags, the rest is delta coded. */
+static int stbv_av1_palette_read_plane(struct stb_av1_msac *msac,
+                                       stbv_av1_cdf *cdf,
+                                       stbv_av1_leaf_state *state,
+                                       int pl, int sz_ctx, int bx4, int by4,
+                                       int bpc, stbv_u16 *pal_out,
+                                       int *pal_sz_out)
+{
+    int pal_sz, i, l_cache, a_cache, n_cache = 0, n_used = 0, prev;
+    int bits, max;
+    stbv_u16 *l, *a;
+    stbv_u16 *cache = state->cache;
+    stbv_u16 *used = state->used_cache;
+
+    pal_sz = (int)stb_av1_msac_symbol(msac,
+                                      cdf->pal_sz + (pl * 7 + sz_ctx) * 8,
+                                      6) + 2;
+    fprintf(stderr, "PAL sz=%d pl=%d szctx=%d pre_cdf=%u/%u/%u/%u/%u/%u r=%u\n",
+            pal_sz, pl, sz_ctx,
+            cdf->pal_sz[(pl * 7 + sz_ctx) * 8],
+            cdf->pal_sz[(pl * 7 + sz_ctx) * 8 + 1],
+            cdf->pal_sz[(pl * 7 + sz_ctx) * 8 + 2],
+            cdf->pal_sz[(pl * 7 + sz_ctx) * 8 + 3],
+            cdf->pal_sz[(pl * 7 + sz_ctx) * 8 + 4],
+            cdf->pal_sz[(pl * 7 + sz_ctx) * 8 + 5], msac->rng);
+    if (pal_sz > 8) return -1;
+    fprintf(stderr, "PAL sz=%d pl=%d szctx=%d post r=%u\n",
+            pal_sz, pl, sz_ctx, msac->rng);
+    l_cache = pl ? (state->left_pal_uv &&
+                    (unsigned)by4 < state->left_pal_uv_n ?
+                    state->left_pal_uv[by4] : 0)
+                 : (state->left_pal_sz &&
+                    (unsigned)by4 < state->left_pal_sz_n ?
+                    state->left_pal_sz[by4] : 0);
+    a_cache = (by4 & 15) ? (pl ? (state->above_pal_uv &&
+                                  (unsigned)bx4 < state->above_pal_uv_n ?
+                                  state->above_pal_uv[bx4] : 0)
+                               : (state->above_pal_sz &&
+                                  (unsigned)bx4 < state->above_pal_sz_n ?
+                                  state->above_pal_sz[bx4] : 0))
+                         : 0;
+    l = (state->left_pal[pl] && (unsigned)by4 < state->left_pal_n) ?
+        state->left_pal[pl] + by4 * 8 : NULL;
+    a = (state->above_pal[pl] && (unsigned)bx4 < state->above_pal_n) ?
+        state->above_pal[pl] + bx4 * 8 : NULL;
+
+    while (l_cache && a_cache) {
+        if (*l < *a) {
+            if (!n_cache || cache[n_cache - 1] != *l)
+                cache[n_cache++] = *l;
+            l++;
+            l_cache--;
+        } else {
+            if (*a == *l) {
+                l++;
+                l_cache--;
+            }
+            if (!n_cache || cache[n_cache - 1] != *a)
+                cache[n_cache++] = *a;
+            a++;
+            a_cache--;
+        }
+    }
+    if (l_cache) {
+        do {
+            if (!n_cache || cache[n_cache - 1] != *l)
+                cache[n_cache++] = *l;
+            l++;
+        } while (--l_cache > 0);
+    } else if (a_cache) {
+        do {
+            if (!n_cache || cache[n_cache - 1] != *a)
+                cache[n_cache++] = *a;
+            a++;
+        } while (--a_cache > 0);
+    }
+
+    i = 0;
+    {
+        int n;
+        for (n = 0; n < n_cache && i < pal_sz; n++)
+            if (stb_av1_msac_bool_equi(msac))
+                used[i++] = cache[n];
+    }
+    n_used = i;
+
+    if (i < pal_sz) {
+        int n, m;
+        prev = (int)stb_av1_msac_bools(msac, (unsigned)bpc);
+        pal_out[i++] = (stbv_u16)prev;
+        fprintf(stderr, "PALC first=%d r=%u\n", prev, msac->rng);
+        if (i < pal_sz) {
+            bits = bpc - 3 + (int)stb_av1_msac_bools(msac, 2);
+            max = (1 << bpc) - 1;
+            fprintf(stderr, "PALC bits=%d r=%u\n", bits, msac->rng);
+            do {
+                int delta = (int)stb_av1_msac_bools(msac, (unsigned)bits);
+                prev += delta + (pl ? 0 : 1);
+                if (prev > max) prev = max;
+                pal_out[i++] = (stbv_u16)prev;
+                fprintf(stderr, "PALC delta=%d prev=%d r=%u\n", delta, prev,
+                        msac->rng);
+                if (prev + (pl ? 0 : 1) >= max) {
+                    for (; i < pal_sz; i++)
+                        pal_out[i] = (stbv_u16)max;
+                    break;
+                }
+                bits = bits < 1 + stbv_av1_ulog2((unsigned)(max - prev -
+                                                  (pl ? 0 : 1))) ?
+                       bits : 1 + stbv_av1_ulog2((unsigned)(max - prev -
+                                                  (pl ? 0 : 1)));
+            } while (i < pal_sz);
+        }
+        n = 0;
+        m = n_used;
+        for (i = 0; i < pal_sz; i++) {
+            if (n < n_used && (m >= pal_sz || used[n] <= pal_out[m]))
+                pal_out[i] = used[n++];
+            else
+                pal_out[i] = pal_out[m++];
+        }
+    } else {
+        for (i = 0; i < n_used; i++)
+            pal_out[i] = used[i];
+    }
+
+    if (pal_sz_out) *pal_sz_out = pal_sz;
+    return 0;
+}
+
+/* V plane of the UV palette (dav1d read_pal_uv's V pal coding). */
+static void stbv_av1_palette_read_uv_v(struct stb_av1_msac *msac, int bpc,
+                                       int pal_sz, stbv_u16 *pal_v)
+{
+    int i, bits, prev, delta, max;
+    if (stb_av1_msac_bool_equi(msac)) {
+        bits = bpc - 4 + (int)stb_av1_msac_bools(msac, 2);
+        prev = (int)stb_av1_msac_bools(msac, (unsigned)bpc);
+        pal_v[0] = (stbv_u16)prev;
+        max = (1 << bpc) - 1;
+        for (i = 1; i < pal_sz; i++) {
+            delta = (int)stb_av1_msac_bools(msac, (unsigned)bits);
+            if (delta && stb_av1_msac_bool_equi(msac))
+                delta = -delta;
+            prev = (prev + delta) & max;
+            pal_v[i] = (stbv_u16)prev;
+        }
+    } else {
+        for (i = 0; i < pal_sz; i++)
+            pal_v[i] = stb_av1_msac_bools(msac, (unsigned)bpc);
+    }
+}
+
+/* Per-cell palette order/context for one wave-front diagonal (dav1d
+ * order_palette). */
+static void stbv_av1_palette_order(const stbv_u8 *pal_idx, int stride,
+                                   int i, int first, int last,
+                                   stbv_u8 (*order)[8], stbv_u8 *ctx)
+{
+    int have_top = i > first;
+    int j, n;
+
+    pal_idx += first + (i - first) * stride;
+    for (j = first, n = 0; j >= last; have_top = 1, j--, n++,
+         pal_idx += stride - 1) {
+        int have_left = j > 0;
+        unsigned mask = 0;
+        int o_idx = 0;
+#define STBV_PAL_ADD(v_in) do { \
+            int v = (v_in); \
+            order[n][o_idx++] = (stbv_u8)v; \
+            mask |= 1U << v; \
+        } while (0)
+
+        if (!have_left) {
+            ctx[n] = 0;
+            STBV_PAL_ADD(pal_idx[-stride]);
+        } else if (!have_top) {
+            ctx[n] = 0;
+            STBV_PAL_ADD(pal_idx[-1]);
+        } else {
+            int l = pal_idx[-1], t = pal_idx[-stride];
+            int tl = pal_idx[-(stride + 1)];
+            int same_t_l = t == l;
+            int same_t_tl = t == tl;
+            int same_l_tl = l == tl;
+            int same_all = same_t_l & same_t_tl & same_l_tl;
+
+            if (same_all) {
+                ctx[n] = 4;
+                STBV_PAL_ADD(t);
+            } else if (same_t_l) {
+                ctx[n] = 3;
+                STBV_PAL_ADD(t);
+                STBV_PAL_ADD(tl);
+            } else if (same_t_tl | same_l_tl) {
+                ctx[n] = 2;
+                STBV_PAL_ADD(tl);
+                STBV_PAL_ADD(same_t_tl ? l : t);
+            } else {
+                ctx[n] = 1;
+                STBV_PAL_ADD(t < l ? t : l);
+                STBV_PAL_ADD(t < l ? l : t);
+                STBV_PAL_ADD(tl);
+            }
+        }
+        {
+            unsigned m;
+            int bit;
+            for (m = 1, bit = 0; m < 0x100; m <<= 1, bit++)
+                if (!(mask & m))
+                    order[n][o_idx++] = (stbv_u8)bit;
+        }
+#undef STBV_PAL_ADD
+    }
+}
+
+/* Palette index map (dav1d read_pal_indices). */
+static int stbv_av1_palette_indices(struct stb_av1_msac *msac,
+                                    stbv_av1_cdf *cdf,
+                                    int pl, int pal_sz,
+                                    int bw4, int bh4,
+                                    stbv_u8 *pal_tmp,
+                                    stbv_u8 (*order)[8], stbv_u8 *ctx)
+{
+    int stride = bw4 * 4;
+    int wpx = bw4 * 4, hpx = bh4 * 4;
+    int i, j, m, first, last;
+    stbv_u16 *color_map_cdf;
+
+    pal_tmp[0] = stb_av1_msac_uniform(msac, (unsigned)pal_sz);
+    fprintf(stderr, "PALI uniform=%d r=%u\n", pal_tmp[0], msac->rng);
+    color_map_cdf = cdf->color_map + (pl * 7 + (pal_sz - 2)) * 40;
+    for (i = 1; i < wpx + hpx - 1; i++) {
+        first = i < wpx - 1 ? i : wpx - 1;
+        last = i - hpx + 1 > 0 ? i - hpx + 1 : 0;
+        stbv_av1_palette_order(pal_tmp, stride, i, first, last, order, ctx);
+        for (j = first, m = 0; j >= last; j--, m++) {
+            int color_idx = (int)stb_av1_msac_symbol(
+                msac, color_map_cdf + ctx[m] * 8, (size_t)(pal_sz - 1));
+            if (i < 3)
+                fprintf(stderr, "PALI i=%d j=%d ctx=%d cdf=%u ci=%d r=%u\n",
+                        i, j, ctx[m], color_map_cdf[ctx[m] * 8], color_idx,
+                        msac->rng);
+            pal_tmp[(i - j) * stride + j] = order[m][color_idx];
+        }
+    }
+    return 0;
+}
+
 static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                        stbv_av1_cdf *cdf,
                                        stbv_av1_leaf_state *state,
@@ -453,28 +778,59 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     fprintf(stderr, "L4 intra r=%u dif=%llu\n", msac->rng,
             (unsigned long long)msac->dif);
 
-    /* Palette presence bools.  Palette colors are not decoded in this pass;
-     * any actual use of a palette is reported as unsupported. */
+    /* Palette: presence bools, size, colors and index map (dav1d decode.c
+     * 1126-1193 + recon_tmpl read_pal_plane/read_pal_uv/read_pal_indices). */
+    state->pal_sz_y = 0;
+    state->pal_sz_uv = 0;
     if (frame && frame->allow_screen_content_tools &&
         (bw4 > bh4 ? bw4 : bh4) <= 16 && bw4 + bh4 >= 4) {
         int sz_ctx = stbv_av1_block_dimensions[bs][2] +
                      stbv_av1_block_dimensions[bs][3] - 2;
+        int bpc = (seq && seq->hbd) ? 10 : 8;
         if (intra.y_mode == STBV_AV1_INTRA_DC) {
-            /* pal_ctx = (a->pal_sz > 0) + (l.pal_sz > 0); always 0 here. */
-            if (stb_av1_msac_bool_adapt(msac, cdf->pal_y + sz_ctx * 6))
-                return -7;
+            int pal_ctx = 0;
+            if (state->above_pal_sz && (unsigned)bx4 < state->above_pal_sz_n &&
+                state->above_pal_sz[bx4] > 0)
+                pal_ctx++;
+            if (state->left_pal_sz && (unsigned)by4 < state->left_pal_sz_n &&
+                state->left_pal_sz[by4] > 0)
+                pal_ctx++;
+            if (stb_av1_msac_bool_adapt(msac,
+                                        cdf->pal_y + sz_ctx * 6 + pal_ctx * 2)) {
+                if (stbv_av1_palette_read_plane(msac, cdf, state, 0, sz_ctx,
+                                                bx4, by4, bpc, state->pal_y,
+                                                &state->pal_sz_y))
+                    return -7;
+                if (stbv_av1_palette_indices(msac, cdf, 0, state->pal_sz_y,
+                                             bw4, bh4, state->pal_tmp,
+                                             state->pal_order,
+                                             state->pal_ctxs))
+                    return -7;
+            }
             fprintf(stderr, "L5 ypal r=%u\n", msac->rng);
         }
         if (has_chroma && intra.uv_mode == STBV_AV1_INTRA_DC) {
-            /* pal_ctx = b->pal_sz[0] > 0; always 0 here. */
-            if (stb_av1_msac_bool_adapt(msac, cdf->pal_uv))
-                return -8;
+            int pal_ctx = state->pal_sz_y > 0;
+            if (stb_av1_msac_bool_adapt(msac, cdf->pal_uv + pal_ctx * 2)) {
+                if (stbv_av1_palette_read_plane(msac, cdf, state, 1, sz_ctx,
+                                                bx4, by4, bpc, state->pal_u,
+                                                &state->pal_sz_uv))
+                    return -8;
+                stbv_av1_palette_read_uv_v(msac, bpc, state->pal_sz_uv,
+                                           state->pal_v);
+                if (stbv_av1_palette_indices(msac, cdf, 1, state->pal_sz_uv,
+                                             cbw4, cbh4, state->pal_tmp,
+                                             state->pal_order,
+                                             state->pal_ctxs))
+                    return -8;
+            }
             fprintf(stderr, "L5b uvpal r=%u\n", msac->rng);
         }
     }
 
     /* Filter-intra bool (dav1d decode.c, after the palette bools). */
     if (seq && seq->filter_intra && intra.y_mode == STBV_AV1_INTRA_DC &&
+        !state->pal_sz_y &&
         stbv_av1_block_dimensions[bs][2] <= 3 &&
         stbv_av1_block_dimensions[bs][3] <= 3) {
         if (stb_av1_msac_bool_adapt(msac, cdf->use_filter_intra + bs * 2)) {
@@ -499,6 +855,47 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         fprintf(stderr, "MODE-W bx4=%d by4=%d bh4=%d nofilt=%d lm8=%d lm9=%d\n",
                 bx4, by4, bh4, y_mode_nofilt, state->intra.left_mode[8],
                 state->intra.left_mode[9]);
+    }
+
+    /* Palette neighbour state (dav1d set_ctx: pal_sz maps + al_pal copies;
+     * the UV palette sizes use luma coordinates). */
+    if (state->above_pal_sz) {
+        for (i = 0; i < bw4 && (unsigned)(bx4 + i) < state->above_pal_sz_n; i++)
+            state->above_pal_sz[bx4 + i] = (stbv_u8)state->pal_sz_y;
+    }
+    if (state->left_pal_sz) {
+        for (i = 0; i < bh4 && (unsigned)(by4 + i) < state->left_pal_sz_n; i++)
+            state->left_pal_sz[by4 + i] = (stbv_u8)state->pal_sz_y;
+    }
+    if (state->above_pal_uv) {
+        for (i = 0; i < bw4 && (unsigned)(bx4 + i) < state->above_pal_uv_n; i++)
+            state->above_pal_uv[bx4 + i] =
+                (stbv_u8)(has_chroma ? state->pal_sz_uv : 0);
+    }
+    if (state->left_pal_uv) {
+        for (i = 0; i < bh4 && (unsigned)(by4 + i) < state->left_pal_uv_n; i++)
+            state->left_pal_uv[by4 + i] =
+                (stbv_u8)(has_chroma ? state->pal_sz_uv : 0);
+    }
+    if (state->pal_sz_y && state->above_pal[0]) {
+        for (i = 0; i < bw4 && (unsigned)(bx4 + i) < state->above_pal_n; i++)
+            memcpy(state->above_pal[0] + (bx4 + i) * 8, state->pal_y,
+                   8 * sizeof(stbv_u16));
+    }
+    if (state->pal_sz_y && state->left_pal[0]) {
+        for (i = 0; i < bh4 && (unsigned)(by4 + i) < state->left_pal_n; i++)
+            memcpy(state->left_pal[0] + (by4 + i) * 8, state->pal_y,
+                   8 * sizeof(stbv_u16));
+    }
+    if (has_chroma && state->pal_sz_uv && state->above_pal[1]) {
+        for (i = 0; i < bw4 && (unsigned)(bx4 + i) < state->above_pal_n; i++)
+            memcpy(state->above_pal[1] + (bx4 + i) * 8, state->pal_u,
+                   8 * sizeof(stbv_u16));
+    }
+    if (has_chroma && state->pal_sz_uv && state->left_pal[1]) {
+        for (i = 0; i < bh4 && (unsigned)(by4 + i) < state->left_pal_n; i++)
+            memcpy(state->left_pal[1] + (by4 + i) * 8, state->pal_u,
+                   8 * sizeof(stbv_u16));
     }
 
     /* Transform size.  dav1d: lossless blocks are forced to TX_4X4; the
