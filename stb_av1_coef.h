@@ -505,6 +505,7 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     if (eob) {
         ctx = 1U + (eob > (2U << szctx)) + (eob > (4U << szctx));
         tok = 1U + stb_av1_msac_symbol(msac, eob_cdf + ctx * 4U, 2U);
+        dc_tok = (int)tok;
 
         if (tx_class == 0) {
             rc = scan[eob];
@@ -523,6 +524,7 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
         if (tok == 3U) {
             ctx = (tx_class == 0 ? ((x | y) > 1U) : (y != 0U)) ? 14U : 7U;
             tok = stbv_av1_coef_hi_tok(msac, hi_cdf + ctx * 4U);
+            dc_tok = (int)tok;
             cf[rc] = tok << 11;
             level = levels + x * stride + y;
             *level = (stbv_u8)(tok + (3U << 6));
@@ -584,30 +586,16 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
         rc = 0;
     }
 
-    /* DC token.  For dc-only blocks (eob == 0) dav1d still reads a token from
-     * eob_base_tok[0], with a possible hi token. */
+    /* DC token.  For eob > 0 the DC token was already decoded by the EOB
+     * section above (eob_base_tok with the eob-derived context).  For
+     * dc-only (eob == 0) blocks dav1d reads it from eob_base_tok[0]. */
     if (eob) {
-        ctx = (tx_class == 0) ? 0U :
-              stbv_av1_coef_lo_ctx(levels, &mag, 0, 0, stride, tx_class, lo_ctx);
-        dc_tok = (int)stb_av1_msac_symbol(msac, lo_cdf + ctx * 4U, 3U);
-        if (dc_tok == 3) {
-            if (tx_class == 0)
-                mag = levels[stride] + levels[1] + levels[stride + 1];
-            else
-                mag = levels[2];
-            mag &= 63U;
-            ctx = mag > 12U ? 6U : (mag + 1U) >> 1;
-            dc_tok = (int)stbv_av1_coef_hi_tok(msac, hi_cdf + ctx * 4U);
-        }
+        dc_tok = (int)tok;
     } else {
         tok = stb_av1_msac_symbol(msac, eob_cdf + 0U, 2U);
-        fprintf(stderr, "E3a tok=%u r=%u dif=%llu\n", tok, msac->rng,
-            (unsigned long long)msac->dif);
         dc_tok = (int)(1U + tok);
-        if (tok == 2U) {
+        if (tok == 2U)
             dc_tok = (int)stbv_av1_coef_hi_tok(msac, hi_cdf + 0U);
-            fprintf(stderr, "E3b dc_tok=%d r=%u\n", dc_tok, msac->rng);
-        }
     }
     fprintf(stderr, "E3 eob=%u dc_tok=%d r=%u\n", eob, dc_tok, msac->rng);
 

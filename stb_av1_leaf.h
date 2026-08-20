@@ -301,6 +301,7 @@ typedef struct stbv_av1_leaf_decode_ctx {
     int lossless;
     int qidx;
     int y_mode_nofilt;
+    int y_mode_txtp;
     int block_skip;
     int reduced_txtp_set;
 } stbv_av1_leaf_decode_ctx;
@@ -347,7 +348,7 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
             txtp = STBV_AV1_TX_DCT_DCT;
         else
             txtp = stbv_av1_decode_intra_txtp(msac, cdf,
-                stbv_av1_tx_dims[tx].min, c->y_mode_nofilt,
+                stbv_av1_tx_dims[tx].min, c->y_mode_txtp,
                 c->reduced_txtp_set);
     } else {
         /* dav1d: *txtp = lossless * WHT_WHT */
@@ -654,8 +655,9 @@ static int stbv_av1_palette_indices(struct stb_av1_msac *msac,
     int i, j, m, first, last;
     stbv_u16 *color_map_cdf;
 
+    fprintf(stderr, "UNI pre_r=%u n=%d\n", msac->rng, pal_sz);
     pal_tmp[0] = stb_av1_msac_uniform(msac, (unsigned)pal_sz);
-    fprintf(stderr, "PALI uniform=%d r=%u\n", pal_tmp[0], msac->rng);
+    fprintf(stderr, "UNI post_r=%u v=%d\n", msac->rng, pal_tmp[0]);
     color_map_cdf = cdf->color_map + (pl * 7 + (pal_sz - 2)) * 40;
     for (i = 1; i < wpx + hpx - 1; i++) {
         first = i < wpx - 1 ? i : wpx - 1;
@@ -801,11 +803,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                                 bx4, by4, bpc, state->pal_y,
                                                 &state->pal_sz_y))
                     return -7;
-                if (stbv_av1_palette_indices(msac, cdf, 0, state->pal_sz_y,
-                                             bw4, bh4, state->pal_tmp,
-                                             state->pal_order,
-                                             state->pal_ctxs))
-                    return -7;
             }
             fprintf(stderr, "L5 ypal r=%u\n", msac->rng);
         }
@@ -818,11 +815,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                     return -8;
                 stbv_av1_palette_read_uv_v(msac, bpc, state->pal_sz_uv,
                                            state->pal_v);
-                if (stbv_av1_palette_indices(msac, cdf, 1, state->pal_sz_uv,
-                                             cbw4, cbh4, state->pal_tmp,
-                                             state->pal_order,
-                                             state->pal_ctxs))
-                    return -8;
             }
             fprintf(stderr, "L5b uvpal r=%u\n", msac->rng);
         }
@@ -840,6 +832,21 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     }
     fprintf(stderr, "L6 filt r=%u dif=%llu\n", msac->rng,
             (unsigned long long)msac->dif);
+
+    /* Palette index maps come after filter-intra (dav1d read_pal_indices
+     * is called after the filter-intra bool in decode.c). */
+    if (state->pal_sz_y) {
+        if (stbv_av1_palette_indices(msac, cdf, 0, state->pal_sz_y,
+                                     bw4, bh4, state->pal_tmp,
+                                     state->pal_order, state->pal_ctxs))
+            return -7;
+    }
+    if (state->pal_sz_uv) {
+        if (stbv_av1_palette_indices(msac, cdf, 1, state->pal_sz_uv,
+                                     cbw4, cbh4, state->pal_tmp,
+                                     state->pal_order, state->pal_ctxs))
+            return -8;
+    }
 
     /* dav1d stores y_mode_nofilt in the neighbour mode maps (set_ctx):
      * FILTER_PRED maps to DC_PRED, NOT to the filter angle's mode. */
@@ -937,6 +944,20 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     c.y_mode_nofilt = y_mode_nofilt;
     c.reduced_txtp_set = frame ? (int)frame->reduced_txtp_set : 0;
     c.block_skip = (int)block_skip;
+    /* TXTP mode: dav1d maps FILTER_PRED to the filter angle's directional
+     * mode (dav1d_filter_mode_to_y_mode), unlike the neighbour-mode map
+     * which uses DC_PRED. */
+    {
+        static const int stb_filter_mode_to_y_mode[5] =
+            { STBV_AV1_INTRA_DC, STBV_AV1_INTRA_VERT, STBV_AV1_INTRA_HOR,
+              STBV_AV1_INTRA_HD, STBV_AV1_INTRA_DC };
+        int ym = intra.y_mode;
+        if (ym == STBV_AV1_INTRA_FILTER) {
+            ym = stb_filter_mode_to_y_mode[intra.y_angle < 0 ? 0 :
+                 (intra.y_angle > 4 ? 4 : intra.y_angle)];
+        }
+        c.y_mode_txtp = ym;
+    }
 
     /* Coefficients: intra blocks use one transform size across the whole
      * block, decoded in raster order (dav1d read_coef_blocks).  The luma
