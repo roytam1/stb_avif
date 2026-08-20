@@ -190,7 +190,7 @@ typedef struct stbv_av1_leaf_state {
     stbv_u16 pal_y[8];
     stbv_u16 pal_u[8];
     stbv_u16 pal_v[8];
-    stbv_u16 cache[8];
+    stbv_u16 cache[16];
     stbv_u16 used_cache[8];
     stbv_u8 pal_tmp[64 * 64];
     stbv_u8 pal_order[64][8];
@@ -470,6 +470,13 @@ static int stbv_av1_palette_read_plane(struct stb_av1_msac *msac,
         state->left_pal[pl] + by4 * 8 : NULL;
     a = (state->above_pal[pl] && (unsigned)bx4 < state->above_pal_n) ?
         state->above_pal[pl] + bx4 * 8 : NULL;
+    fprintf(stderr, "PALC l0=%d a0=%d n=%d bx=%d by=%d\n", l_cache, a_cache,
+            state->left_pal_n, bx4, by4);
+    { int _c; fprintf(stderr, "PALC L:");
+      for (_c = 0; _c < l_cache; _c++) fprintf(stderr, " %x", l[_c]);
+      fprintf(stderr, " A:");
+      for (_c = 0; _c < a_cache; _c++) fprintf(stderr, " %x", a[_c]);
+      fprintf(stderr, "\n"); }
 
     while (l_cache && a_cache) {
         if (*l < *a) {
@@ -505,14 +512,29 @@ static int stbv_av1_palette_read_plane(struct stb_av1_msac *msac,
     i = 0;
     {
         int n;
+        fprintf(stderr, "PALC cache n_cache=%d l_cache=%d a_cache=%d pal_sz=%d pre=%u dif=%016llx\n",
+                n_cache, l_cache, a_cache, pal_sz, msac->rng,
+                (unsigned long long)msac->dif);
+        { int _c; fprintf(stderr, "PALC cachev n=%d:", n_cache);
+          for (_c = 0; _c < n_cache; _c++) fprintf(stderr, " %x", cache[_c]);
+          fprintf(stderr, "\n"); }
         for (n = 0; n < n_cache && i < pal_sz; n++)
-            if (stb_av1_msac_bool_equi(msac))
+            if (stb_av1_msac_bool_equi(msac)) {
+                fprintf(stderr, "PALC usedbit n=%d v=%x\n", n, cache[n]);
                 used[i++] = cache[n];
+            }
     }
     n_used = i;
+    fprintf(stderr, "PALC used=%d r=%u dif=%016llx\n", n_used, msac->rng,
+            (unsigned long long)msac->dif);
+    { int _c; fprintf(stderr, "PALC usedv n=%d:", n_used);
+      for (_c = 0; _c < n_used; _c++) fprintf(stderr, " %x", used[_c]);
+      fprintf(stderr, "\n"); }
 
     if (i < pal_sz) {
         int n, m;
+        fprintf(stderr, "PALC pre=%u dif=%016llx\n", msac->rng,
+                (unsigned long long)msac->dif);
         prev = (int)stb_av1_msac_bools(msac, (unsigned)bpc);
         pal_out[i++] = (stbv_u16)prev;
         fprintf(stderr, "PALC first=%d r=%u\n", prev, msac->rng);
@@ -550,6 +572,9 @@ static int stbv_av1_palette_read_plane(struct stb_av1_msac *msac,
         for (i = 0; i < n_used; i++)
             pal_out[i] = used[i];
     }
+    { int _c; fprintf(stderr, "PALC merged pl=%d n=%d:", pl, pal_sz);
+      for (_c = 0; _c < pal_sz; _c++) fprintf(stderr, " %x", pal_out[_c]);
+      fprintf(stderr, "\n"); }
 
     if (pal_sz_out) *pal_sz_out = pal_sz;
     return 0;
@@ -808,6 +833,8 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         }
         if (has_chroma && intra.uv_mode == STBV_AV1_INTRA_DC) {
             int pal_ctx = state->pal_sz_y > 0;
+            fprintf(stderr, "UVP pre=%u f=%u cnt=%u\n", msac->rng,
+                    cdf->pal_uv[pal_ctx * 2], cdf->pal_uv[pal_ctx * 2 + 1]);
             if (stb_av1_msac_bool_adapt(msac, cdf->pal_uv + pal_ctx * 2)) {
                 if (stbv_av1_palette_read_plane(msac, cdf, state, 1, sz_ctx,
                                                 bx4, by4, bpc, state->pal_u,
@@ -825,9 +852,17 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         !state->pal_sz_y &&
         stbv_av1_block_dimensions[bs][2] <= 3 &&
         stbv_av1_block_dimensions[bs][3] <= 3) {
+        fprintf(stderr, "UF bs=%d bx=%d by=%d pre=%u f=%u cnt=%u\n", bs,
+                bx4, by4, msac->rng, cdf->use_filter_intra[bs * 2],
+                cdf->use_filter_intra[bs * 2 + 1]);
         if (stb_av1_msac_bool_adapt(msac, cdf->use_filter_intra + bs * 2)) {
+            fprintf(stderr, "FI pre=%u c0=%u c1=%u c2=%u c3=%u cnt=%u\n",
+                    msac->rng, cdf->filter_intra[0], cdf->filter_intra[1],
+                    cdf->filter_intra[2], cdf->filter_intra[3],
+                    cdf->filter_intra[4]);
             intra.y_mode = STBV_AV1_INTRA_FILTER;
             intra.y_angle = (int)stb_av1_msac_symbol(msac, cdf->filter_intra, 4);
+            fprintf(stderr, "FI sym=%d post=%u\n", intra.y_angle, msac->rng);
         }
     }
     fprintf(stderr, "L6 filt r=%u dif=%llu\n", msac->rng,

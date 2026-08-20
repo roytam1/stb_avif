@@ -1644,7 +1644,7 @@ static void stbv_av1_cdf_init(stbv_av1_cdf *c, unsigned qcat)
     memcpy(c->angle_delta, stb_av1_cdf_angle_delta, sizeof(c->angle_delta));
     stbv_av1_cdf_inv(c->angle_delta, stb_av1_cdf_angle_delta, 8, 8, 6);
     memcpy(c->filter_intra, stb_av1_cdf_filter_intra, sizeof(c->filter_intra));
-    stbv_av1_cdf_inv(c->filter_intra, stb_av1_cdf_filter_intra, 1, 8, 5);
+    stbv_av1_cdf_inv(c->filter_intra, stb_av1_cdf_filter_intra, 1, 8, 4);
     memcpy(c->use_filter_intra, stb_av1_cdf_use_filter_intra, sizeof(c->use_filter_intra));
     stbv_av1_cdf_inv(c->use_filter_intra, stb_av1_cdf_use_filter_intra, 22, 2, 1);
     memcpy(c->txsz, stb_av1_cdf_txsz, sizeof(c->txsz));
