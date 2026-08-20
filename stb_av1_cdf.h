@@ -1436,18 +1436,18 @@ static const stbv_u16 stb_av1_cdf_coef3_dc_sign[12] = {
  * CDF1.  The leaf syntax only uses pal_ctx 0 for now, so the stride into the
  * table is sz_ctx * 6 entries. */
 static const stbv_u16 stb_av1_cdf_pal_y[42] = {
-    31676, 32768,  3419, 32768,  1261, 32768,
-    31912, 32768,  2859, 32768,   980, 32768,
-    31823, 32768,  3400, 32768,   781, 32768,
-    32030, 32768,  3561, 32768,   904, 32768,
-    32309, 32768,  7337, 32768,  1462, 32768,
-    32265, 32768,  4015, 32768,  1521, 32768,
-    32450, 32768,  7946, 32768,   129, 32768,
+    31676, 0,  3419, 0,  1261, 0,
+    31912, 0,  2859, 0,   980, 0,
+    31823, 0,  3400, 0,   781, 0,
+    32030, 0,  3561, 0,   904, 0,
+    32309, 0,  7337, 0,  1462, 0,
+    32265, 0,  4015, 0,  1521, 0,
+    32450, 0,  7946, 0,   129, 0,
 };
 
 /* dav1d pal_uv[2][2]: 2 palette contexts, each a 2-entry CDF1. */
 static const stbv_u16 stb_av1_cdf_pal_uv[4] = {
-    32461, 32768, 21488, 32768,
+    32461, 0, 21488, 0,
 };
 
 /* dav1d pal_sz[2][7][8]: 2 planes x 7 size contexts, each a CDF6 group of

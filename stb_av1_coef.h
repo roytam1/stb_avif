@@ -505,6 +505,9 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     if (eob) {
         ctx = 1U + (eob > (2U << szctx)) + (eob > (4U << szctx));
         tok = 1U + stb_av1_msac_symbol(msac, eob_cdf + ctx * 4U, 2U);
+        fprintf(stderr, "E3b ctx=%u sym=%u r=%u c0=%u c1=%u cnt=%u\n",
+                ctx, tok - 1U, msac->rng, eob_cdf[ctx * 4U],
+                eob_cdf[ctx * 4U + 1U], eob_cdf[ctx * 4U + 3U]);
         dc_tok = (int)tok;
 
         if (tx_class == 0) {
@@ -558,6 +561,10 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
             ctx = stbv_av1_coef_lo_ctx(levels + x * stride + y,
                                         &mag, x, y, stride, tx_class, lo_ctx);
             tok = stb_av1_msac_symbol(msac, lo_cdf + ctx * 4U, 3U);
+            if (eob == 120U)
+                fprintf(stderr, "AC i=%u ctx=%u sym=%u r=%u c0=%u c1=%u c2=%u\n",
+                        i, ctx, tok, msac->rng, lo_cdf[ctx * 4U],
+                        lo_cdf[ctx * 4U + 1U], lo_cdf[ctx * 4U + 2U]);
 
             if (tok == 3U) {
                 /* dav1d ORs x into y for 2-D and compares y > 1; H/V compares
@@ -590,7 +597,25 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
      * section above (eob_base_tok with the eob-derived context).  For
      * dc-only (eob == 0) blocks dav1d reads it from eob_base_tok[0]. */
     if (eob) {
+        /* DC token after the AC scan: dav1d decodes it from base_tok with
+         * ctx = 0 for 2-D (or a lo_ctx-derived context for H/V), and a hi
+         * token when the symbol is 3, using the magnitude of the
+         * neighbours of the DC position. */
+        ctx = (tx_class == 0U) ? 0U : stbv_av1_coef_lo_ctx(
+            levels, &mag, 0, 0, stride, tx_class, lo_ctx);
+        tok = stb_av1_msac_symbol(msac, lo_cdf + ctx * 4U, 3U);
         dc_tok = (int)tok;
+        fprintf(stderr, "E3d ctx=%u sym=%u r=%u c0=%u c1=%u c2=%u mag=%u\n",
+                ctx, tok, msac->rng, lo_cdf[ctx * 4U], lo_cdf[ctx * 4U + 1U],
+                lo_cdf[ctx * 4U + 2U], mag);
+        if (tok == 3U) {
+            if (tx_class == 0U)
+                mag = levels[0 * stride + 1U] + levels[1 * stride + 0U]
+                    + levels[1 * stride + 1U];
+            mag &= 63U;
+            ctx = mag > 12U ? 6U : (mag + 1U) >> 1U;
+            dc_tok = (int)stbv_av1_coef_hi_tok(msac, hi_cdf + ctx * 4U);
+        }
     } else {
         tok = stb_av1_msac_symbol(msac, eob_cdf + 0U, 2U);
         dc_tok = (int)(1U + tok);
