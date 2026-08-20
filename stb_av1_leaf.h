@@ -260,10 +260,14 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
 
     sctx = stbv_av1_get_skip_ctx(rs, x4, y4, bw4, bh4, txw4, txh4,
                                  is_chroma);
+    fprintf(stderr, "SKP ch=%d ctx=%d sctx=%d off=%d pre_cdf=%u pre_cnt=%u r=%u dif=%llu cnt=%d\n",
+            chroma, stbv_av1_tx_dims[tx].ctx, sctx,
+            stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2,
+            cdf->coef[stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2],
+            cdf->coef[stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2 + 1],
+            msac->rng, (unsigned long long)msac->dif, msac->cnt);
     skip = stb_av1_msac_bool_adapt(
         msac, cdf->coef + stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2);
-
-    txtp = STBV_AV1_TX_DCT_DCT;
     if (!skip) {
         max = stbv_av1_tx_dims[tx].max;
         if (c->lossless)
@@ -294,9 +298,11 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
         out->eob = 0;
         out->skip_ctx = sctx;
     }
-    fprintf(stderr, "L8 ch=%d x=%d y=%d tx=%d skip=%d sctx=%d r=%u dif=%llu\n",
+    fprintf(stderr, "L8 ch=%d x=%d y=%d tx=%d skip=%d sctx=%d r=%u dif=%llu cdf=%u cnt=%u\n",
             chroma, x4, y4, tx, (int)skip, sctx, msac->rng,
-            (unsigned long long)msac->dif);
+            (unsigned long long)msac->dif,
+            cdf->coef[stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2],
+            cdf->coef[stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2 + 1]);
 
     if (skip) {
         /* A skipped transform has the fixed residual context 0x40. */

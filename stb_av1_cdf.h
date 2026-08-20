@@ -1535,9 +1535,11 @@ static void stbv_av1_cdf_init(stbv_av1_cdf *c, unsigned qcat)
     memcpy(c->y_mode, stb_av1_cdf_y_mode, sizeof(c->y_mode));
     stbv_av1_cdf_inv(c->y_mode, stb_av1_cdf_y_mode, 4, 16, 12);
     memcpy(c->uv_mode, stb_av1_cdf_uv_mode, sizeof(c->uv_mode));
-    stbv_av1_cdf_inv(c->uv_mode, stb_av1_cdf_uv_mode, 26, 16, 12);
+    /* uv_mode: 13 non-CFL groups (12 probs) then 13 CFL groups (13 probs). */
+    stbv_av1_cdf_inv(c->uv_mode, stb_av1_cdf_uv_mode, 13, 16, 12);
+    stbv_av1_cdf_inv(c->uv_mode + 208, stb_av1_cdf_uv_mode + 208, 13, 16, 13);
     memcpy(c->kfym, stb_av1_cdf_kfym, sizeof(c->kfym));
-    stbv_av1_cdf_inv(c->kfym, stb_av1_cdf_kfym, 25, 16, 13);
+    stbv_av1_cdf_inv(c->kfym, stb_av1_cdf_kfym, 25, 16, 12);
     memcpy(c->partition, stb_av1_cdf_partition, sizeof(c->partition));
     for (g = 0; g < 20; g++)
         for (i = 0; i < part_n[g / 4]; i++)
@@ -1550,7 +1552,10 @@ static void stbv_av1_cdf_init(stbv_av1_cdf *c, unsigned qcat)
     memcpy(c->use_filter_intra, stb_av1_cdf_use_filter_intra, sizeof(c->use_filter_intra));
     stbv_av1_cdf_inv(c->use_filter_intra, stb_av1_cdf_use_filter_intra, 22, 2, 1);
     memcpy(c->txsz, stb_av1_cdf_txsz, sizeof(c->txsz));
-    stbv_av1_cdf_inv(c->txsz, stb_av1_cdf_txsz, 12, 4, 3);
+    /* txsz groups: max=1 rows are CDF1 (3 groups), the rest CDF2 (9 groups);
+     * invert only the symbol entries so the count slots stay 0. */
+    stbv_av1_cdf_inv(c->txsz, stb_av1_cdf_txsz, 3, 4, 1);
+    stbv_av1_cdf_inv(c->txsz + 12, stb_av1_cdf_txsz + 12, 9, 4, 2);
     memcpy(c->txpart, stb_av1_cdf_txpart, sizeof(c->txpart));
     stbv_av1_cdf_inv(c->txpart, stb_av1_cdf_txpart, 21, 2, 1);
     memcpy(c->skip, stb_av1_cdf_skip, sizeof(c->skip));

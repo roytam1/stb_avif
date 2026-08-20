@@ -261,8 +261,16 @@ static int stbv_av1_decode_intra_txtp(struct stb_av1_msac *msac,
     if (reduced_txtp_set || tx_min == STBV_AV1_TX_16X16) {
         /* txtp_intra2[min][y_mode], min in 0..2 */
         min2 = tx_min > 2 ? 2 : (tx_min < 0 ? 0 : tx_min);
+        fprintf(stderr, "TXT2 min=%d mode=%d pre_r=%u c0=%u c1=%u c2=%u c3=%u cnt=%u\n",
+                min2, y_mode_nofilt, msac->rng,
+                cdf->txtp_intra2[min2 * 104 + y_mode_nofilt * 8 + 0],
+                cdf->txtp_intra2[min2 * 104 + y_mode_nofilt * 8 + 1],
+                cdf->txtp_intra2[min2 * 104 + y_mode_nofilt * 8 + 2],
+                cdf->txtp_intra2[min2 * 104 + y_mode_nofilt * 8 + 3],
+                cdf->txtp_intra2[min2 * 104 + y_mode_nofilt * 8 + 4]);
         idx = stb_av1_msac_symbol(msac,
               &cdf->txtp_intra2[min2 * 104 + y_mode_nofilt * 8], 4);
+        fprintf(stderr, "TXT2 post idx=%u r=%u\n", idx, msac->rng);
         if (idx < 5)
             return stbv_av1_tx_set_intra2[idx];
         return STBV_AV1_TX_DCT_DCT;
@@ -270,8 +278,18 @@ static int stbv_av1_decode_intra_txtp(struct stb_av1_msac *msac,
 
     /* txtp_intra1[min][y_mode], min in 0..1 */
     min2 = tx_min > 1 ? 1 : (tx_min < 0 ? 0 : tx_min);
+    fprintf(stderr, "TXT1 min=%d mode=%d pre_r=%u c0=%u c1=%u c2=%u c3=%u c4=%u c5=%u cnt=%u\n",
+            min2, y_mode_nofilt, msac->rng,
+            cdf->txtp_intra1[min2 * 104 + y_mode_nofilt * 8 + 0],
+            cdf->txtp_intra1[min2 * 104 + y_mode_nofilt * 8 + 1],
+            cdf->txtp_intra1[min2 * 104 + y_mode_nofilt * 8 + 2],
+            cdf->txtp_intra1[min2 * 104 + y_mode_nofilt * 8 + 3],
+            cdf->txtp_intra1[min2 * 104 + y_mode_nofilt * 8 + 4],
+            cdf->txtp_intra1[min2 * 104 + y_mode_nofilt * 8 + 5],
+            cdf->txtp_intra1[min2 * 104 + y_mode_nofilt * 8 + 6]);
     idx = stb_av1_msac_symbol(msac,
           &cdf->txtp_intra1[min2 * 104 + y_mode_nofilt * 8], 6);
+    fprintf(stderr, "TXT1 post idx=%u r=%u\n", idx, msac->rng);
     if (idx < 7)
         return stbv_av1_tx_set_intra1[idx];
     return STBV_AV1_TX_DCT_DCT;

@@ -631,6 +631,7 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
             dc_tok = (int)stbv_av1_coef_golomb(msac) + 15;
             dc_tok &= 0xfffff;
             dc_dq = (int)(((stbv_u32)dc_dq * (stbv_u32)dc_tok) & 0xffffffU);
+            fprintf(stderr, "GOL val=%d r=%u\n", dc_tok, msac->rng);
         } else {
             dc_dq *= dc_tok;
         }

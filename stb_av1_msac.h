@@ -131,6 +131,10 @@ static unsigned int stb_av1_msac_bool(struct stb_av1_msac *s,
     ret = dif >= vw;
     dif -= (stbv_u64)ret * vw;
     v += ret * (r - 2 * v);
+    fprintf(stderr, "DBG bool r=%u f=%u v=%u ret=%u vp=%u d=%llu\n",
+            r, f, (unsigned)(((r >> 8) * (f >> STB_AV1_MSAC_EC_PROB_SHIFT) >>
+             (7 - STB_AV1_MSAC_EC_PROB_SHIFT)) + STB_AV1_MSAC_EC_MIN_PROB),
+            ret, v, (unsigned long long)dif);
     stb_av1_msac_norm(s, dif, v);
     return !ret;
 }

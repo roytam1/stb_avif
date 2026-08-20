@@ -75,6 +75,8 @@ static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
     ac = stbv_av1_intra_mode_ctx[above_mode];
     lc = stbv_av1_intra_mode_ctx[left_mode];
     ycdf = cdf->kfym + (ac * 5 + lc) * 16;
+    fprintf(stderr, "YM a=%d l=%d ac=%d lc=%d pre_r=%u c0=%u cnt=%u\n",
+            above_mode, left_mode, ac, lc, msac->rng, ycdf[0], ycdf[12]);
     sym = stb_av1_msac_symbol(msac, ycdf, 12);
     if (sym > 12) return -2;
     mode = (int)sym;
