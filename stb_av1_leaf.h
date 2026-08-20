@@ -346,8 +346,7 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
                 c->reduced_txtp_set);
     } else {
         /* dav1d: *txtp = lossless * WHT_WHT */
-        if (c->lossless)
-            txtp = STBV_AV1_TX_WHT_WHT;
+        txtp = c->lossless ? STBV_AV1_TX_WHT_WHT : STBV_AV1_TX_DCT_DCT;
     }
 
     if (out) {
