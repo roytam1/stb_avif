@@ -2317,7 +2317,8 @@ static void stb_av1_reconstruct_block(struct stb_av1_tile_context *tc,
                                        unsigned char *pred,
                                        int pred_stride,
                                        unsigned char *dst,
-                                       int dst_stride)
+                                       int dst_stride,
+                                       int valid_w, int valid_h)
 {
     int i, j;
     int dequant_dc, dequant_ac;
@@ -2344,9 +2345,11 @@ static void stb_av1_reconstruct_block(struct stb_av1_tile_context *tc,
     /* Apply inverse transform */
     stb_av1_inv_transform_2d(dq_coeffs, tx_w, tx_h, tx_type);
 
-    /* Reconstruct: pred + residual, clamp to [0, 255] */
-    for (i = 0; i < tx_h; i++) {
-        for (j = 0; j < tx_w; j++) {
+    /* Reconstruct: pred + residual, clamp to [0, 255].
+       Only the valid (in-frame) region is written; edge blocks may
+       extend past frame_width/frame_height. */
+    for (i = 0; i < valid_h; i++) {
+        for (j = 0; j < valid_w; j++) {
             int val = (int)pred[i * pred_stride + j] + dq_coeffs[i * tx_w + j];
             if (val < 0) val = 0;
             if (val > 255) val = 255;
@@ -2415,14 +2418,18 @@ static void stb_av1_decode_superblock(struct stb_av1_tile_context *tc,
             {
                 int i;
                 for (i = 0; i < blk_w; i++) {
+                    int cc = abs_c + i;
+                    if (cc >= tc->frame_width) cc = tc->frame_width - 1;
                     if (abs_r > 0)
-                        above_data[i] = tc->plane_y[(abs_r - 1) * tc->stride_y + abs_c + i];
+                        above_data[i] = tc->plane_y[(abs_r - 1) * tc->stride_y + cc];
                     else
                         above_data[i] = 127; /* border extension */
                 }
                 for (i = 0; i < blk_h; i++) {
+                    int rr = abs_r + i;
+                    if (rr >= tc->frame_height) rr = tc->frame_height - 1;
                     if (abs_c > 0)
-                        left_data[i] = tc->plane_y[(abs_r + i) * tc->stride_y + abs_c - 1];
+                        left_data[i] = tc->plane_y[rr * tc->stride_y + abs_c - 1];
                     else
                         left_data[i] = 127;
                 }
@@ -2442,12 +2449,22 @@ static void stb_av1_decode_superblock(struct stb_av1_tile_context *tc,
                 /* Decode transform coefficients */
                 stb_av1_decode_coeffs(tc->br, coeffs, blk_w * blk_h, &eob, tc->qindex_y);
 
-                /* Reconstruct */
-                stb_av1_reconstruct_block(tc, coeffs,
-                                           tx_w, tx_h, tx_type,
-                                           pred_buf, blk_w,
-                                           tc->plane_y + abs_r * tc->stride_y + abs_c,
-                                           tc->stride_y);
+                /* Reconstruct (clamped to frame bounds for edge blocks) */
+                {
+                    int eff_w = tx_w, eff_h = tx_h;
+                    if (abs_r + eff_h > tc->frame_height)
+                        eff_h = tc->frame_height - abs_r;
+                    if (abs_c + eff_w > tc->frame_width)
+                        eff_w = tc->frame_width - abs_c;
+                    if (eff_h < 0) eff_h = 0;
+                    if (eff_w < 0) eff_w = 0;
+                    stb_av1_reconstruct_block(tc, coeffs,
+                                               tx_w, tx_h, tx_type,
+                                               pred_buf, blk_w,
+                                               tc->plane_y + abs_r * tc->stride_y + abs_c,
+                                               tc->stride_y,
+                                               eff_w, eff_h);
+                }
             }
 
             /* For chroma, use DC mode with no residual (simplified) */
@@ -2494,11 +2511,16 @@ static void stb_av1_decode_superblock(struct stb_av1_tile_context *tc,
                                        u_above_byte, u_left_byte, uv_topleft,
                                        tc->bit_depth);
 
-                /* Copy UV prediction (no residual) */
+                /* Copy UV prediction (no residual), clamped to the
+                   chroma plane's actual row/column count */
                 {
                     int ri, ci;
-                    for (ri = 0; ri < u_h && u_r + ri < tc->frame_height; ri++) {
-                        for (ci = 0; ci < u_w && u_c + ci < tc->frame_width; ci++) {
+                    int uv_rows = (tc->frame_height + (1 << tc->sh->subsampling_y) - 1)
+                                  >> tc->sh->subsampling_y;
+                    int uv_cols = (tc->frame_width + (1 << tc->sh->subsampling_x) - 1)
+                                  >> tc->sh->subsampling_x;
+                    for (ri = 0; ri < u_h && u_r + ri < uv_rows; ri++) {
+                        for (ci = 0; ci < u_w && u_c + ci < uv_cols; ci++) {
                             tc->plane_u[(u_r + ri) * tc->stride_u + u_c + ci] = pred_uv[ri * u_w + ci];
                             tc->plane_v[(u_r + ri) * tc->stride_v + u_c + ci] = pred_uv[ri * u_w + ci];
                         }
@@ -2641,7 +2663,7 @@ static int stb_avif_decode_with_dav1d(const unsigned char *av1_data, size_t av1_
     Dav1dContext *ctx = NULL;
     Dav1dSettings s;
     Dav1dData data;
-    Dav1dPicture pic;
+    Dav1dPicture pic = { 0 };
     int ret;
     int i;
 
@@ -3073,10 +3095,11 @@ if (config_obu_type == STB_AV1_OBU_SEQUENCE_HEADER && config_obu_sz > 0) {
         info.plane_u = NULL;
         info.plane_v = NULL;
     } else {
+        int uv_rows = (info.height + (1 << sh.subsampling_y) - 1) >> sh.subsampling_y;
         info.plane_u = (unsigned char *)stb_avif_calloc(
-            (size_t)(info.stride_u * (info.height >> sh.subsampling_y)), 1);
+            (size_t)(info.stride_u * uv_rows), 1);
         info.plane_v = (unsigned char *)stb_avif_calloc(
-            (size_t)(info.stride_v * (info.height >> sh.subsampling_y)), 1);
+            (size_t)(info.stride_v * uv_rows), 1);
     }
 
     /* Initialize tile context */
@@ -3198,7 +3221,11 @@ if (config_obu_type == STB_AV1_OBU_SEQUENCE_HEADER && config_obu_sz > 0) {
 
                 y_val = (int)info.plane_y[row * info.stride_y + col];
 
-                if (sh.subsampling_y > 0) {
+                if (sh.monochrome || !info.plane_u || !info.plane_v) {
+                    /* neutral chroma for monochrome -> grey = luma */
+                    u_val = 128;
+                    v_val = 128;
+                } else if (sh.subsampling_y > 0) {
                     int uv_r = row >> sh.subsampling_y;
                     int uv_c = col >> sh.subsampling_x;
                     if (uv_r >= uv_h) uv_r = uv_h - 1;
