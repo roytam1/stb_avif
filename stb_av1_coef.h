@@ -453,9 +453,10 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     }
 
     eob = stb_av1_msac_symbol(msac, eob_bin_cdf, 4U + szctx);
-    fprintf(stderr, "E1 szctx=%u ch=%d is1d=%d eob_bin=%u r=%u dif=%llu\n",
+    fprintf(stderr, "E1 szctx=%u ch=%d is1d=%d eob_bin=%u r=%u dif=%llu postcdf=%u/%u/%u/%u/%u postcnt=%u\n",
             szctx, chroma, is1d, eob, msac->rng,
-            (unsigned long long)msac->dif);
+            (unsigned long long)msac->dif, eob_bin_cdf[0], eob_bin_cdf[1],
+            eob_bin_cdf[2], eob_bin_cdf[3], eob_bin_cdf[4], eob_bin_cdf[6]);
     if (eob > 1U) {
         eob_bin = eob - 2U;
         /* eob_hi_bit[N_TX_SIZES][2][9][2] */
@@ -618,7 +619,7 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     if (!dc_tok) {
         dc_sign_level = 1U << 6;
     } else {
-        dc_sign_cdf = cdf->coef + 3038U + (unsigned)chroma * 6U +
+        dc_sign_cdf = cdf->coef + 3038U + (chroma != 0) * 6U +
                       (unsigned)dc_sign_ctx * 2U;
         dc_sign = (int)stb_av1_msac_bool_adapt(msac, dc_sign_cdf);
         dc_sign_level = (dc_sign - 1) & (2 << 6);

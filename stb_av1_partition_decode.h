@@ -191,9 +191,10 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
             bs = stbv_av1_block_sizes[bl][bp][0];
             if (bs == 0xff)
                 return -1;
-            if (bp == STBV_AV1_PARTITION_NONE)
-                return stbv_av1_partition_emit(d, bl, bs, bp, bx, by);
-            if (bp == STBV_AV1_PARTITION_H) {
+            if (bp == STBV_AV1_PARTITION_NONE) {
+                int r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by);
+                if (r) return r;
+            } else if (bp == STBV_AV1_PARTITION_H) {
                 int r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by);
                 if (r) return r;
                 r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by + hsz);
@@ -273,9 +274,16 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
                          d->msac->rng, d->msac->dif, d->msac->cnt);
         if (is_split) {
             if (bl >= STBV_AV1_BL_8X8) {
-                STBV_AV1_PARTDBG("PARDEC-H bl=%d bx=%d by=%d split-at-8x8 rng=%u\n",
-                                 bl, bx, by, d->msac->rng);
-                return -1;
+                int r;
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by);
+                if (r) return r;
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by);
+                if (r) return r;
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by + 1);
+                if (r) return r;
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by + 1);
+                if (r) return r;
+                return 0;
             }
             if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by)) return -1;
             return stbv_av1_partition_decode_sb(d, bl + 1, bx + hsz, by);
@@ -304,9 +312,16 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
                          d->msac->rng, d->msac->dif, d->msac->cnt);
         if (is_split) {
             if (bl >= STBV_AV1_BL_8X8) {
-                STBV_AV1_PARTDBG("PARDEC-V bl=%d bx=%d by=%d split-at-8x8 rng=%u\n",
-                                 bl, bx, by, d->msac->rng);
-                return -1;
+                int r;
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by);
+                if (r) return r;
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by);
+                if (r) return r;
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by + 1);
+                if (r) return r;
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by + 1);
+                if (r) return r;
+                return 0;
             }
             if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by)) return -1;
             return stbv_av1_partition_decode_sb(d, bl + 1, bx, by + hsz);

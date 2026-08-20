@@ -422,8 +422,12 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         }
         idx = seq && seq->sb128 ? ((bx4 & 16) >> 4) + ((by4 & 16) >> 3) : 0;
         if (!block_skip && state->cdef_idx[idx] == -1) {
-            int v = stb_av1_msac_bools(msac, frame->cdef.n_bits);
-            fprintf(stderr, "L3 cdef r=%u\n", msac->rng);
+            int v;
+            fprintf(stderr, "L3 cdef pre r=%u d=%016llx cnt=%d\n", msac->rng,
+                    (unsigned long long)msac->dif, msac->cnt);
+            v = stb_av1_msac_bools(msac, frame->cdef.n_bits);
+            fprintf(stderr, "L3 cdef post r=%u d=%016llx cnt=%d\n", msac->rng,
+                    (unsigned long long)msac->dif, msac->cnt);
             state->cdef_idx[idx] = v;
             if (bw4 > 16) state->cdef_idx[idx + 1] = v;
             if (bh4 > 16) state->cdef_idx[idx + 2] = v;
@@ -481,11 +485,10 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     fprintf(stderr, "L6 filt r=%u dif=%llu\n", msac->rng,
             (unsigned long long)msac->dif);
 
-    /* dav1d stores y_mode_nofilt in the neighbour mode maps (set_ctx). */
+    /* dav1d stores y_mode_nofilt in the neighbour mode maps (set_ctx):
+     * FILTER_PRED maps to DC_PRED, NOT to the filter angle's mode. */
     y_mode_nofilt = intra.y_mode == STBV_AV1_INTRA_FILTER ?
-        stbv_av1_filter_mode_to_y_mode[
-            intra.y_angle < 0 ? 0 : (intra.y_angle > 4 ? 4 : intra.y_angle)] :
-        intra.y_mode;
+        STBV_AV1_INTRA_DC : intra.y_mode;
     if (state->intra.above_mode) {
         for (i = 0; i < bw4 && (unsigned)(bx4 + i) < state->intra.above_count; i++)
             state->intra.above_mode[bx4 + i] = (stbv_u8)y_mode_nofilt;
@@ -493,6 +496,9 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     if (state->intra.left_mode) {
         for (i = 0; i < bh4 && (unsigned)(by4 + i) < state->intra.left_count; i++)
             state->intra.left_mode[by4 + i] = (stbv_u8)y_mode_nofilt;
+        fprintf(stderr, "MODE-W bx4=%d by4=%d bh4=%d nofilt=%d lm8=%d lm9=%d\n",
+                bx4, by4, bh4, y_mode_nofilt, state->intra.left_mode[8],
+                state->intra.left_mode[9]);
     }
 
     /* Transform size.  dav1d: lossless blocks are forced to TX_4X4; the

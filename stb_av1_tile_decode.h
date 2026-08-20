@@ -127,8 +127,8 @@ static int stb_av1_decode_tile(struct stb_av1_tile_decoder *td,
     pd.cdf = &td->cdf;
     pd.frame_w4 = (int)((frame->width[0] + 3U) >> 2);
     pd.frame_h4 = (int)((frame->height + 3U) >> 2);
-    above_n = (pd.frame_w4 >> 1) + 1;
-    left_n = (pd.frame_h4 >> 1) + 1;
+    above_n = ((pd.frame_w4 + 15) >> 1) + 1;
+    left_n = ((pd.frame_h4 + 15) >> 1) + 1;
     above = (stbv_u8 *)malloc((size_t)above_n);
     left = (stbv_u8 *)malloc((size_t)left_n);
     if (!above || !left) {

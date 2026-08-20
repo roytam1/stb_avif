@@ -1512,9 +1512,9 @@ static void stbv_av1_cdf_copy_coef(stbv_u16 *d, unsigned q)
     } while (0)
     STBV_CPY(skip,0,130,65,2,1);
     STBV_CPY(eob_bin_16,130,32,4,8,4);
-    STBV_CPY(eob_bin_32,162,32,4,8,4);
-    STBV_CPY(eob_bin_64,194,32,4,8,4);
-    STBV_CPY(eob_bin_128,226,32,4,8,4);
+    STBV_CPY(eob_bin_32,162,32,4,8,5);
+    STBV_CPY(eob_bin_64,194,32,4,8,6);
+    STBV_CPY(eob_bin_128,226,32,4,8,7);
     STBV_CPY(eob_bin_256,258,64,4,16,8);
     STBV_CPY(eob_bin_512,322,32,2,16,9);
     STBV_CPY(eob_bin_1024,354,32,2,16,10);
