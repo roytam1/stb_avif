@@ -25,7 +25,7 @@
 typedef struct stbv_av1_leaf_recon {
     void *ud;
     stbv_i32 *cf;
-    void (*block_info)(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip);
+    void (*block_info)(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode);
     void (*luma_txb)(void *ud, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf);
     void (*chroma_txb)(void *ud, int pl, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf);
     void (*luma_pal)(void *ud, const stbv_u8 *idx, int sz, int bw4, int bh4, const stbv_u16 *pal);
@@ -685,6 +685,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     int y_mode_nofilt, i;
     unsigned block_skip;
 
+    c.recon = recon;
     if (!msac || !cdf || !state || bs < 0 || bs >= STBV_AV1_N_BS_SIZES)
         return -1;
     bw4 = stbv_av1_block_dimensions[bs][0];
@@ -762,7 +763,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     if (stb_av1_intra_state_decode_leaf(msac, cdf, &state->intra,
                                         bx4, by4, bs, cfl_allowed, &intra))
         return -3;
-    if (c.recon && c.recon->block_info) c.recon->block_info(c.recon->ud, 1, bs, bx4, by4, has_chroma, cbw4, cbh4, uv_tx, tx0, state->pal_sz_y, state->pal_sz_uv, (int)block_skip);
+    if (c.recon && c.recon->block_info) c.recon->block_info(c.recon->ud, 1, bs, bx4, by4, has_chroma, cbw4, cbh4, uv_tx, tx0, state->pal_sz_y, state->pal_sz_uv, (int)block_skip, intra.y_mode, intra.y_angle, intra.uv_mode);
 
     /* Palette: presence bools, size, colors and index map (dav1d decode.c
      * 1126-1193 + recon_tmpl read_pal_plane/read_pal_uv/read_pal_indices). */
@@ -924,7 +925,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     c.y_mode_nofilt = y_mode_nofilt;
     c.reduced_txtp_set = frame ? (int)frame->reduced_txtp_set : 0;
     c.block_skip = (int)block_skip;
-    c.recon = recon;
     /* TXTP mode: dav1d maps FILTER_PRED to the filter angle's directional
      * mode (dav1d_filter_mode_to_y_mode), unlike the neighbour-mode map
      * which uses DC_PRED. */

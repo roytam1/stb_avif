@@ -509,7 +509,7 @@ STBV_AV1_IPRED_UNUSED static void stbv_av1_ipred_z1_##sfx( \
 { \
     const int is_sm = (angle >> 9) & 0x1; \
     const int enable_intra_edge_filter = angle >> 10; \
-    px top_out[128]; \
+    px top_out[256]; \
     const px *top; \
     int max_wh, upsample_above, base_inc, dx, max_base_x, y, x, xpos; \
     angle &= 511; \
@@ -562,8 +562,8 @@ STBV_AV1_IPRED_UNUSED static void stbv_av1_ipred_z2_##sfx( \
 { \
     const int is_sm = (angle >> 9) & 0x1; \
     const int enable_intra_edge_filter = angle >> 10; \
-    px edge[129]; \
-    px *const topleft = &edge[64]; \
+    px edge[512]; \
+    px *const topleft = &edge[256]; \
     const px *left; \
     int max_wh, upsample_left, upsample_above, base_inc_x; \
     int dy, dx, y, x, ypos, xpos; \
@@ -637,7 +637,7 @@ STBV_AV1_IPRED_UNUSED static void stbv_av1_ipred_z3_##sfx( \
 { \
     const int is_sm = (angle >> 9) & 0x1; \
     const int enable_intra_edge_filter = angle >> 10; \
-    px left_out[128]; \
+    px left_out[256]; \
     const px *left; \
     int max_wh, upsample_left, base_inc, dy, max_base_y, x, y, ypos; \
     angle &= 511; \
