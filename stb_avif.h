@@ -2546,6 +2546,7 @@ static void stb_av1_decode_superblock(struct stb_av1_tile_context *tc,
     }
 }
 /* -------------------------------------------------------------------------- */
+#ifndef STB_AVIF_USE_DAV1D
 /* -------------------------------------------------------------------------- */
 /* SCALAR AV1 DECODER WITH RECON HOOKS  (C89)                                   */
 /* -------------------------------------------------------------------------- */
@@ -2565,6 +2566,12 @@ struct stb_avif_scalar_recon {
     stbv_u8 pred[128 * 128];
     int cur_bx4;
     int cur_by4;
+    int cur_bw4;
+    int cur_bh4;
+    int y_mode;
+    int y_angle;
+    int uv_mode;
+    int block_skip;
 };
 
 /* Full-block intra prediction, written straight into the frame planes.
@@ -2660,16 +2667,63 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
     struct stb_avif_scalar_recon *rc;
     int bw4, bh4;
     (void)cbw4; (void)cbh4; (void)uv_tx; (void)tx0;
-    (void)pal_sz_y; (void)pal_sz_uv; (void)skip;
+    (void)pal_sz_y; (void)pal_sz_uv;
     rc = (struct stb_avif_scalar_recon *)ud;
     if (!rc || !intra) return;
     rc->cur_bx4 = bx4;
     rc->cur_by4 = by4;
-    bw4 = stbv_av1_block_dimensions[bs][0];
-    bh4 = stbv_av1_block_dimensions[bs][1];
+    rc->cur_bw4 = stbv_av1_block_dimensions[bs][0];
+    rc->cur_bh4 = stbv_av1_block_dimensions[bs][1];
+    rc->y_mode = y_mode;
+    rc->y_angle = y_angle;
+    rc->uv_mode = uv_mode;
+    rc->block_skip = skip;
+    /* dav1d order: predict the whole block once, from already-reconstructed
+     * neighbours; per-txb callbacks afterwards only add residual. */
     stb_avif_recon_predict_block(rc, rc->ss_hor, rc->ss_ver,
-                                 bx4, by4, bw4, bh4, has_chroma,
+                                 bx4, by4, rc->cur_bw4, rc->cur_bh4,
+                                 has_chroma,
                                  y_mode, y_angle, uv_mode);
+}
+
+/* Per-transform-block intra prediction written into the plane.
+ * px4/py4/tw4/th4 are 4x4 units in the given plane's coordinate system;
+ * pw/ph are the plane's pixel dimensions. */
+static void stb_avif_recon_pred_rect(struct stb_avif_scalar_recon *rc,
+                                     stbv_u8 *plane, int stride,
+                                     int px4, int py4, int tw4, int th4,
+                                     int pw, int ph,
+                                     int mode_in, int angle_in)
+{
+    stbv_u8 tl[640];
+    stbv_u8 *edge = tl + 320;
+    const int fw4 = (pw + 3) >> 2;
+    const int fh4 = (ph + 3) >> 2;
+    int w = tw4 << 2;
+    int h = th4 << 2;
+    int cw, ch, i;
+    int mode = mode_in;
+    int angle = angle_in;
+    int impl;
+
+    if (tw4 <= 0 || th4 <= 0 || px4 >= fw4 || py4 >= fh4) return;
+    if (tw4 > fw4 - px4) tw4 = fw4 - px4;
+    if (th4 > fh4 - py4) th4 = fh4 - py4;
+    cw = pw - (px4 << 2); if (cw > w) cw = w;
+    ch = ph - (py4 << 2); if (ch > h) ch = h;
+    if (cw <= 0 || ch <= 0) return;
+
+    impl = stbv_av1_prepare_intra_edges_8(px4, px4 > 0, py4, py4 > 0,
+                                          fw4, fh4, 0,
+                                          plane + (py4 << 2) * stride + (px4 << 2),
+                                          stride, NULL,
+                                          mode, &angle,
+                                          tw4, th4, 0, edge, rc->bit_depth);
+    stbv_av1_ipred_run_8(impl, rc->pred, w, edge, w, h, angle, 0, w, h,
+                         rc->bit_depth);
+    for (i = 0; i < ch; i++)
+        memcpy(plane + ((py4 << 2) + i) * stride + (px4 << 2),
+               rc->pred + i * w, (size_t)cw);
 }
 
 /* Residual add: copy plane region to scratch, inverse-transform on top of it
@@ -2697,31 +2751,44 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
 static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf)
 {
     struct stb_avif_scalar_recon *rc;
+    int txw4 = stbv_av1_tx_dims[tx].w;
+    int txh4 = stbv_av1_tx_dims[tx].h;
     (void)eob;
     rc = (struct stb_avif_scalar_recon *)ud;
     if (!rc) return;
+    (void)txw4; (void)txh4;
+#ifdef STB_AVIF_PRED_ONLY
+    (void)cf; (void)tx; (void)txtp;
+#else
     stb_avif_recon_add_res(rc, rc->plane_y, rc->stride_y,
                            x4 << 2, y4 << 2, rc->frame_w, rc->frame_h,
-                           tx, txtp, eob, cf);
+                           tx, txtp, eob ? eob : 1, cf);
+#endif
 }
 
 static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf)
 {
     struct stb_avif_scalar_recon *rc;
+    stbv_u8 *plane;
+    int stride, pw, ph;
+    int txw4 = stbv_av1_tx_dims[tx].w;
+    int txh4 = stbv_av1_tx_dims[tx].h;
+    int cm;
     (void)eob;
     rc = (struct stb_avif_scalar_recon *)ud;
-    if (!rc) return;
-    if (!rc->plane_u || !rc->plane_v) return;
-    if (pl == 0)
-        stb_avif_recon_add_res(rc, rc->plane_u, rc->stride_u,
-                               x4 << 2, y4 << 2,
-                               (rc->frame_w + 1) / 2, (rc->frame_h + 1) / 2,
-                               tx, txtp, eob, cf);
-    else
-        stb_avif_recon_add_res(rc, rc->plane_v, rc->stride_v,
-                               x4 << 2, y4 << 2,
-                               (rc->frame_w + 1) / 2, (rc->frame_h + 1) / 2,
-                               tx, txtp, eob, cf);
+    if (!rc || !rc->plane_u || !rc->plane_v) return;
+    plane = pl == 0 ? rc->plane_u : rc->plane_v;
+    stride = pl == 0 ? rc->stride_u : rc->stride_v;
+    pw = (rc->frame_w + 1) >> 1;
+    ph = (rc->frame_h + 1) >> 1;
+    (void)txw4; (void)txh4;
+#ifdef STB_AVIF_PRED_ONLY
+    (void)cf; (void)tx; (void)txtp;
+#else
+    stb_avif_recon_add_res(rc, plane, stride,
+                           x4 << 2, y4 << 2, pw, ph,
+                           tx, txtp, eob ? eob : 1, cf);
+#endif
 }
 
 static void stb_avif_recon_luma_pal(void *ud, const stbv_u8 *idx, int sz, int bw4, int bh4, const stbv_u16 *pal)
@@ -2918,6 +2985,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     stb_avif_free_internal(left_pal0); stb_avif_free_internal(left_pal1);
     return r < 0 ? -5 : 0;
 }
+
+#endif /* !STB_AVIF_USE_DAV1D */
 
 /* main tile decoding routine */
 static void stb_av1_decode_frame(struct stb_av1_tile_context *tc)

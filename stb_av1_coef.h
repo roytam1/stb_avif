@@ -379,7 +379,7 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     stbv_u16 *dc_sign_cdf;
     unsigned stride, shift, shift2, mask;
     unsigned char *level;
-    int cf_max = 255;
+    int cf_max = 32767; /* dav1d ~(~127U << 8) for BITDEPTH 8 */
 
     if (tx < 0 || tx >= STBV_AV1_N_TX_SIZES)
         return -1;

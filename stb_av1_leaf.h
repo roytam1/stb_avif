@@ -20,6 +20,9 @@
 #ifndef STB_AV1_COEF_H
 #error "include stb_av1_coef.h first"
 #endif
+#ifndef STB_AV1_QUANT_H
+#include "stb_av1_quant.h"
+#endif
 
 /* Reconstruction callback interface (NULL-safe, for stb_avif integration). */
 typedef struct stbv_av1_leaf_recon {
@@ -315,6 +318,7 @@ typedef struct stbv_av1_leaf_decode_ctx {
     int y_mode_txtp;
     int block_skip;
     int reduced_txtp_set;
+    int hbd;
     const stbv_av1_leaf_recon *recon;
 } stbv_av1_leaf_decode_ctx;
 
@@ -374,6 +378,20 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
     if (skip) {
         /* A skipped transform has the fixed residual context 0x40. */
         stbv_av1_res_mark(rs, x4, y4, txw4, txh4, (stbv_u8)0x40);
+        if (c->recon && c->recon->cf) {
+            int n = stbv_av1_tx_dims[tx].w * stbv_av1_tx_dims[tx].h;
+            int i;
+            for (i = 0; i < n; i++) c->recon->cf[i] = 0;
+            if (is_chroma) {
+                if (c->recon->chroma_txb)
+                    c->recon->chroma_txb(c->recon->ud, chroma - 1, x4, y4,
+                                         tx, txtp, 0, c->recon->cf);
+            } else {
+                if (c->recon->luma_txb)
+                    c->recon->luma_txb(c->recon->ud, x4, y4,
+                                       tx, txtp, 0, c->recon->cf);
+            }
+        }
         return 0;
     }
 
@@ -404,9 +422,40 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
         /* This first integration pass validates coefficient syntax and MSAC
            consumption.  Quantization/reconstruction is still supplied by
            the caller in the block layer. */
-        eob = stbv_av1_decode_coeffs_square(msac, cdf, tx, is_chroma, txclass,
-                                             1, 1, 0, sctx, dc_sign_ctx, cf,
-                                             &res_ctx);
+        {
+            /* Real dequantization: dav1d_dq_tbl[hbd][qidx][{dc,ac}] with the
+             * per-plane qidx deltas; dq_shift = imax(0, t_dim->ctx - 2). */
+            const int hbd_i = c->hbd;
+            int base_q = c->qidx ? c->qidx : (c->frame ? (int)c->frame->quant.yac : 0);
+            int qdc, qac;
+            int dq_dc, dq_ac, dq_shift;
+            if (base_q < 0) base_q = 0;
+            if (base_q > 255) base_q = 255;
+            if (is_chroma) {
+                int udc = base_q + (c->frame ? c->frame->quant.udc_delta : 0);
+                int uac = base_q + (c->frame ? c->frame->quant.uac_delta : 0);
+                if (chroma == 2) { /* V plane */
+                    udc += c->frame ? c->frame->quant.vdc_delta - c->frame->quant.udc_delta : 0;
+                    uac += c->frame ? c->frame->quant.vac_delta - c->frame->quant.uac_delta : 0;
+                }
+                udc = udc < 0 ? 0 : udc > 255 ? 255 : udc;
+                uac = uac < 0 ? 0 : uac > 255 ? 255 : uac;
+                qdc = udc; qac = uac;
+            } else {
+                int ydc = base_q + (c->frame ? c->frame->quant.ydc_delta : 0);
+                ydc = ydc < 0 ? 0 : ydc > 255 ? 255 : ydc;
+                qdc = ydc; qac = base_q;
+            }
+            dq_dc = stbv_av1_dq_tbl[hbd_i][qdc][0];
+            dq_ac = stbv_av1_dq_tbl[hbd_i][qac][1];
+            dq_shift = stbv_av1_tx_dims[tx].ctx - 2;
+            if (dq_shift < 0) dq_shift = 0;
+            eob = stbv_av1_decode_coeffs_square(msac, cdf, tx, is_chroma,
+                                                txclass,
+                                                dq_dc, dq_ac, dq_shift,
+                                                sctx, dc_sign_ctx, cf,
+                                                &res_ctx);
+        }
         if (eob < 0)
             return -2;
         if (out)
@@ -924,6 +973,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     c.qidx = qidx;
     c.y_mode_nofilt = y_mode_nofilt;
     c.reduced_txtp_set = frame ? (int)frame->reduced_txtp_set : 0;
+    c.hbd = seq ? (int)seq->hbd : 0;
     c.block_skip = (int)block_skip;
     /* TXTP mode: dav1d maps FILTER_PRED to the filter angle's directional
      * mode (dav1d_filter_mode_to_y_mode), unlike the neighbour-mode map
@@ -953,7 +1003,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         int cby4 = by4 >> ss_ver;
         int first = 1;
 
-        if (!block_skip) {
+        if (!block_skip && !state->pal_sz_y) {
             for (y4 = by4; y4 < by4 + bh4; y4 += txh4) {
                 for (x4 = bx4; x4 < bx4 + bw4; x4 += txw4) {
                     r = stbv_av1_leaf_tx_plane(msac, cdf, &c, x4, y4,
@@ -963,7 +1013,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                     if (r) return -4;
                 }
             }
-            if (has_chroma) {
+            if (has_chroma && !state->pal_sz_uv) {
                 for (pl = 0; pl < 2; pl++) {
                     for (cy4 = cby4; cy4 < cby4 + cbh4; cy4 += uv_txh4) {
                         for (cx4 = cbx4; cx4 < cbx4 + cbw4; cx4 += uv_txw4) {
