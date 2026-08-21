@@ -2760,9 +2760,11 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
 #ifdef STB_AVIF_PRED_ONLY
     (void)cf; (void)tx; (void)txtp;
 #else
+#ifndef STB_AVIF_NO_RESIDUAL
     stb_avif_recon_add_res(rc, rc->plane_y, rc->stride_y,
                            x4 << 2, y4 << 2, rc->frame_w, rc->frame_h,
                            tx, txtp, eob ? eob : 1, cf);
+#endif
 #endif
 }
 
@@ -2785,9 +2787,11 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
 #ifdef STB_AVIF_PRED_ONLY
     (void)cf; (void)tx; (void)txtp;
 #else
+#ifndef STB_AVIF_NO_RESIDUAL
     stb_avif_recon_add_res(rc, plane, stride,
                            x4 << 2, y4 << 2, pw, ph,
                            tx, txtp, eob ? eob : 1, cf);
+#endif
 #endif
 }
 
@@ -2838,6 +2842,11 @@ static void stb_avif_recon_chroma_pal(void *ud, int pl, const stbv_u8 *idx, int 
 
 static struct stb_avif_scalar_recon g_scalar_recon;
 static stbv_av1_leaf_recon g_scalar_recon_cb;
+
+static void stb_avif_row_reset_cb(void *opaque)
+{
+    stbv_av1_leaf_state_reset_row((stbv_av1_leaf_state *)opaque);
+}
 
 static int stb_avif_leaf_cb(struct stb_av1_tile_decoder *td, const struct stb_av1_tile_leaf_info *li, void *opaque)
 {
@@ -2971,7 +2980,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     td.frame = &stream.frame;
     r = stb_av1_decode_tile(&td, &stream.seq, &stream.frame,
                             stream.tile_data, stream.tile_size,
-                            stb_avif_leaf_cb, &state, NULL);
+                            stb_avif_leaf_cb, &state,
+                            stb_avif_row_reset_cb);
 
     stb_avif_free_internal(above_mode); stb_avif_free_internal(left_mode);
     stb_avif_free_internal(above_tx); stb_avif_free_internal(left_tx);
@@ -3634,6 +3644,18 @@ if (config_obu_type == STB_AV1_OBU_SEQUENCE_HEADER && config_obu_sz > 0) {
             stb_avif_error_msg = "scalar AV1 decode failed";
             goto error_exit;
         }
+#ifdef STB_AVIF_DUMP_Y
+        {
+            FILE *df = fopen(STB_AVIF_DUMP_Y, "wb");
+            if (df) {
+                int yy;
+                for (yy = 0; yy < tc.frame_height; yy++)
+                    fwrite(info.plane_y + (long)yy * info.stride_y, 1,
+                           tc.frame_width, df);
+                fclose(df);
+            }
+        }
+#endif
     }
 #endif
 
