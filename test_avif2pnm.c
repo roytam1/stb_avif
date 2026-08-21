@@ -126,6 +126,12 @@ int main(int argc, char *argv[])
     printf("stb_avif -> PPM converter\n");
     printf("=========================\n\n");
 
+#ifdef _WIN32
+    system("mkdir output_ppm >nul 2>&1");
+#else
+    system("mkdir -p output_ppm");
+#endif
+
     for (i = 0; i < num; i++) {
         const char *src;
         char dst[512];
@@ -147,30 +153,13 @@ int main(int argc, char *argv[])
         slash = strrchr(src, '/');
         if (slash) base = slash + 1;
 
-        {
-            size_t n = (size_t)(base - src);
-            char dir[512];
-            if (n > 0 && n < 500) {
-                strncpy(dir, src, n);
-                dir[n] = '\0';
-            } else {
-                dir[0] = '\0';
-            }
-        }
-
         strcpy(dst, "output_ppm/");
         strncat(dst, base, sizeof(dst) - 20);
         {
-            char *dot = strrchr(dst, '.');
+            char *dot;
+            dot = strrchr(dst, '.');
             if (dot) strcpy(dot, ".ppm");
             else strcat(dst, ".ppm");
-        }
-
-        /* Create output directory */
-        {
-            char mkcmd[600];
-            strcpy(mkcmd, "mkdir -p output_ppm");
-            system(mkcmd);
         }
 
         if (decode_to_ppm(src, dst, req_chan))
