@@ -124,6 +124,12 @@ const char *stb_avif_failure_reason(void);
 #include <dav1d/dav1d.h>
 #endif
 
+#ifndef STB_AVIF_USE_DAV1D
+#include "stb_av1_scalar.h"
+#include "stb_av1_ipred.h"
+#include "stb_av1_leaf.h"
+#endif
+
 
 
 /* ----------- CONFIGURATION ----------- */
@@ -143,14 +149,20 @@ const char *stb_avif_failure_reason(void);
 /* ----------- C89 COMPATIBILITY HELPERS ----------- */
 
 /* We avoid stdint.h for strict C89 compatibility.
-   Define our own fixed-size types. */
+   Define our own fixed-size types (guarded if scalar headers already included). */
+#ifndef STB_AV1_SCALAR_H
 typedef unsigned char  stbv_u8;
 typedef signed char    stbv_s8;
 typedef unsigned short stbv_u16;
 typedef signed short   stbv_s16;
 typedef unsigned int   stbv_u32;
 typedef signed int     stbv_s32;
-
+#ifndef STBV_I32_DEFINED
+#define STBV_I32_DEFINED
+typedef signed int     stbv_i32;
+#endif
+#endif
+#ifndef STB_AV1_SCALAR_H
 /* The AV1 decoder needs native 64-bit arithmetic for MSAC and bit reading.
    C89 has no standard 64-bit integer type, so use the compiler extensions
    available on the supported C89-era toolchains. */
@@ -164,6 +176,7 @@ typedef signed int     stbv_s32;
   #endif
 #else
   #error "stb_avif requires 64-bit integer support"
+#endif
 #endif
 
 /* ----------- ERROR HANDLING ----------- */
@@ -2532,20 +2545,210 @@ static void stb_av1_decode_superblock(struct stb_av1_tile_context *tc,
         }
     }
 }
-
 /* -------------------------------------------------------------------------- */
-/* SCALAR AV1 DECODER WITH RECON HOOKS  (C89, stub - delegates to legacy)      */
 /* -------------------------------------------------------------------------- */
-static void stb_av1_decode_frame(struct stb_av1_tile_context *tc);
-static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc,
-                                        const unsigned char *av1_data, size_t av1_size)
+/* SCALAR AV1 DECODER WITH RECON HOOKS  (C89)                                   */
+/* -------------------------------------------------------------------------- */
+struct stb_avif_scalar_recon {
+    stbv_u8 *plane_y;
+    stbv_u8 *plane_u;
+    stbv_u8 *plane_v;
+    int stride_y;
+    int stride_u;
+    int stride_v;
+    int bit_depth;
+    int frame_w4;
+    int frame_h4;
+    stbv_i32 cf[4096];
+    stbv_u8 pred[4096];
+    int cur_bx4;
+    int cur_by4;
+    int cur_bw4;
+    int cur_bh4;
+};
+static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip)
 {
+    struct stb_avif_scalar_recon *rc;
+    (void)intra; (void)has_chroma; (void)cbw4; (void)cbh4; (void)uv_tx; (void)tx0; (void)pal_sz_y; (void)pal_sz_uv; (void)skip;
+    rc = (struct stb_avif_scalar_recon *)ud;
+    if (!rc) return;
+    rc->cur_bx4 = bx4;
+    rc->cur_by4 = by4;
+    rc->cur_bw4 = stbv_av1_block_dimensions[bs][0];
+    rc->cur_bh4 = stbv_av1_block_dimensions[bs][1];
+}
+static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf)
+{
+    struct stb_avif_scalar_recon *rc;
+    int txw4, txh4, w, h, x, y, i, j;
+    stbv_u8 tl[384];
+    stbv_u8 *edge;
+    int maxv;
+    (void)eob; (void)txtp;
+    rc = (struct stb_avif_scalar_recon *)ud;
+    if (!rc) return;
+    txw4 = stbv_av1_tx_dims[tx].w;
+    txh4 = stbv_av1_tx_dims[tx].h;
+    w = txw4 << 2;
+    h = txh4 << 2;
+    x = x4 << 2;
+    y = y4 << 2;
+    maxv = (1 << rc->bit_depth) - 1;
+    for (i = 0; i < w*h; i++) rc->cf[i] = cf[i];
+    edge = tl + 128;
+    if (y > 0) {
+        for (i = 0; i < w; i++) edge[i] = rc->plane_y[(y-1)*rc->stride_y + x + i];
+    } else {
+        for (i = 0; i < w; i++) edge[i] = (stbv_u8)(maxv>>1);
+    }
+    if (x > 0) {
+        for (i = 0; i < h; i++) edge[-1-i] = rc->plane_y[(y+i)*rc->stride_y + x - 1];
+    } else {
+        for (i = 0; i < h; i++) edge[-1-i] = (stbv_u8)(maxv>>1);
+    }
+    edge[-1-w] = (x>0 && y>0) ? rc->plane_y[(y-1)*rc->stride_y + x - 1] : (stbv_u8)(maxv>>1);
+    for (i = 0; i < h; i++) {
+        for (j = 0; j < w; j++) rc->pred[i*w+j] = (stbv_u8)(maxv>>1);
+    }
+    for (i = 0; i < h; i++) {
+        for (j = 0; j < w; j++) {
+            int v;
+            v = rc->pred[i*w+j] + rc->cf[i*w+j];
+            if (v < 0) v = 0;
+            if (v > maxv) v = maxv;
+            if (y+i < rc->frame_h4*4 && x+j < rc->frame_w4*4) rc->plane_y[(y+i)*rc->stride_y + x + j] = (stbv_u8)v;
+        }
+    }
+}
+static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf) { (void)ud; (void)pl; (void)x4; (void)y4; (void)tx; (void)txtp; (void)eob; (void)cf; }
+static void stb_avif_recon_luma_pal(void *ud, const stbv_u8 *idx, int sz, int bw4, int bh4, const stbv_u16 *pal) { (void)ud; (void)idx; (void)sz; (void)bw4; (void)bh4; (void)pal; }
+static void stb_avif_recon_chroma_pal(void *ud, int pl, const stbv_u8 *idx, int sz, int cbw4, int cbh4, const stbv_u16 *pal) { (void)ud; (void)pl; (void)idx; (void)sz; (void)cbw4; (void)cbh4; (void)pal; }
+static struct stb_avif_scalar_recon g_scalar_recon;
+static stbv_av1_leaf_recon g_scalar_recon_cb;
+static int stb_avif_leaf_cb(struct stb_av1_tile_decoder *td, const struct stb_av1_tile_leaf_info *li, void *opaque)
+{
+    stbv_av1_leaf_state *state;
+    struct stb_avif_scalar_recon *recon;
+    struct stb_av1_seqhdr *seq;
+    struct stb_av1_framehdr *frame;
+    stbv_av1_leaf_tx_result out;
+    int r;
+    state = (stbv_av1_leaf_state *)opaque;
+    recon = &g_scalar_recon;
+    seq = (struct stb_av1_seqhdr *)td->seq;
+    frame = (struct stb_av1_framehdr *)td->frame;
+    r = stbv_av1_decode_leaf_syntax(&td->msac, &td->cdf, state, seq, frame, li->bs, li->bx, li->by, &out, &g_scalar_recon_cb);
+    return r;
+}
+static void stb_av1_decode_frame(struct stb_av1_tile_context *tc);
+static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const unsigned char *av1_data, size_t av1_size)
+{
+    struct stb_av1_internal_stream stream;
+    struct stb_av1_seqhdr seq;
+    struct stb_av1_framehdr frame;
+    int r;
+    int frame_w, frame_h, frame_w4, frame_h4, frame_w8, frame_h8;
+    stbv_u8 *above_mode, *left_mode, *above_tx, *left_tx, *above_res, *left_res;
+    stbv_u8 *above_cre0, *above_cre1, *left_cre0, *left_cre1;
+    stbv_u8 *above_skip, *left_skip, *above_pal_sz, *left_pal_sz, *above_pal_uv, *left_pal_uv;
+    stbv_u16 *above_pal0, *above_pal1, *left_pal0, *left_pal1;
+    struct stbv_av1_leaf_state_arrays arrays;
+    stbv_av1_leaf_state state;
+    struct stb_avif_scalar_recon recon;
+    int i;
     (void)av1_data; (void)av1_size;
-    stb_av1_decode_frame(tc);
+    memset(&stream, 0, sizeof(stream));
+    r = stb_av1_parse_internal_stream(&stream, av1_data, av1_size);
+    if (r < 0 || !stream.have_seq || !stream.have_frame) {
+        stb_av1_decode_frame(tc);
+        return 0;
+    }
+    seq = stream.seq;
+    frame = stream.frame;
+    frame_w = (int)frame.width[0];
+    frame_h = (int)frame.height;
+    if (frame_w != tc->frame_width || frame_h != tc->frame_height) {
+        stb_av1_decode_frame(tc);
+        return 0;
+    }
+    frame_w4 = ((frame_w + 7) >> 3) << 1;
+    frame_h4 = ((frame_h + 7) >> 3) << 1;
+    frame_w8 = (frame_w + 7) >> 3;
+    frame_h8 = (frame_h + 7) >> 3;
+    above_mode = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
+    left_mode = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
+    above_tx = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
+    left_tx = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
+    above_res = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
+    left_res = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
+    above_cre0 = (stbv_u8*)stb_avif_calloc(frame_w8, 1);
+    above_cre1 = (stbv_u8*)stb_avif_calloc(frame_w8, 1);
+    left_cre0 = (stbv_u8*)stb_avif_calloc(frame_h8, 1);
+    left_cre1 = (stbv_u8*)stb_avif_calloc(frame_h8, 1);
+    above_skip = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
+    left_skip = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
+    above_pal_sz = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
+    left_pal_sz = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
+    above_pal_uv = (stbv_u8*)stb_avif_calloc(frame_w8, 1);
+    left_pal_uv = (stbv_u8*)stb_avif_calloc(frame_h8, 1);
+    above_pal0 = (stbv_u16*)stb_avif_calloc(frame_w4*8, 2);
+    above_pal1 = (stbv_u16*)stb_avif_calloc(frame_w4*8, 2);
+    left_pal0 = (stbv_u16*)stb_avif_calloc(frame_h4*8, 2);
+    left_pal1 = (stbv_u16*)stb_avif_calloc(frame_h4*8, 2);
+    if (!above_mode || !left_mode || !above_tx || !left_tx || !above_res || !left_res || !above_cre0 || !above_cre1 || !left_cre0 || !left_cre1 || !above_skip || !left_skip || !above_pal_sz || !left_pal_sz || !above_pal_uv || !left_pal_uv || !above_pal0 || !above_pal1 || !left_pal0 || !left_pal1) return -1;
+    memset(&arrays, 0, sizeof(arrays));
+    arrays.above_mode = above_mode; arrays.above_mode_n = frame_w4;
+    arrays.left_mode = left_mode; arrays.left_mode_n = frame_h4;
+    arrays.above_tx = above_tx; arrays.above_tx_n = frame_w4;
+    arrays.left_tx = left_tx; arrays.left_tx_n = frame_h4;
+    arrays.above_res = above_res; arrays.above_res_n = frame_w4;
+    arrays.left_res = left_res; arrays.left_res_n = frame_h4;
+    arrays.above_cre[0] = above_cre0; arrays.above_cre_n[0] = frame_w8;
+    arrays.above_cre[1] = above_cre1; arrays.above_cre_n[1] = frame_w8;
+    arrays.left_cre[0] = left_cre0; arrays.left_cre_n[0] = frame_h8;
+    arrays.left_cre[1] = left_cre1; arrays.left_cre_n[1] = frame_h8;
+    arrays.above_skip = above_skip; arrays.above_skip_n = frame_w4;
+    arrays.left_skip = left_skip; arrays.left_skip_n = frame_h4;
+    arrays.above_pal_sz = above_pal_sz; arrays.above_pal_sz_n = frame_w4;
+    arrays.left_pal_sz = left_pal_sz; arrays.left_pal_sz_n = frame_h4;
+    arrays.above_pal_uv = above_pal_uv; arrays.above_pal_uv_n = frame_w8;
+    arrays.left_pal_uv = left_pal_uv; arrays.left_pal_uv_n = frame_h8;
+    arrays.above_pal[0] = above_pal0; arrays.above_pal[1] = above_pal1;
+    arrays.left_pal[0] = left_pal0; arrays.left_pal[1] = left_pal1;
+    arrays.above_pal_n = frame_w4; arrays.left_pal_n = frame_h4;
+    stbv_av1_leaf_state_init(&state, &arrays);
+    memset(&recon, 0, sizeof(recon));
+    recon.plane_y = tc->plane_y; recon.plane_u = tc->plane_u; recon.plane_v = tc->plane_v;
+    recon.stride_y = tc->stride_y; recon.stride_u = tc->stride_u; recon.stride_v = tc->stride_v;
+    recon.bit_depth = tc->bit_depth;
+    recon.frame_w4 = frame_w4; recon.frame_h4 = frame_h4;
+    for (i = 0; i < tc->frame_height; i++) {
+        int j;
+        for (j = 0; j < tc->frame_width; j++) tc->plane_y[i*tc->stride_y+j] = 128;
+    }
+    if (tc->plane_u && tc->plane_v) {
+        int h2, w2;
+        h2 = (tc->frame_height+1)>>1; w2 = (tc->frame_width+1)>>1;
+        for (i = 0; i < h2; i++) {
+            int j;
+            for (j = 0; j < w2; j++) { tc->plane_u[i*tc->stride_u+j]=128; tc->plane_v[i*tc->stride_v+j]=128; }
+        }
+    }
+    stb_avif_free_internal(above_mode); stb_avif_free_internal(left_mode);
+    stb_avif_free_internal(above_tx); stb_avif_free_internal(left_tx);
+    stb_avif_free_internal(above_res); stb_avif_free_internal(left_res);
+    stb_avif_free_internal(above_cre0); stb_avif_free_internal(above_cre1);
+    stb_avif_free_internal(left_cre0); stb_avif_free_internal(left_cre1);
+    stb_avif_free_internal(above_skip); stb_avif_free_internal(left_skip);
+    stb_avif_free_internal(above_pal_sz); stb_avif_free_internal(left_pal_sz);
+    stb_avif_free_internal(above_pal_uv); stb_avif_free_internal(left_pal_uv);
+    stb_avif_free_internal(above_pal0); stb_avif_free_internal(above_pal1);
+    stb_avif_free_internal(left_pal0); stb_avif_free_internal(left_pal1);
     return 0;
 }
 
 /* main tile decoding routine */
+
 static void stb_av1_decode_frame(struct stb_av1_tile_context *tc)
 {
     int sb_size = 64; /* superblock size: 64 or 128 depending on sequence */

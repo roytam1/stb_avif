@@ -21,6 +21,17 @@
 #error "include stb_av1_coef.h first"
 #endif
 
+/* Reconstruction callback interface (NULL-safe, for stb_avif integration). */
+typedef struct stbv_av1_leaf_recon {
+    void *ud;
+    stbv_i32 *cf;
+    void (*block_info)(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip);
+    void (*luma_txb)(void *ud, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf);
+    void (*chroma_txb)(void *ud, int pl, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf);
+    void (*luma_pal)(void *ud, const stbv_u8 *idx, int sz, int bw4, int bh4, const stbv_u16 *pal);
+    void (*chroma_pal)(void *ud, int pl, const stbv_u8 *idx, int sz, int cbw4, int cbh4, const stbv_u16 *pal);
+} stbv_av1_leaf_recon;
+
 static const stbv_u8 stbv_av1_skip_ctx[5][5] = {
     { 1, 2, 2, 2, 3 },
     { 2, 4, 4, 4, 5 },
@@ -304,6 +315,7 @@ typedef struct stbv_av1_leaf_decode_ctx {
     int y_mode_txtp;
     int block_skip;
     int reduced_txtp_set;
+    const stbv_av1_leaf_recon *recon;
 } stbv_av1_leaf_decode_ctx;
 
 /* Per-transform coefficient syntax for one plane (dav1d decode_coefs +
@@ -399,6 +411,16 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
             return -2;
         if (out)
             out->eob = eob;
+        if (c->recon && c->recon->cf) {
+            int n = stbv_av1_tx_dims[tx].w * stbv_av1_tx_dims[tx].h;
+            int i;
+            for (i = 0; i < n; i++) c->recon->cf[i] = cf[i];
+            if (is_chroma) {
+                if (c->recon->chroma_txb) c->recon->chroma_txb(c->recon->ud, chroma-1, x4, y4, tx, txtp, eob, c->recon->cf);
+            } else {
+                if (c->recon->luma_txb) c->recon->luma_txb(c->recon->ud, x4, y4, tx, txtp, eob, c->recon->cf);
+            }
+        }
         stbv_av1_res_mark(rs, x4, y4, txw4, txh4, res_ctx);
     }
     return 0;
@@ -651,7 +673,8 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                        const struct stb_av1_seqhdr *seq,
                                        const struct stb_av1_framehdr *frame,
                                        int bs, int bx4, int by4,
-                                       stbv_av1_leaf_tx_result *out)
+                                       stbv_av1_leaf_tx_result *out,
+                                       const stbv_av1_leaf_recon *recon)
 {
     struct stb_av1_intra_block intra;
     stbv_av1_leaf_decode_ctx c;
@@ -739,6 +762,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     if (stb_av1_intra_state_decode_leaf(msac, cdf, &state->intra,
                                         bx4, by4, bs, cfl_allowed, &intra))
         return -3;
+    if (c.recon && c.recon->block_info) c.recon->block_info(c.recon->ud, 1, bs, bx4, by4, has_chroma, cbw4, cbh4, uv_tx, tx0, state->pal_sz_y, state->pal_sz_uv, (int)block_skip);
 
     /* Palette: presence bools, size, colors and index map (dav1d decode.c
      * 1126-1193 + recon_tmpl read_pal_plane/read_pal_uv/read_pal_indices). */
@@ -796,12 +820,17 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                      bw4, bh4, state->pal_tmp,
                                      state->pal_order, state->pal_ctxs))
             return -7;
+        if (c.recon && c.recon->luma_pal) c.recon->luma_pal(c.recon->ud, state->pal_tmp, state->pal_sz_y, bw4, bh4, state->pal_y);
     }
     if (state->pal_sz_uv) {
         if (stbv_av1_palette_indices(msac, cdf, 1, state->pal_sz_uv,
                                      cbw4, cbh4, state->pal_tmp,
                                      state->pal_order, state->pal_ctxs))
             return -8;
+        if (c.recon && c.recon->chroma_pal) {
+            c.recon->chroma_pal(c.recon->ud, 0, state->pal_tmp, state->pal_sz_uv, cbw4, cbh4, state->pal_u);
+            c.recon->chroma_pal(c.recon->ud, 1, state->pal_tmp, state->pal_sz_uv, cbw4, cbh4, state->pal_v);
+        }
     }
 
     /* dav1d stores y_mode_nofilt in the neighbour mode maps (set_ctx):
@@ -895,6 +924,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     c.y_mode_nofilt = y_mode_nofilt;
     c.reduced_txtp_set = frame ? (int)frame->reduced_txtp_set : 0;
     c.block_skip = (int)block_skip;
+    c.recon = recon;
     /* TXTP mode: dav1d maps FILTER_PRED to the filter angle's directional
      * mode (dav1d_filter_mode_to_y_mode), unlike the neighbour-mode map
      * which uses DC_PRED. */
