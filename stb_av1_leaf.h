@@ -1045,7 +1045,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         int cby4 = by4 >> ss_ver;
         int first = 1;
 
-        if (!block_skip && !state->pal_sz_y) {
+        if (!block_skip) {
             for (y4 = by4; y4 < by4 + bh4; y4 += txh4) {
                 for (x4 = bx4; x4 < bx4 + bw4; x4 += txw4) {
                     r = stbv_av1_leaf_tx_plane(msac, cdf, &c, x4, y4,
@@ -1055,7 +1055,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                     if (r) return -4;
                 }
             }
-            if (has_chroma && !state->pal_sz_uv) {
+            if (has_chroma) {
                 for (pl = 0; pl < 2; pl++) {
                     for (cy4 = cby4; cy4 < cby4 + cbh4; cy4 += uv_txh4) {
                         for (cx4 = cbx4; cx4 < cbx4 + cbw4; cx4 += uv_txw4) {
