@@ -12,7 +12,7 @@
 #define STBV_AV1_CLIP(v,lo,hi) ((v)<(lo)?(lo):((v)>(hi)?(hi):(v)))
 #define CLIP(v) STBV_AV1_CLIP((v),min,max)
 static void
-inv_dct4_1d_internal_c(stbv_i32 *const c, const int stride,
+inv_dct4_1d_internal_c(stbv_i32 * c, const int stride,
                        const int min, const int max, const int tx64)
 {
     const int in0 = c[0 * stride], in1 = c[1 * stride];
@@ -38,14 +38,14 @@ inv_dct4_1d_internal_c(stbv_i32 *const c, const int stride,
     c[3 * stride] = CLIP(t0 - t3);
 }
 
-static void inv_dct4_1d_c(stbv_i32 *const c, const int stride,
+static void inv_dct4_1d_c(stbv_i32 * c, const int stride,
                           const int min, const int max)
 {
     inv_dct4_1d_internal_c(c, stride, min, max, 0);
 }
 
 static void
-inv_dct8_1d_internal_c(stbv_i32 *const c, const int stride,
+inv_dct8_1d_internal_c(stbv_i32 * c, const int stride,
                        const int min, const int max, const int tx64)
 {
     const int in1 = c[1 * stride], in3 = c[3 * stride];
@@ -95,14 +95,14 @@ inv_dct8_1d_internal_c(stbv_i32 *const c, const int stride,
     }
 }
 
-static void inv_dct8_1d_c(stbv_i32 *const c, const int stride,
+static void inv_dct8_1d_c(stbv_i32 * c, const int stride,
                           const int min, const int max)
 {
     inv_dct8_1d_internal_c(c, stride, min, max, 0);
 }
 
 static void
-inv_dct16_1d_internal_c(stbv_i32 *const c, const int stride,
+inv_dct16_1d_internal_c(stbv_i32 * c, const int stride,
                         const int min, const int max, int tx64)
 {
     const int in1 = c[1 * stride], in3 = c[3 * stride];
@@ -191,14 +191,14 @@ inv_dct16_1d_internal_c(stbv_i32 *const c, const int stride,
     c[15 * stride] = CLIP(t0 - t15a);
 }
 
-static void inv_dct16_1d_c(stbv_i32 *const c, const int stride,
+static void inv_dct16_1d_c(stbv_i32 * c, const int stride,
                            const int min, const int max)
 {
     inv_dct16_1d_internal_c(c, stride, min, max, 0);
 }
 
 static void
-inv_dct32_1d_internal_c(stbv_i32 *const c, const int stride,
+inv_dct32_1d_internal_c(stbv_i32 * c, const int stride,
                         const int min, const int max, const int tx64)
 {
     const int in1  = c[ 1 * stride], in3  = c[ 3 * stride];
@@ -384,13 +384,13 @@ inv_dct32_1d_internal_c(stbv_i32 *const c, const int stride,
     c[31 * stride] = CLIP(t0  - t31);
 }
 
-static void inv_dct32_1d_c(stbv_i32 *const c, const int stride,
+static void inv_dct32_1d_c(stbv_i32 * c, const int stride,
                            const int min, const int max)
 {
     inv_dct32_1d_internal_c(c, stride, min, max, 0);
 }
 
-static void inv_dct64_1d_c(stbv_i32 *const c, const int stride,
+static void inv_dct64_1d_c(stbv_i32 * c, const int stride,
                            const int min, const int max)
 {
     int t32a, t33a, t34a, t35a, t36a, t37a, t38a, t39a;
@@ -752,9 +752,9 @@ static void inv_dct64_1d_c(stbv_i32 *const c, const int stride,
 }
 
 static void
-inv_adst4_1d_internal_c(const stbv_i32 *const in, const int in_s,
+inv_adst4_1d_internal_c(const stbv_i32 * in, const int in_s,
                         const int min, const int max,
-                        stbv_i32 *const out, const int out_s)
+                        stbv_i32 * out, const int out_s)
 {
     const int in0 = in[0 * in_s], in1 = in[1 * in_s];
     const int in2 = in[2 * in_s], in3 = in[3 * in_s];
@@ -773,9 +773,9 @@ inv_adst4_1d_internal_c(const stbv_i32 *const in, const int in_s,
 }
 
 static void
-inv_adst8_1d_internal_c(const stbv_i32 *const in, const int in_s,
+inv_adst8_1d_internal_c(const stbv_i32 * in, const int in_s,
                         const int min, const int max,
-                        stbv_i32 *const out, const int out_s)
+                        stbv_i32 * out, const int out_s)
 {
     const int in0 = in[0 * in_s], in1 = in[1 * in_s];
     const int in2 = in[2 * in_s], in3 = in[3 * in_s];
@@ -823,9 +823,9 @@ inv_adst8_1d_internal_c(const stbv_i32 *const in, const int in_s,
 }
 
 static void
-inv_adst16_1d_internal_c(const stbv_i32 *const in, const int in_s,
+inv_adst16_1d_internal_c(const stbv_i32 * in, const int in_s,
                          const int min, const int max,
-                         stbv_i32 *const out, const int out_s)
+                         stbv_i32 * out, const int out_s)
 {
     const int in0  = in[ 0 * in_s], in1  = in[ 1 * in_s];
     const int in2  = in[ 2 * in_s], in3  = in[ 3 * in_s];
@@ -935,12 +935,12 @@ inv_adst16_1d_internal_c(const stbv_i32 *const in, const int in_s,
 }
 
 #define inv_adst_1d(sz) \
-static void inv_adst##sz##_1d_c(stbv_i32 *const c, const int stride, \
+static void inv_adst##sz##_1d_c(stbv_i32 * c, const int stride, \
                                 const int min, const int max) \
 { \
     inv_adst##sz##_1d_internal_c(c, stride, min, max, c, stride); \
 } \
-static void inv_flipadst##sz##_1d_c(stbv_i32 *const c, const int stride, \
+static void inv_flipadst##sz##_1d_c(stbv_i32 * c, const int stride, \
                                           const int min, const int max) \
 { \
     inv_adst##sz##_1d_internal_c(c, stride, min, max, \
@@ -953,7 +953,7 @@ inv_adst_1d(16)
 
 #undef inv_adst_1d
 
-static void inv_identity4_1d_c(stbv_i32 *const c, const int stride,
+static void inv_identity4_1d_c(stbv_i32 * c, const int stride,
                                const int min, const int max)
 {
     assert(stride > 0);
@@ -964,7 +964,7 @@ static void inv_identity4_1d_c(stbv_i32 *const c, const int stride,
     }
 }
 
-static void inv_identity8_1d_c(stbv_i32 *const c, const int stride,
+static void inv_identity8_1d_c(stbv_i32 * c, const int stride,
                                const int min, const int max)
 {
     assert(stride > 0);
@@ -973,7 +973,7 @@ static void inv_identity8_1d_c(stbv_i32 *const c, const int stride,
     }
 }
 
-static void inv_identity16_1d_c(stbv_i32 *const c, const int stride,
+static void inv_identity16_1d_c(stbv_i32 * c, const int stride,
                                 const int min, const int max)
 {
     assert(stride > 0);
@@ -984,7 +984,7 @@ static void inv_identity16_1d_c(stbv_i32 *const c, const int stride,
     }
 }
 
-static void inv_identity32_1d_c(stbv_i32 *const c, const int stride,
+static void inv_identity32_1d_c(stbv_i32 * c, const int stride,
                                 const int min, const int max)
 {
     assert(stride > 0);

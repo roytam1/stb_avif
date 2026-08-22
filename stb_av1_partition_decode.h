@@ -182,13 +182,17 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         if (bp == STBV_AV1_PARTITION_SPLIT) {
             if (bl == STBV_AV1_BL_8X8) {
                 int r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
+                                STBV_AV1_PARTITION_SPLIT, bx, by);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
+                                STBV_AV1_PARTITION_SPLIT, bx + 1, by);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by + 1);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
+                                STBV_AV1_PARTITION_SPLIT, bx, by + 1);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp,
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
+                                STBV_AV1_PARTITION_SPLIT,
                                             bx + 1, by + 1);
                 if (r) return r;
             } else {
@@ -292,13 +296,17 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         if (is_split) {
             if (bl >= STBV_AV1_BL_8X8) {
                 int r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
+                                STBV_AV1_PARTITION_SPLIT, bx, by);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
+                                STBV_AV1_PARTITION_SPLIT, bx + 1, by);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by + 1);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
+                                STBV_AV1_PARTITION_SPLIT, bx, by + 1);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by + 1);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
+                                STBV_AV1_PARTITION_SPLIT, bx + 1, by + 1);
                 if (r) return r;
                 stbv_av1_partition_set_context(d->above, d->left,
                     d->above_n, d->left_n, bx8, by8, hsz, bl,
@@ -337,13 +345,17 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         if (is_split) {
             if (bl >= STBV_AV1_BL_8X8) {
                 int r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
+                                STBV_AV1_PARTITION_SPLIT, bx, by);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
+                                STBV_AV1_PARTITION_SPLIT, bx + 1, by);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by + 1);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
+                                STBV_AV1_PARTITION_SPLIT, bx, by + 1);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by + 1);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
+                                STBV_AV1_PARTITION_SPLIT, bx + 1, by + 1);
                 if (r) return r;
                 stbv_av1_partition_set_context(d->above, d->left,
                     d->above_n, d->left_n, bx8, by8, hsz, bl,

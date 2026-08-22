@@ -3036,7 +3036,7 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
 {
     stbv_u16 tl[640];
     stbv_u16 *edge = tl + 320;
-    stbv_u8 *plane;
+    stbv_u16 *plane;
     int stride;
     const int pw = (rc->frame_w + 1) >> 1;
     const int ph = (rc->frame_h + 1) >> 1;
