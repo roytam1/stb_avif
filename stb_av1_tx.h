@@ -156,13 +156,24 @@ static int stbv_av1_tx_class(int tx_type)
     }
 }
 
-/* dav1d_txtp_from_uvmode: chroma txtp derived from the intra UV mode. */
+/* dav1d_txtp_from_uvmode: chroma txtp derived from the intra UV mode.
+ * Indexed by UV intra mode (DC,V,H,DDL,DDR,VR,HD,HU,VL,SMOOTH,
+ * SMOOTH_V,SMOOTH_H,PAETH,CFL). */
 static const unsigned char stbv_av1_txtp_from_uvmode[14] = {
-    STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_ADST_DCT, STBV_AV1_TX_DCT_ADST,
-    STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_ADST_DCT,
-    STBV_AV1_TX_DCT_ADST, STBV_AV1_TX_ADST_ADST, STBV_AV1_TX_DCT_DCT,
-    STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_DCT_DCT,
-    STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_DCT_DCT
+    /* DC */        STBV_AV1_TX_DCT_DCT,
+    /* VERT */      STBV_AV1_TX_ADST_DCT,
+    /* HOR */       STBV_AV1_TX_DCT_ADST,
+    /* DDL(45) */   STBV_AV1_TX_DCT_DCT,
+    /* DDR(135) */  STBV_AV1_TX_ADST_ADST,
+    /* VR(113) */   STBV_AV1_TX_ADST_DCT,
+    /* HD(157) */   STBV_AV1_TX_DCT_ADST,
+    /* HU(203) */   STBV_AV1_TX_DCT_ADST,
+    /* VL(67) */    STBV_AV1_TX_ADST_DCT,
+    /* SMOOTH */    STBV_AV1_TX_ADST_ADST,
+    /* SMOOTH_V */  STBV_AV1_TX_ADST_DCT,
+    /* SMOOTH_H */  STBV_AV1_TX_DCT_ADST,
+    /* PAETH */     STBV_AV1_TX_ADST_ADST,
+    /* CFL */       STBV_AV1_TX_DCT_DCT
 };
 
 /*

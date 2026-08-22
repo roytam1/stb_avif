@@ -644,10 +644,15 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
             if (rc_tok >= (15U << 11)) {
                 vtok = stbv_av1_coef_golomb(msac) + 15U;
                 vtok &= 0xfffffU;
+                /* Escape residuals wrap the product to 24 bits before the
+                 * right-shift, exactly like dav1d's ac_noqm path. */
+                dq = (int)((((stbv_u32)dq_ac * (stbv_u32)vtok) & 0xffffffU) >>
+                           (unsigned)dq_shift);
             } else {
                 vtok = rc_tok >> 11;
+                dq = (int)(((stbv_u32)dq_ac * (stbv_u32)vtok) >>
+                           (unsigned)dq_shift);
             }
-            dq = (int)(((stbv_u32)dq_ac * (stbv_u32)vtok) >> dq_shift);
             if (dq > cf_max + sign)
                 dq = cf_max + sign;
             cul_level += vtok;

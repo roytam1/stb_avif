@@ -60,6 +60,7 @@ static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
                                       int above_mode, int left_mode,
                                       int cbw4, int cbh4,
                                       int cfl_allowed,
+                                      int has_chroma,
                                       struct stb_av1_intra_block *b)
 {
     int ac, lc, mode;
@@ -85,6 +86,7 @@ static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
     b->cfl_alpha_u = 0;
     b->cfl_alpha_v = 0;
 
+    /* dav1d uses b_dim[2] + b_dim[3] >= 2 which equals log2(bw4)+log2(bh4)>=2 */
     if (cbw4 * cbh4 >= 4 && mode >= STBV_AV1_INTRA_VERT &&
         mode <= STBV_AV1_INTRA_VL) {
         sym = stb_av1_msac_symbol(msac,
@@ -92,6 +94,12 @@ static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
                                   6);
         b->y_angle = (int)sym - 3;
     }
+
+    /* Chroma syntax: only decoded when the block covers chroma samples.
+     * For subsampled formats with small blocks at even positions,
+     * has_chroma is false and NO chroma symbols are consumed. */
+    if (!has_chroma)
+        return 0;
 
     uvcdf = cdf->uv_mode + ((cfl_allowed ? 1 : 0) * 13 + mode) * 16;
     sym = stb_av1_msac_symbol(msac, uvcdf, cfl_allowed ? 13 : 12);

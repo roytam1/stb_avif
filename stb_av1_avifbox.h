@@ -223,7 +223,7 @@ static int stbv_av1_extract_avif_item(const stbv_u8 *file, size_t file_size,
                 if (file[p + 4] == 'i' && file[p + 5] == 'l' &&
                     file[p + 6] == 'o' && file[p + 7] == 'c') {
                     int raw;
-                    for (raw = 0; raw < 2; raw++) {
+                    for (raw = 1; raw >= 0; raw--) {
                         stbv_u64 off = 0, len = 0;
                         if (stbv_avif_parse_iloc(file + p + 8,
                                                  sub_end - p - 8, &off, &len,

@@ -243,17 +243,22 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
                                             bx + hsz, by + hsz);
                 if (r) return r;
             } else if (bp == STBV_AV1_PARTITION_H4) {
+                /* dav1d steps by hsz >> 1 (a quarter of the parent edge in
+                 * 4x4 units); integer hsz/4 is zero for 16px parents and
+                 * would stack all four sub-blocks at the same position. */
                 int i, r;
+                int step = hsz >> 1;
                 for (i = 0; i < 4; i++) {
-                    if (by + i * (hsz / 4) >= d->frame_h4) break;
-                    r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by + i * (hsz / 4));
+                    if (by + i * step >= d->frame_h4) break;
+                    r = stbv_av1_partition_emit(d, bl, bs, bp, bx, by + i * step);
                     if (r) return r;
                 }
             } else if (bp == STBV_AV1_PARTITION_V4) {
                 int i, r;
+                int step = hsz >> 1;
                 for (i = 0; i < 4; i++) {
-                    if (bx + i * (hsz / 4) >= d->frame_w4) break;
-                    r = stbv_av1_partition_emit(d, bl, bs, bp, bx + i * (hsz / 4), by);
+                    if (bx + i * step >= d->frame_w4) break;
+                    r = stbv_av1_partition_emit(d, bl, bs, bp, bx + i * step, by);
                     if (r) return r;
                 }
             } else {
@@ -287,6 +292,9 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
                 if (r) return r;
                 r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by + 1);
                 if (r) return r;
+                stbv_av1_partition_set_context(d->above, d->left,
+                    d->above_n, d->left_n, bx8, by8, hsz, bl,
+                    STBV_AV1_PARTITION_SPLIT);
                 return 0;
             }
             if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by)) return -1;
@@ -325,6 +333,9 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
                 if (r) return r;
                 r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by + 1);
                 if (r) return r;
+                stbv_av1_partition_set_context(d->above, d->left,
+                    d->above_n, d->left_n, bx8, by8, hsz, bl,
+                    STBV_AV1_PARTITION_SPLIT);
                 return 0;
             }
             if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by)) return -1;

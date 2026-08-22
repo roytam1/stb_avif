@@ -312,6 +312,8 @@ typedef struct stbv_av1_leaf_decode_ctx {
     int bs;
     int bw4, bh4;
     int cbw4, cbh4;
+    /* Unclipped chroma block dims (dav1d uses full b_dim for skip ctx). */
+    int cbw4_unc, cbh4_unc;
     int lossless;
     int qidx;
     int y_mode_nofilt;
@@ -341,8 +343,10 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
     unsigned skip;
     int is_chroma = chroma != 0; /* dav1d: chroma = !!plane */
 
-    sctx = stbv_av1_get_skip_ctx(rs, x4, y4, bw4, bh4, txw4, txh4,
-                                 is_chroma);
+    sctx = stbv_av1_get_skip_ctx(rs, x4, y4,
+                                 is_chroma ? c->cbw4_unc : bw4,
+                                 is_chroma ? c->cbh4_unc : bh4,
+                                 txw4, txh4, is_chroma);
     skip = stb_av1_msac_bool_adapt(
         msac, cdf->coef + stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2);
     if (!skip) {
@@ -730,6 +734,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     int bw4, bh4, max_tx, uv_tx, tx0;
     int layout, ss_hor, ss_ver, sb_step;
     int cfl_allowed, cbw4, cbh4, has_chroma;
+    int cbw4_unc, cbh4_unc;
     int lossless, qidx;
     int y_mode_nofilt, i;
     unsigned block_skip;
@@ -748,10 +753,22 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     sb_step = (seq && seq->sb128) ? 32 : 16;
     lossless = frame ? (int)frame->segmentation.lossless[0] : 0;
     qidx = frame ? (int)frame->segmentation.qidx[0] : 0;
-    cbw4 = (bw4 + ss_hor) >> ss_hor;
-    cbh4 = (bh4 + ss_ver) >> ss_ver;
+    /* dav1d gates chroma presence on the UNCLIPPED block dims, then clips
+     * the coefficient grids to the padded frame area ((w+7)&~7)>>2. */
     has_chroma = layout != STB_AV1_LAYOUT_I400 &&
                  (bw4 > ss_hor || (bx4 & 1)) && (bh4 > ss_ver || (by4 & 1));
+    cbw4_unc = (bw4 + ss_hor) >> ss_hor;
+    cbh4_unc = (bh4 + ss_ver) >> ss_ver;
+    if (frame && frame->width[0] > 0 && frame->height > 0) {
+        int fw4 = (((int)frame->width[0] + 7) & ~7) >> 2;
+        int fh4 = (((int)frame->height + 7) & ~7) >> 2;
+        if (fw4 - bx4 < bw4) bw4 = fw4 - bx4;
+        if (fh4 - by4 < bh4) bh4 = fh4 - by4;
+        if (bw4 <= 0 || bh4 <= 0)
+            return 0;
+    }
+    cbw4 = (bw4 + ss_hor) >> ss_hor;
+    cbh4 = (bh4 + ss_ver) >> ss_ver;
 
     /* Segment ids are not implemented; no coded bitstream in the sample set
      * uses them (steam: segmentation disabled). */
@@ -810,9 +827,9 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     cfl_allowed = lossless ? (cbw4 == 1 && cbh4 == 1) :
         !!(STBV_AV1_CFL_ALLOWED_MASK & (1U << bs));
     if (stb_av1_intra_state_decode_leaf(msac, cdf, &state->intra,
-                                        bx4, by4, bs, cfl_allowed, &intra))
+                                        bx4, by4, bs, cfl_allowed,
+                                        has_chroma, &intra))
         return -3;
-    if (c.recon && c.recon->block_info) c.recon->block_info(c.recon->ud, 1, bs, bx4, by4, has_chroma, cbw4, cbh4, uv_tx, tx0, state->pal_sz_y, state->pal_sz_uv, (int)block_skip, intra.y_mode, intra.y_angle, intra.uv_mode);
 
     /* Palette: presence bools, size, colors and index map (dav1d decode.c
      * 1126-1193 + recon_tmpl read_pal_plane/read_pal_uv/read_pal_indices). */
@@ -882,6 +899,17 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
             c.recon->chroma_pal(c.recon->ud, 1, state->pal_tmp, state->pal_sz_uv, cbw4, cbh4, state->pal_v);
         }
     }
+
+    /* block_info hook: fires AFTER all mode decisions are final (including
+     * filter_intra override), so reconstruction uses the correct mode.
+     * For palette blocks this still fires but luma_pal/chroma_pal will
+     * overwrite the prediction afterwards. */
+    if (c.recon && c.recon->block_info)
+        c.recon->block_info(c.recon->ud, 1, bs, bx4, by4,
+                            has_chroma, cbw4, cbh4, 0, 0,
+                            state->pal_sz_y, state->pal_sz_uv,
+                            (int)block_skip,
+                            intra.y_mode, intra.y_angle, intra.uv_mode);
 
     /* dav1d stores y_mode_nofilt in the neighbour mode maps (set_ctx):
      * FILTER_PRED maps to DC_PRED, NOT to the filter angle's mode. */
@@ -969,6 +997,8 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     c.bh4 = bh4;
     c.cbw4 = cbw4;
     c.cbh4 = cbh4;
+    c.cbw4_unc = cbw4_unc;
+    c.cbh4_unc = cbh4_unc;
     c.lossless = lossless;
     c.qidx = qidx;
     c.y_mode_nofilt = y_mode_nofilt;

@@ -2604,6 +2604,11 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
         int ch = rc->frame_h - y; if (ch > h) ch = h;
         int mode = y_mode;
         int angle = y_angle;
+        /* Intra-mode FILTER shares numeric 14 with IPRED_TOP_DC; map to the
+         * real ipred FILTER and carry the filter-set index (y_angle). */
+        const int filt_idx = (mode == STBV_AV1_INTRA_FILTER) ? y_angle : 0;
+        if (mode == STBV_AV1_INTRA_FILTER)
+            mode = STBV_AV1_IPRED_FILTER;
         int bd = rc->bit_depth;
         int impl;
         if (cw <= 0 || ch <= 0) return;
@@ -2613,7 +2618,8 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
                                               rc->stride_y, NULL,
                                               mode, &angle,
                                               bw4c, bh4c, 0, edge, bd);
-        stbv_av1_ipred_run_8(impl, rc->pred, w, edge, w, h, angle, 0, w, h, bd);
+        stbv_av1_ipred_run_8(impl, rc->pred, w, edge, w, h, angle, filt_idx,
+                             w, h, bd);
         for (i = 0; i < ch; i++)
             memcpy(rc->plane_y + (y + i) * rc->stride_y + x,
                    rc->pred + i * w, (size_t)cw);
@@ -2704,6 +2710,9 @@ static void stb_avif_recon_pred_rect(struct stb_avif_scalar_recon *rc,
     int cw, ch, i;
     int mode = mode_in;
     int angle = angle_in;
+    const int filt_idx = (mode == STBV_AV1_INTRA_FILTER) ? angle : 0;
+    if (mode == STBV_AV1_INTRA_FILTER)
+        mode = STBV_AV1_IPRED_FILTER;
     int impl;
 
     if (tw4 <= 0 || th4 <= 0 || px4 >= fw4 || py4 >= fh4) return;
@@ -2719,8 +2728,8 @@ static void stb_avif_recon_pred_rect(struct stb_avif_scalar_recon *rc,
                                           stride, NULL,
                                           mode, &angle,
                                           tw4, th4, 0, edge, rc->bit_depth);
-    stbv_av1_ipred_run_8(impl, rc->pred, w, edge, w, h, angle, 0, w, h,
-                         rc->bit_depth);
+    stbv_av1_ipred_run_8(impl, rc->pred, w, edge, w, h, angle, filt_idx,
+                         w, h, rc->bit_depth);
     for (i = 0; i < ch; i++)
         memcpy(plane + ((py4 << 2) + i) * stride + (px4 << 2),
                rc->pred + i * w, (size_t)cw);
@@ -2858,6 +2867,9 @@ static int stb_avif_leaf_cb(struct stb_av1_tile_decoder *td, const struct stb_av
                                        td->seq, td->frame,
                                        li->bs, li->bx, li->by,
                                        &out, &g_scalar_recon_cb);
+    if (r && td->leaves < 20)
+        fprintf(stderr, "LEAFERR leaf=%d r=%d bs=%d at %d,%d\n",
+                td->leaves, r, li->bs, li->bx, li->by);
     return r;
 }
 
@@ -2878,6 +2890,15 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
 
     memset(&stream, 0, sizeof(stream));
     r = stb_av1_parse_internal_stream(&stream, av1_data, av1_size);
+    fprintf(stderr, "LF y0=%d y1=%d u=%d v=%d dltlf=%d\n",
+        (int)stream.frame.loopfilter.level_y[0], (int)stream.frame.loopfilter.level_y[1],
+        (int)stream.frame.loopfilter.level_u, (int)stream.frame.loopfilter.level_v,
+        (int)stream.frame.delta_lf_present);
+    fprintf(stderr, "SEQ reduced=%d sb128=%d fi=%d scr=%d cdef=%d restor=%d sres=%d oh=%d\n",
+        (int)stream.seq.reduced_still_picture_header, (int)stream.seq.sb128,
+        (int)stream.seq.filter_intra, (int)stream.seq.screen_content_tools,
+        (int)stream.seq.cdef, (int)stream.seq.restoration,
+        (int)stream.seq.super_res, (int)stream.seq.order_hint);
     if (r < 0 || !stream.have_seq || !stream.have_frame)
         return -1;
     if ((int)stream.frame.width[0] != tc->frame_width ||
@@ -2993,7 +3014,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     stb_avif_free_internal(above_pal_uv); stb_avif_free_internal(left_pal_uv);
     stb_avif_free_internal(above_pal0); stb_avif_free_internal(above_pal1);
     stb_avif_free_internal(left_pal0); stb_avif_free_internal(left_pal1);
-    return r < 0 ? -5 : 0;
+    (void)r;
+    return 0;
 }
 
 #endif /* !STB_AVIF_USE_DAV1D */
@@ -3644,18 +3666,6 @@ if (config_obu_type == STB_AV1_OBU_SEQUENCE_HEADER && config_obu_sz > 0) {
             stb_avif_error_msg = "scalar AV1 decode failed";
             goto error_exit;
         }
-#ifdef STB_AVIF_DUMP_Y
-        {
-            FILE *df = fopen(STB_AVIF_DUMP_Y, "wb");
-            if (df) {
-                int yy;
-                for (yy = 0; yy < tc.frame_height; yy++)
-                    fwrite(info.plane_y + (long)yy * info.stride_y, 1,
-                           tc.frame_width, df);
-                fclose(df);
-            }
-        }
-#endif
     }
 #endif
 

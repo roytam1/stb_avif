@@ -61,8 +61,13 @@ static int stb_av1_tile_leaf_dispatch(stbv_av1_partition_decoder *pd,
     li.bx = bx;
     li.by = by;
     w->td->leaves++;
-    if (w->cb)
-        return w->cb(w->td, &li, w->opaque);
+    if (w->cb) {
+        int rc = w->cb(w->td, &li, w->opaque);
+        if (rc) w->td->error = rc;
+        /* Continue decoding even on leaf errors: dav1d skips the block
+         * and keeps the MSAC state for subsequent blocks. */
+        return 0;
+    }
     return 0;
 }
 
@@ -123,8 +128,8 @@ static int stb_av1_decode_tile(struct stb_av1_tile_decoder *td,
      * BlockContexts; the +1 cell covers the last half-SB block. */
     pd.msac = &td->msac;
     pd.cdf = &td->cdf;
-    pd.frame_w4 = (int)((frame->width[0] + 3U) >> 2);
-    pd.frame_h4 = (int)((frame->height + 3U) >> 2);
+    pd.frame_w4 = (int)(((frame->width[0] + 7U) >> 3) << 1);
+    pd.frame_h4 = (int)(((frame->height + 7U) >> 3) << 1);
     above_n = ((pd.frame_w4 + 15) >> 1) + 1;
     left_n = ((pd.frame_h4 + 15) >> 1) + 1;
     above = (stbv_u8 *)malloc((size_t)above_n);

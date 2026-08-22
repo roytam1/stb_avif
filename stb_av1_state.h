@@ -43,7 +43,7 @@ static int stb_av1_intra_state_decode_leaf(
     struct stb_av1_msac *msac, stbv_av1_cdf *cdf,
     struct stb_av1_intra_state *s,
     int bx4, int by4, int bs,
-    int cfl_allowed,
+    int cfl_allowed, int has_chroma,
     struct stb_av1_intra_block *out)
 {
     int bw4, bh4, above, left;
@@ -60,12 +60,9 @@ static int stb_av1_intra_state_decode_leaf(
         s->left_mode[by4] : STBV_AV1_INTRA_DC;
 
     if (stbv_av1_decode_intra_mode(msac, cdf, above, left,
-                                   bw4, bh4, cfl_allowed, out))
+                                   bw4, bh4, cfl_allowed, has_chroma, out))
         return -2;
 
-    /* The mode maps are written by the caller after the filter-intra bool:
-     * dav1d stores y_mode_nofilt (FILTER_PRED is converted to its underlying
-     * directional mode before set_ctx). */
     return 0;
 }
 
