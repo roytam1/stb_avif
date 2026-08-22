@@ -383,7 +383,8 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
         /* A skipped transform has the fixed residual context 0x40. */
         stbv_av1_res_mark(rs, x4, y4, txw4, txh4, (stbv_u8)0x40);
         if (c->recon && c->recon->cf) {
-            int n = stbv_av1_tx_dims[tx].w * stbv_av1_tx_dims[tx].h;
+            /* coefficient count is (4w)*(4h): dims are in 4x4 units */
+            int n = stbv_av1_tx_dims[tx].w * stbv_av1_tx_dims[tx].h * 16;
             int i;
             for (i = 0; i < n; i++) c->recon->cf[i] = 0;
             if (is_chroma) {
@@ -465,7 +466,8 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
         if (out)
             out->eob = eob;
         if (c->recon && c->recon->cf) {
-            int n = stbv_av1_tx_dims[tx].w * stbv_av1_tx_dims[tx].h;
+            /* coefficient count is (4w)*(4h): dims are in 4x4 units */
+            int n = stbv_av1_tx_dims[tx].w * stbv_av1_tx_dims[tx].h * 16;
             int i;
             for (i = 0; i < n; i++) c->recon->cf[i] = cf[i];
             if (is_chroma) {
@@ -922,6 +924,16 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     if (state->intra.left_mode) {
         for (i = 0; i < bh4 && (unsigned)(by4 + i) < state->intra.left_count; i++)
             state->intra.left_mode[by4 + i] = (stbv_u8)y_mode_nofilt;
+    }
+    if (has_chroma && state->intra.above_uvmode) {
+        const int cbx4u = bx4 >> ss_hor;
+        for (i = 0; i < cbw4_unc && (unsigned)(cbx4u + i) < state->intra.above_uv_count; i++)
+            state->intra.above_uvmode[cbx4u + i] = (stbv_u8)intra.uv_mode;
+    }
+    if (has_chroma && state->intra.left_uvmode) {
+        const int cby4u = by4 >> ss_ver;
+        for (i = 0; i < cbh4_unc && (unsigned)(cby4u + i) < state->intra.left_uv_count; i++)
+            state->intra.left_uvmode[cby4u + i] = (stbv_u8)intra.uv_mode;
     }
 
     /* Palette neighbour state (dav1d set_ctx: pal_sz maps + al_pal copies;

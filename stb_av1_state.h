@@ -23,6 +23,12 @@ struct stb_av1_intra_state {
     stbv_u8 *left_mode;
     unsigned int above_count;
     unsigned int left_count;
+    /* Chroma neighbour modes (dav1d BlockContext uvmode maps), indexed by
+     * chroma 4x4 position; only written for blocks with chroma. */
+    stbv_u8 *above_uvmode;
+    stbv_u8 *left_uvmode;
+    unsigned int above_uv_count;
+    unsigned int left_uv_count;
 };
 
 static void stb_av1_intra_state_init(struct stb_av1_intra_state *s,
@@ -35,8 +41,26 @@ static void stb_av1_intra_state_init(struct stb_av1_intra_state *s,
     s->left_mode = left_mode;
     s->above_count = above_count;
     s->left_count = left_count;
+    s->above_uvmode = 0;
+    s->left_uvmode = 0;
+    s->above_uv_count = 0;
+    s->left_uv_count = 0;
     if (above_mode) memset(above_mode, STBV_AV1_INTRA_DC, above_count);
     if (left_mode) memset(left_mode, STBV_AV1_INTRA_DC, left_count);
+}
+
+static void stb_av1_intra_state_set_uv(struct stb_av1_intra_state *s,
+                                       stbv_u8 *above_uvmode,
+                                       unsigned int above_uv_count,
+                                       stbv_u8 *left_uvmode,
+                                       unsigned int left_uv_count)
+{
+    s->above_uvmode = above_uvmode;
+    s->left_uvmode = left_uvmode;
+    s->above_uv_count = above_uv_count;
+    s->left_uv_count = left_uv_count;
+    if (above_uvmode) memset(above_uvmode, STBV_AV1_INTRA_DC, above_uv_count);
+    if (left_uvmode) memset(left_uvmode, STBV_AV1_INTRA_DC, left_uv_count);
 }
 
 static int stb_av1_intra_state_decode_leaf(
