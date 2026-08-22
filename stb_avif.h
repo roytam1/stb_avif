@@ -2551,9 +2551,10 @@ static void stb_av1_decode_superblock(struct stb_av1_tile_context *tc,
 /* SCALAR AV1 DECODER WITH RECON HOOKS  (C89)                                   */
 /* -------------------------------------------------------------------------- */
 struct stb_avif_scalar_recon {
-    stbv_u8 *plane_y;
-    stbv_u8 *plane_u;
-    stbv_u8 *plane_v;
+    /* Planes are stbv_u16 regardless of bit depth; strides are in pixels. */
+    stbv_u16 *plane_y;
+    stbv_u16 *plane_u;
+    stbv_u16 *plane_v;
     int stride_y;
     int stride_u;
     int stride_v;
@@ -2563,7 +2564,7 @@ struct stb_avif_scalar_recon {
     int frame_w;
     int frame_h;
     stbv_i32 cf[4096];
-    stbv_u8 pred[128 * 128];
+    stbv_u16 pred[128 * 128];
     int cur_bx4;
     int cur_by4;
     int cur_bw4;
@@ -2724,8 +2725,8 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
                                          int has_chroma,
                                          int y_mode, int y_angle, int uv_mode)
 {
-    stbv_u8 tl[640];
-    stbv_u8 *edge = tl + 320;
+    stbv_u16 tl[640];
+    stbv_u16 *edge = tl + 320;
     const int fw4 = (rc->frame_w + 3) >> 2;
     const int fh4 = (rc->frame_h + 3) >> 2;
     int bw4c, bh4c, i;
@@ -2752,7 +2753,7 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
         int bd = rc->bit_depth;
         int impl;
         if (cw <= 0 || ch <= 0) return;
-                impl = stbv_av1_prepare_intra_edges_8(bx4, bx4 > 0, by4, by4 > 0,
+                impl = stbv_av1_prepare_intra_edges_16(bx4, bx4 > 0, by4, by4 > 0,
                                               fw4, fh4,
                                               stb_avif_recon_block_edge_flags(rc, 1, bx4, by4, bw4c, bh4c),
                                               rc->plane_y + y * rc->stride_y + x,
@@ -2760,12 +2761,12 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
                                               mode, &angle,
                                               bw4c, bh4c,
                                               rc->intra_edge_filter, edge, bd);
-        stbv_av1_ipred_run_8(impl, rc->pred, w, edge, w, h,
+        stbv_av1_ipred_run_16(impl, rc->pred, w, edge, w, h,
                              angle | stb_avif_recon_edge_flags(rc, 1, bx4, by4),
                              filt_idx, w, h, bd);
         for (i = 0; i < ch; i++)
             memcpy(rc->plane_y + (y + i) * rc->stride_y + x,
-                   rc->pred + i * w, (size_t)cw);
+                   rc->pred + i * w, (size_t)(cw * sizeof(stbv_u16)));
     }
 
     /* Chroma prediction (chroma coords are the luma ones shifted) */
@@ -2795,7 +2796,7 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
         cw = ((rc->frame_w + 1) >> 1) - x; if (cw > w) cw = w;
         ch = ((rc->frame_h + 1) >> 1) - y; if (ch > h) ch = h;
         if (cw <= 0 || ch <= 0) return;
-        cimpl = stbv_av1_prepare_intra_edges_8(cx4, cx4 > 0, cy4, cy4 > 0,
+        cimpl = stbv_av1_prepare_intra_edges_16(cx4, cx4 > 0, cy4, cy4 > 0,
                                                cfw4, cfh4,
                                                stb_avif_recon_block_edge_flags(rc, 0, cx4, cy4, cbw4, cbh4),
                                                rc->plane_u + y * rc->stride_u + x,
@@ -2804,14 +2805,14 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
                                                cbw4, cbh4,
                                                rc->intra_edge_filter,
                                                edge, rc->bit_depth);
-        stbv_av1_ipred_run_8(cimpl, rc->pred, w, edge, w, h,
+        stbv_av1_ipred_run_16(cimpl, rc->pred, w, edge, w, h,
                              cangle | stb_avif_recon_edge_flags(rc, 0, cx4, cy4),
                              0, w, h, rc->bit_depth);
         for (i = 0; i < ch; i++) {
             memcpy(rc->plane_u + (y + i) * rc->stride_u + x,
-                   rc->pred + i * w, (size_t)cw);
+                   rc->pred + i * w, (size_t)(cw * sizeof(stbv_u16)));
             memcpy(rc->plane_v + (y + i) * rc->stride_v + x,
-                   rc->pred + i * w, (size_t)cw);
+                   rc->pred + i * w, (size_t)(cw * sizeof(stbv_u16)));
         }
     }
 }
@@ -2850,13 +2851,13 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
  * px4/py4/tw4/th4 are 4x4 units in the given plane's coordinate system;
  * pw/ph are the plane's pixel dimensions. */
 static void stb_avif_recon_pred_rect(struct stb_avif_scalar_recon *rc,
-                                     stbv_u8 *plane, int stride,
+                                     stbv_u16 *plane, int stride,
                                      int px4, int py4, int tw4, int th4,
                                      int pw, int ph,
                                      int mode_in, int angle_in)
 {
-    stbv_u8 tl[640];
-    stbv_u8 *edge = tl + 320;
+    stbv_u16 tl[640];
+    stbv_u16 *edge = tl + 320;
     const int fw4 = (pw + 3) >> 2;
     const int fh4 = (ph + 3) >> 2;
     int w = tw4 << 2;
@@ -2876,23 +2877,23 @@ static void stb_avif_recon_pred_rect(struct stb_avif_scalar_recon *rc,
     ch = ph - (py4 << 2); if (ch > h) ch = h;
     if (cw <= 0 || ch <= 0) return;
 
-    impl = stbv_av1_prepare_intra_edges_8(px4, px4 > 0, py4, py4 > 0,
+    impl = stbv_av1_prepare_intra_edges_16(px4, px4 > 0, py4, py4 > 0,
                                           fw4, fh4, 0,
                                           plane + (py4 << 2) * stride + (px4 << 2),
                                           stride, NULL,
                                           mode, &angle,
                                           tw4, th4, 0, edge, rc->bit_depth);
-    stbv_av1_ipred_run_8(impl, rc->pred, w, edge, w, h, angle, filt_idx,
+    stbv_av1_ipred_run_16(impl, rc->pred, w, edge, w, h, angle, filt_idx,
                          w, h, rc->bit_depth);
     for (i = 0; i < ch; i++)
         memcpy(plane + ((py4 << 2) + i) * stride + (px4 << 2),
-               rc->pred + i * w, (size_t)cw);
+               rc->pred + i * w, (size_t)(cw * sizeof(stbv_u16)));
 }
 
 /* Residual add: copy plane region to scratch, inverse-transform on top of it
  * (stbv_av1_inv_txfm_add8 adds residual in place), copy back clipped. */
 static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
-                                   stbv_u8 *plane, int stride,
+                                   stbv_u16 *plane, int stride,
                                    int px, int py, int pw, int ph,
                                    int tx, int txtp, int eob, stbv_i32 *cf)
 {
@@ -2903,12 +2904,15 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
     ch = ph - py; if (ch > h) ch = h;
     if (cw <= 0 || ch <= 0) return;
     for (i = 0; i < ch; i++) {
-        memcpy(rc->pred + i * w, plane + (py + i) * stride + px, (size_t)cw);
-        memset(rc->pred + i * w + cw, 0, (size_t)(w - cw));
+        memcpy(rc->pred + i * w, plane + (py + i) * stride + px,
+               (size_t)(cw * sizeof(stbv_u16)));
+        memset(rc->pred + i * w + cw, 0,
+               (size_t)((w - cw) * sizeof(stbv_u16)));
     }
-    stbv_av1_inv_txfm_add8(rc->pred, w, cf, eob, tx, txtp);
+    stbv_av1_inv_txfm_add16(rc->pred, w, cf, eob, tx, txtp, rc->bit_depth);
     for (i = 0; i < ch; i++)
-        memcpy(plane + (py + i) * stride + px, rc->pred + i * w, (size_t)cw);
+        memcpy(plane + (py + i) * stride + px, rc->pred + i * w,
+               (size_t)(cw * sizeof(stbv_u16)));
 }
 
 static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc, int x4, int y4, int tx);
@@ -2942,8 +2946,8 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
 static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
                                             int x4, int y4, int tx)
 {
-    stbv_u8 tl[640];
-    stbv_u8 *edge = tl + 320;
+    stbv_u16 tl[640];
+    stbv_u16 *edge = tl + 320;
     const int fw4 = (rc->frame_w + 3) >> 2;
     const int fh4 = (rc->frame_h + 3) >> 2;
     int w = stbv_av1_tx_dims[tx].w << 2;
@@ -2961,7 +2965,7 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
     cw = rc->frame_w - (x4 << 2); if (cw > w) cw = w;
     ch = rc->frame_h - (y4 << 2); if (ch > h) ch = h;
     if (cw <= 0 || ch <= 0) return;
-    impl = stbv_av1_prepare_intra_edges_8(x4, x4 > 0, y4, y4 > 0,
+    impl = stbv_av1_prepare_intra_edges_16(x4, x4 > 0, y4, y4 > 0,
                                           fw4, fh4,
                                           stb_avif_recon_txb_edge_flags(
                                               rc, 1, rc->cur_bx4, rc->cur_by4,
@@ -2976,12 +2980,12 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
                                           stbv_av1_tx_dims[tx].w,
                                           stbv_av1_tx_dims[tx].h,
                                           rc->intra_edge_filter, edge, bd);
-    stbv_av1_ipred_run_8(impl, rc->pred, w, edge, w, h,
+    stbv_av1_ipred_run_16(impl, rc->pred, w, edge, w, h,
                          angle | stb_avif_recon_edge_flags(rc, 1, x4, y4),
                          filt_idx, w, h, bd);
     for (i = 0; i < ch; i++)
         memcpy(rc->plane_y + ((y4 << 2) + i) * rc->stride_y + (x4 << 2),
-               rc->pred + i * w, (size_t)cw);
+               rc->pred + i * w, (size_t)(cw * sizeof(stbv_u16)));
 #ifdef STB_DBG_TRACE
     if (x4 == 0 && (y4 == 0 || y4 == 2) && getenv("PXDUMP")) {
         int _r2, _c2;
@@ -3029,8 +3033,8 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
 static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
                                               int pl, int x4, int y4, int tx)
 {
-    stbv_u8 tl[640];
-    stbv_u8 *edge = tl + 320;
+    stbv_u16 tl[640];
+    stbv_u16 *edge = tl + 320;
     stbv_u8 *plane;
     int stride;
     const int pw = (rc->frame_w + 1) >> 1;
@@ -3052,7 +3056,7 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
     cw = pw - (cx4 << 2); if (cw > w) cw = w;
     ch = ph - (cy4 << 2); if (ch > h) ch = h;
     if (cw <= 0 || ch <= 0) return;
-    cimpl = stbv_av1_prepare_intra_edges_8(cx4, cx4 > 0, cy4, cy4 > 0,
+    cimpl = stbv_av1_prepare_intra_edges_16(cx4, cx4 > 0, cy4, cy4 > 0,
                                            cfw4, cfh4,
                                            stb_avif_recon_txb_edge_flags(
                                                rc, 0, rc->cur_bx4, rc->cur_by4,
@@ -3067,20 +3071,21 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
                                            stbv_av1_tx_dims[tx].h,
                                            rc->intra_edge_filter,
                                            edge, rc->bit_depth);
-    stbv_av1_ipred_run_8(cimpl, rc->pred, w, edge, w, h,
+    stbv_av1_ipred_run_16(cimpl, rc->pred, w, edge, w, h,
                          cangle | stb_avif_recon_edge_flags(rc, 0, cx4, cy4),
                          0, w, h, rc->bit_depth);
     for (i = 0; i < ch; i++) {
         memcpy(rc->plane_u + ((cy4 << 2) + i) * rc->stride_u + (cx4 << 2),
-               rc->pred + i * w, (size_t)cw);
+               rc->pred + i * w, (size_t)(cw * sizeof(stbv_u16)));
         memcpy(rc->plane_v + ((cy4 << 2) + i) * rc->stride_v + (cx4 << 2),
-               rc->pred + i * w, (size_t)cw);
+               rc->pred + i * w, (size_t)(cw * sizeof(stbv_u16)));
     }
 }
 
 static void stb_avif_recon_luma_pal(void *ud, const stbv_u8 *idx, int sz, int bw4, int bh4, const stbv_u16 *pal)
 {
     struct stb_avif_scalar_recon *rc;
+    /* planes are stbv_u16 */
     int x, y, w, h, cw, ch, i, j;
     rc = (struct stb_avif_scalar_recon *)ud;
     if (!rc) return;
@@ -3094,7 +3099,7 @@ static void stb_avif_recon_luma_pal(void *ud, const stbv_u8 *idx, int sz, int bw
         for (j = 0; j < cw; j++) {
             int id = idx[i * w + j];
             rc->plane_y[(y + i) * rc->stride_y + x + j] =
-                (stbv_u8)(id < sz ? pal[id] : 0);
+                (stbv_u16)(id < sz ? pal[id] : 0);
         }
 }
 
@@ -3102,7 +3107,7 @@ static void stb_avif_recon_chroma_pal(void *ud, int pl, const stbv_u8 *idx, int 
 {
     struct stb_avif_scalar_recon *rc;
     int x, y, w, h, cw, ch, i, j;
-    stbv_u8 *plane;
+    stbv_u16 *plane;
     int stride;
     rc = (struct stb_avif_scalar_recon *)ud;
     if (!rc) return;
@@ -3119,7 +3124,7 @@ static void stb_avif_recon_chroma_pal(void *ud, int pl, const stbv_u8 *idx, int 
         for (j = 0; j < cw; j++) {
             int id = idx[i * w + j];
             plane[(y + i) * stride + x + j] =
-                (stbv_u8)(id < sz ? pal[id] : 0);
+                (stbv_u16)(id < sz ? pal[id] : 0);
         }
 }
 
@@ -3161,6 +3166,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     stbv_u8 *above_skip, *left_skip, *above_pal_sz, *left_pal_sz, *above_pal_uv, *left_pal_uv;
     stbv_u8 *above_uvmode, *left_uvmode;
     stbv_u16 *above_pal0, *above_pal1, *left_pal0, *left_pal1;
+    stbv_u16 *py16 = 0, *pu16 = 0, *pv16 = 0;
     int i, j, h2, w2;
 
     memset(&stream, 0, sizeof(stream));
@@ -3257,10 +3263,23 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                                stream.seq.ss_ver ? ((frame_h4 + 1) >> 1)
                                                   : frame_h4);
 
+    /* Internal planes are stbv_u16 (bit-depth generic); converted back to
+     * the 8-bit tc->planes after decoding. */
+    py16 = (stbv_u16*)stb_avif_calloc(
+        (size_t)tc->stride_y * (tc->frame_height + 64), sizeof(stbv_u16));
+    if (!py16) { r = -5; goto oom16; }
+    if (tc->plane_u && tc->plane_v) {
+        int uvh2 = ((tc->frame_height + 1) >> 1) + 32;
+        pu16 = (stbv_u16*)stb_avif_calloc(
+            (size_t)tc->stride_u * uvh2, sizeof(stbv_u16));
+        pv16 = (stbv_u16*)stb_avif_calloc(
+            (size_t)tc->stride_v * uvh2, sizeof(stbv_u16));
+        if (!pu16 || !pv16) { r = -5; goto oom16; }
+    }
     memset(&recon, 0, sizeof(recon));
-    recon.plane_y = tc->plane_y;
-    recon.plane_u = tc->plane_u;
-    recon.plane_v = tc->plane_v;
+    recon.plane_y = py16;
+    recon.plane_u = pu16;
+    recon.plane_v = pv16;
     recon.stride_y = tc->stride_y;
     recon.stride_u = tc->stride_u;
     recon.stride_v = tc->stride_v;
@@ -3286,9 +3305,6 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     g_scalar_recon_cb.luma_pal = stb_avif_recon_luma_pal;
     g_scalar_recon_cb.chroma_pal = stb_avif_recon_chroma_pal;
 
-    if ((int)stream.seq.hbd) {
-        return 0; /* grey safety net already filled */
-    }
     memset(&td, 0, sizeof(td));
     td.seq = &stream.seq;
     td.frame = &stream.frame;
@@ -3297,6 +3313,41 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                             stb_avif_leaf_cb, &state,
                             stb_avif_row_reset_cb);
 
+    /* Convert internal u16 planes to the caller's 8-bit planes. */
+    {
+        const int bd = stream.seq.hbd ? 10 : 8;
+        const int sh = bd - 8;
+        const int rndv = (1 << sh) >> 1;
+        int w, h, hh, y0, x0;
+        w = tc->frame_width;
+        h = tc->frame_height;
+        for (y0 = 0; y0 < h; y0++)
+            for (x0 = 0; x0 < w; x0++) {
+                unsigned v = (unsigned)py16[y0 * tc->stride_y + x0];
+                v = (v + (unsigned)rndv) >> sh;
+                tc->plane_y[y0 * tc->stride_y + x0] =
+                    (stbv_u8)(v > 255u ? 255u : v);
+            }
+        if (pu16 && pv16 && tc->plane_u && tc->plane_v) {
+            w = (tc->frame_width + 1) >> 1;
+            h = (tc->frame_height + 1) >> 1;
+            for (hh = 0; hh < h; hh++)
+                for (x0 = 0; x0 < w; x0++) {
+                    unsigned vu = (unsigned)pu16[hh * tc->stride_u + x0];
+                    unsigned vv = (unsigned)pv16[hh * tc->stride_v + x0];
+                    vu = (vu + (unsigned)rndv) >> sh;
+                    vv = (vv + (unsigned)rndv) >> sh;
+                    tc->plane_u[hh * tc->stride_u + x0] =
+                        (stbv_u8)(vu > 255u ? 255u : vu);
+                    tc->plane_v[hh * tc->stride_v + x0] =
+                        (stbv_u8)(vv > 255u ? 255u : vv);
+                }
+        }
+    }
+oom16:
+    if (py16) stb_avif_free_internal(py16);
+    if (pu16) stb_avif_free_internal(pu16);
+    if (pv16) stb_avif_free_internal(pv16);
     stb_avif_free_internal(above_mode); stb_avif_free_internal(left_mode);
     stb_avif_free_internal(above_tx); stb_avif_free_internal(left_tx);
     stb_avif_free_internal(above_res); stb_avif_free_internal(left_res);
