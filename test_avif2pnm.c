@@ -105,14 +105,27 @@ int main(int argc, char *argv[])
 
     /* Default file list */
     const char *files[] = {
-        "example_avif/fox.profile0.8bpc.yuv420.avif",
-        "example_avif/fox.profile0.10bpc.yuv420.avif",
-        "example_avif/kimono.avif",
-        "example_avif/G-0trmKXsAA1sQZ-thumb.avif",
-        "example_avif/G-0trmKXsAA1sQZ.avif",
-        "example_avif/Gb5RU6RWoAAQQ1n.avif",
-        "example_avif/red-at-12-oclock-with-color-profile-10bpc.avif",
-        "example_avif/steam_2253100.avif"
+"example_avif/fox.profile0.10bpc.yuv420.avif",
+"example_avif/fox.profile0.8bpc.yuv420.avif",
+"example_avif/fox.profile1.8bpc.yuv444.avif",
+"example_avif/fox.profile1.10bpc.yuv444.avif",
+"example_avif/fox.profile2.12bpc.yuv444.avif",
+"example_avif/G-0trmKXsAA1sQZ-thumb.avif",
+"example_avif/G-0trmKXsAA1sQZ.avif",
+"example_avif/Gb5RU6RWoAAQQ1n.avif",
+"example_avif/hato.profile0.10bpc.yuv420.avif",
+"example_avif/hato.profile0.10bpc.yuv420.monochrome.avif",
+"example_avif/hato.profile0.8bpc.yuv420.avif",
+"example_avif/hato.profile0.8bpc.yuv420.monochrome.avif",
+"example_avif/hato.profile2.10bpc.yuv422.avif",
+"example_avif/hato.profile2.10bpc.yuv422.monochrome.avif",
+"example_avif/hato.profile2.12bpc.yuv422.avif",
+"example_avif/hato.profile2.12bpc.yuv422.monochrome.avif",
+"example_avif/hato.profile2.8bpc.yuv422.avif",
+"example_avif/hato.profile2.8bpc.yuv422.monochrome.avif",
+"example_avif/kimono.avif",
+"example_avif/red-at-12-oclock-with-color-profile-10bpc.avif",
+"example_avif/steam_2253100.avif"
     };
     int num;
 
