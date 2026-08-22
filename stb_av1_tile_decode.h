@@ -103,8 +103,9 @@ static int stb_av1_decode_tile(struct stb_av1_tile_decoder *td,
         return -3;
     if (frame->superres_enabled)
         return -4;
-    if (seq->monochrome)
-        return -5;
+    /* Monochrome is supported: the sequence header maps it to layout I400,
+     * every leaf/chroma hook keys off that, and the caller sees NULL
+     * plane_u/plane_v. */
 
     memset(td, 0, sizeof(*td));
     td->seq = seq;
