@@ -3270,7 +3270,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         (size_t)tc->stride_y * (tc->frame_height + 64), sizeof(stbv_u16));
     if (!py16) { r = -5; goto oom16; }
     if (tc->plane_u && tc->plane_v) {
-        int uvh2 = ((tc->frame_height + 1) >> 1) + 32;
+        int uvh2 = (stream.seq.ss_ver ? ((tc->frame_height + 1) >> 1)
+                                      : tc->frame_height) + 32;
         pu16 = (stbv_u16*)stb_avif_calloc(
             (size_t)tc->stride_u * uvh2, sizeof(stbv_u16));
         pv16 = (stbv_u16*)stb_avif_calloc(
@@ -3315,6 +3316,11 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                             stb_avif_row_reset_cb);
 
     /* Convert internal u16 planes to the caller's 8-bit planes. */
+#ifdef STB_DBG_TRACE
+    fprintf(stderr, "CONV_ENTER pu16=%p pv16=%p tc_u=%p mono=%d\n",
+            (void*)pu16, (void*)pv16, (void*)tc->plane_u,
+            (int)stream.seq.monochrome);
+#endif
     {
         const int bd = stream.seq.hbd ? 10 : 8;
         const int sh = bd - 8;
@@ -3329,6 +3335,25 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                 tc->plane_y[y0 * tc->stride_y + x0] =
                     (stbv_u8)(v > 255u ? 255u : v);
             }
+#ifdef STB_DBG_TRACE
+        if (getenv("UVDUMP") && pu16 && pv16) {
+            int nz_u = 0, nz_v = 0, tot = 0;
+            int cw2 = (tc->frame_width + 1) >> 1, ch2 = (tc->frame_height + 1) >> 1;
+            int yy, xx;
+            unsigned long su = 0, sv = 0;
+            for (yy = 0; yy < ch2; yy++)
+                for (xx = 0; xx < cw2; xx++) {
+                    stbv_u16 a = pu16[yy * tc->stride_u + xx];
+                    stbv_u16 b = pv16[yy * tc->stride_v + xx];
+                    if (a) nz_u++;
+                    if (b) nz_v++;
+                    su += a; sv += b; tot++;
+                }
+            fprintf(stderr, "UVDUMP pu16 nz=%d/%d mean=%.1f  pv16 nz=%d/%d mean=%.1f\n",
+                    nz_u, tot, (double)su / (tot ? tot : 1),
+                    nz_v, tot, (double)sv / (tot ? tot : 1));
+        }
+#endif
         if (pu16 && pv16 && tc->plane_u && tc->plane_v) {
             w = (tc->frame_width + 1) >> 1;
             h = (tc->frame_height + 1) >> 1;
@@ -3920,6 +3945,14 @@ if (config_obu_type == STB_AV1_OBU_SEQUENCE_HEADER && config_obu_sz > 0) {
         /* enable_cdef in sh, not fh */
     }
 
+    /* Trust the av1C box colour fields over the legacy header re-parse:
+     * the quick bit-parse can mis-read monochrome/bit-depth on real files,
+     * which previously left chroma planes unallocated (grayscale output). */
+    sh.monochrome = info.monochrome;
+    sh.bit_depth = info.bit_depth;
+    sh.subsampling_x = info.chroma_subsampling_x;
+    sh.subsampling_y = info.chroma_subsampling_y;
+
     /* Allocate image planes */
     info.stride_y = (info.width + 31) & ~31;
     info.stride_u = ((info.width >> sh.subsampling_x) + 31) & ~31;
@@ -3941,6 +3974,11 @@ if (config_obu_type == STB_AV1_OBU_SEQUENCE_HEADER && config_obu_sz > 0) {
     }
 
     /* Initialize tile context */
+#ifdef STB_DBG_TRACE
+    fprintf(stderr, "ALLOCCHK sh_mono=%d sh_bd=%d ssx=%d ssy=%d info_mono=%d pu=%p su=%d\n",
+            sh.monochrome, sh.bit_depth, sh.subsampling_x, sh.subsampling_y,
+            info.monochrome, (void*)info.plane_u, info.stride_u);
+#endif
     tc.sh = &sh;
     tc.fh = &fh;
     tc.frame_width = fh.frame_width;
