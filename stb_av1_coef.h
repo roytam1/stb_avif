@@ -26,8 +26,9 @@
 static unsigned stbv_av1_coef_hi_tok(struct stb_av1_msac *s, stbv_u16 *cdf)
 {
     unsigned t;
+    unsigned v;
     t = stb_av1_msac_symbol(s, cdf, 3);
-    unsigned v = 3 + t;
+    v = 3 + t;
     if (t == 3) {
         t = stb_av1_msac_symbol(s, cdf, 3);
         v = 6 + t;

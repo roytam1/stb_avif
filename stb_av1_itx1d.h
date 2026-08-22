@@ -15,10 +15,10 @@ static void
 inv_dct4_1d_internal_c(stbv_i32 *const c, const int stride,
                        const int min, const int max, const int tx64)
 {
-    assert(stride > 0);
     const int in0 = c[0 * stride], in1 = c[1 * stride];
-
     int t0, t1, t2, t3;
+
+    assert(stride > 0);
     if (tx64) {
         t0 = t1 = (in0 * 181 + 128) >> 8;
         t2 = (in1 * 1567 + 2048) >> 12;
@@ -48,18 +48,18 @@ static void
 inv_dct8_1d_internal_c(stbv_i32 *const c, const int stride,
                        const int min, const int max, const int tx64)
 {
+    const int in1 = c[1 * stride], in3 = c[3 * stride];
+    int t4a, t5a, t6a, t7a;
+
     assert(stride > 0);
     inv_dct4_1d_internal_c(c, stride << 1, min, max, tx64);
 
-    const int in1 = c[1 * stride], in3 = c[3 * stride];
-
-    int t4a, t5a, t6a, t7a;
     if (tx64) {
         t4a = (in1 *   799 + 2048) >> 12;
         t5a = (in3 * -2276 + 2048) >> 12;
         t6a = (in3 *  3406 + 2048) >> 12;
         t7a = (in1 *  4017 + 2048) >> 12;
-    } else {
+    } else     {
         const int in5 = c[5 * stride], in7 = c[7 * stride];
 
         t4a = ((in1 *   799         - in7 * (4017 - 4096) + 2048) >> 12) - in7;
@@ -68,27 +68,31 @@ inv_dct8_1d_internal_c(stbv_i32 *const c, const int stride,
         t7a = ((in1 * (4017 - 4096) + in7 *  799          + 2048) >> 12) + in1;
     }
 
-    const int t4  = CLIP(t4a + t5a);
-              t5a = CLIP(t4a - t5a);
-    const int t7  = CLIP(t7a + t6a);
-              t6a = CLIP(t7a - t6a);
+    {
+        /* C90: all declarations first; t4/t7 must read the pre-update
+         * t5a/t6a, so compute them before the in-place updates below. */
+        const int t0 = c[0 * stride];
+        const int t1 = c[2 * stride];
+        const int t2 = c[4 * stride];
+        const int t3 = c[6 * stride];
+        const int t4 = CLIP(t4a + t5a);
+        const int t7 = CLIP(t7a + t6a);
+        int t5, t6;
 
-    const int t5  = ((t6a - t5a) * 181 + 128) >> 8;
-    const int t6  = ((t6a + t5a) * 181 + 128) >> 8;
+        t5a = CLIP(t4a - t5a);
+        t6a = CLIP(t7a - t6a);
+        t5  = ((t6a - t5a) * 181 + 128) >> 8;
+        t6  = ((t6a + t5a) * 181 + 128) >> 8;
 
-    const int t0 = c[0 * stride];
-    const int t1 = c[2 * stride];
-    const int t2 = c[4 * stride];
-    const int t3 = c[6 * stride];
-
-    c[0 * stride] = CLIP(t0 + t7);
-    c[1 * stride] = CLIP(t1 + t6);
-    c[2 * stride] = CLIP(t2 + t5);
-    c[3 * stride] = CLIP(t3 + t4);
-    c[4 * stride] = CLIP(t3 - t4);
-    c[5 * stride] = CLIP(t2 - t5);
-    c[6 * stride] = CLIP(t1 - t6);
-    c[7 * stride] = CLIP(t0 - t7);
+        c[0 * stride] = CLIP(t0 + t7);
+        c[1 * stride] = CLIP(t1 + t6);
+        c[2 * stride] = CLIP(t2 + t5);
+        c[3 * stride] = CLIP(t3 + t4);
+        c[4 * stride] = CLIP(t3 - t4);
+        c[5 * stride] = CLIP(t2 - t5);
+        c[6 * stride] = CLIP(t1 - t6);
+        c[7 * stride] = CLIP(t0 - t7);
+    }
 }
 
 static void inv_dct8_1d_c(stbv_i32 *const c, const int stride,
@@ -101,13 +105,14 @@ static void
 inv_dct16_1d_internal_c(stbv_i32 *const c, const int stride,
                         const int min, const int max, int tx64)
 {
-    assert(stride > 0);
-    inv_dct8_1d_internal_c(c, stride << 1, min, max, tx64);
-
     const int in1 = c[1 * stride], in3 = c[3 * stride];
     const int in5 = c[5 * stride], in7 = c[7 * stride];
-
+    int t0, t1, t2, t3, t4, t5, t6, t7;
+    int t8, t9, t10, t11, t12, t13, t14, t15;
     int t8a, t9a, t10a, t11a, t12a, t13a, t14a, t15a;
+
+    assert(stride > 0);
+    inv_dct8_1d_internal_c(c, stride << 1, min, max, tx64);
     if (tx64) {
         t8a  = (in1 *   401 + 2048) >> 12;
         t9a  = (in7 * -2598 + 2048) >> 12;
@@ -131,14 +136,14 @@ inv_dct16_1d_internal_c(stbv_i32 *const c, const int stride,
         t15a = ((in1  * (4076 - 4096) + in15 *   401         + 2048) >> 12) + in1;
     }
 
-    int t8  = CLIP(t8a  + t9a);
-    int t9  = CLIP(t8a  - t9a);
-    int t10 = CLIP(t11a - t10a);
-    int t11 = CLIP(t11a + t10a);
-    int t12 = CLIP(t12a + t13a);
-    int t13 = CLIP(t12a - t13a);
-    int t14 = CLIP(t15a - t14a);
-    int t15 = CLIP(t15a + t14a);
+    t8  = CLIP(t8a  + t9a);
+    t9  = CLIP(t8a  - t9a);
+    t10 = CLIP(t11a - t10a);
+    t11 = CLIP(t11a + t10a);
+    t12 = CLIP(t12a + t13a);
+    t13 = CLIP(t12a - t13a);
+    t14 = CLIP(t15a - t14a);
+    t15 = CLIP(t15a + t14a);
 
     t9a  = ((  t14 *  1567         - t9  * (3784 - 4096)  + 2048) >> 12) - t9;
     t14a = ((  t14 * (3784 - 4096) + t9  *  1567          + 2048) >> 12) + t14;
@@ -159,14 +164,14 @@ inv_dct16_1d_internal_c(stbv_i32 *const c, const int stride,
     t11  = ((t12a - t11a) * 181 + 128) >> 8;
     t12  = ((t12a + t11a) * 181 + 128) >> 8;
 
-    const int t0 = c[ 0 * stride];
-    const int t1 = c[ 2 * stride];
-    const int t2 = c[ 4 * stride];
-    const int t3 = c[ 6 * stride];
-    const int t4 = c[ 8 * stride];
-    const int t5 = c[10 * stride];
-    const int t6 = c[12 * stride];
-    const int t7 = c[14 * stride];
+    t0 = c[ 0 * stride];
+    t1 = c[ 2 * stride];
+    t2 = c[ 4 * stride];
+    t3 = c[ 6 * stride];
+    t4 = c[ 8 * stride];
+    t5 = c[10 * stride];
+    t6 = c[12 * stride];
+    t7 = c[14 * stride];
 
     c[ 0 * stride] = CLIP(t0 + t15a);
     c[ 1 * stride] = CLIP(t1 + t14);
@@ -196,16 +201,19 @@ static void
 inv_dct32_1d_internal_c(stbv_i32 *const c, const int stride,
                         const int min, const int max, const int tx64)
 {
-    assert(stride > 0);
-    inv_dct16_1d_internal_c(c, stride << 1, min, max, tx64);
-
     const int in1  = c[ 1 * stride], in3  = c[ 3 * stride];
     const int in5  = c[ 5 * stride], in7  = c[ 7 * stride];
     const int in9  = c[ 9 * stride], in11 = c[11 * stride];
     const int in13 = c[13 * stride], in15 = c[15 * stride];
-
+    int t0, t1, t2, t3, t4, t5, t6, t7;
+    int t8, t9, t10, t11, t12, t13, t14, t15;
+    int t16, t17, t18, t19, t20, t21, t22, t23;
+    int t24, t25, t26, t27, t28, t29, t30, t31;
     int t16a, t17a, t18a, t19a, t20a, t21a, t22a, t23a;
     int t24a, t25a, t26a, t27a, t28a, t29a, t30a, t31a;
+
+    assert(stride > 0);
+    inv_dct16_1d_internal_c(c, stride << 1, min, max, tx64);
     if (tx64) {
         t16a = (in1  *   201 + 2048) >> 12;
         t17a = (in15 * -2751 + 2048) >> 12;
@@ -247,22 +255,22 @@ inv_dct32_1d_internal_c(stbv_i32 *const c, const int stride,
         t31a = ((in1  * (4091 - 4096) + in31 *   201         + 2048) >> 12) + in1;
     }
 
-    int t16 = CLIP(t16a + t17a);
-    int t17 = CLIP(t16a - t17a);
-    int t18 = CLIP(t19a - t18a);
-    int t19 = CLIP(t19a + t18a);
-    int t20 = CLIP(t20a + t21a);
-    int t21 = CLIP(t20a - t21a);
-    int t22 = CLIP(t23a - t22a);
-    int t23 = CLIP(t23a + t22a);
-    int t24 = CLIP(t24a + t25a);
-    int t25 = CLIP(t24a - t25a);
-    int t26 = CLIP(t27a - t26a);
-    int t27 = CLIP(t27a + t26a);
-    int t28 = CLIP(t28a + t29a);
-    int t29 = CLIP(t28a - t29a);
-    int t30 = CLIP(t31a - t30a);
-    int t31 = CLIP(t31a + t30a);
+    t16 = CLIP(t16a + t17a);
+    t17 = CLIP(t16a - t17a);
+    t18 = CLIP(t19a - t18a);
+    t19 = CLIP(t19a + t18a);
+    t20 = CLIP(t20a + t21a);
+    t21 = CLIP(t20a - t21a);
+    t22 = CLIP(t23a - t22a);
+    t23 = CLIP(t23a + t22a);
+    t24 = CLIP(t24a + t25a);
+    t25 = CLIP(t24a - t25a);
+    t26 = CLIP(t27a - t26a);
+    t27 = CLIP(t27a + t26a);
+    t28 = CLIP(t28a + t29a);
+    t29 = CLIP(t28a - t29a);
+    t30 = CLIP(t31a - t30a);
+    t31 = CLIP(t31a + t30a);
 
     t17a = ((  t30 *   799         - t17 * (4017 - 4096)  + 2048) >> 12) - t17;
     t30a = ((  t30 * (4017 - 4096) + t17 *   799          + 2048) >> 12) + t30;
@@ -325,22 +333,22 @@ inv_dct32_1d_internal_c(stbv_i32 *const c, const int stride,
     t23a = ((t24  - t23 ) * 181 + 128) >> 8;
     t24a = ((t24  + t23 ) * 181 + 128) >> 8;
 
-    const int t0  = c[ 0 * stride];
-    const int t1  = c[ 2 * stride];
-    const int t2  = c[ 4 * stride];
-    const int t3  = c[ 6 * stride];
-    const int t4  = c[ 8 * stride];
-    const int t5  = c[10 * stride];
-    const int t6  = c[12 * stride];
-    const int t7  = c[14 * stride];
-    const int t8  = c[16 * stride];
-    const int t9  = c[18 * stride];
-    const int t10 = c[20 * stride];
-    const int t11 = c[22 * stride];
-    const int t12 = c[24 * stride];
-    const int t13 = c[26 * stride];
-    const int t14 = c[28 * stride];
-    const int t15 = c[30 * stride];
+    t0  = c[ 0 * stride];
+    t1  = c[ 2 * stride];
+    t2  = c[ 4 * stride];
+    t3  = c[ 6 * stride];
+    t4  = c[ 8 * stride];
+    t5  = c[10 * stride];
+    t6  = c[12 * stride];
+    t7  = c[14 * stride];
+    t8  = c[16 * stride];
+    t9  = c[18 * stride];
+    t10 = c[20 * stride];
+    t11 = c[22 * stride];
+    t12 = c[24 * stride];
+    t13 = c[26 * stride];
+    t14 = c[28 * stride];
+    t15 = c[30 * stride];
 
     c[ 0 * stride] = CLIP(t0  + t31);
     c[ 1 * stride] = CLIP(t1  + t30a);
@@ -385,9 +393,18 @@ static void inv_dct32_1d_c(stbv_i32 *const c, const int stride,
 static void inv_dct64_1d_c(stbv_i32 *const c, const int stride,
                            const int min, const int max)
 {
-    assert(stride > 0);
-    inv_dct32_1d_internal_c(c, stride << 1, min, max, 1);
-
+    int t32a, t33a, t34a, t35a, t36a, t37a, t38a, t39a;
+    int t40a, t41a, t42a, t43a, t44a, t45a, t46a, t47a;
+    int t48a, t49a, t50a, t51a, t52a, t53a, t54a, t55a;
+    int t56a, t57a, t58a, t59a, t60a, t61a, t62a, t63a;
+    int t32, t33, t34, t35, t36, t37, t38, t39;
+    int t40, t41, t42, t43, t44, t45, t46, t47;
+    int t48, t49, t50, t51, t52, t53, t54, t55;
+    int t56, t57, t58, t59, t60, t61, t62, t63;
+    int t0, t1, t2, t3, t4, t5, t6, t7;
+    int t8, t9, t10, t11, t12, t13, t14, t15;
+    int t16, t17, t18, t19, t20, t21, t22, t23;
+    int t24, t25, t26, t27, t28, t29, t30, t31;
     const int in1  = c[ 1 * stride], in3  = c[ 3 * stride];
     const int in5  = c[ 5 * stride], in7  = c[ 7 * stride];
     const int in9  = c[ 9 * stride], in11 = c[11 * stride];
@@ -397,71 +414,74 @@ static void inv_dct64_1d_c(stbv_i32 *const c, const int stride,
     const int in25 = c[25 * stride], in27 = c[27 * stride];
     const int in29 = c[29 * stride], in31 = c[31 * stride];
 
-    int t32a = (in1  *   101 + 2048) >> 12;
-    int t33a = (in31 * -2824 + 2048) >> 12;
-    int t34a = (in17 *  1660 + 2048) >> 12;
-    int t35a = (in15 * -1474 + 2048) >> 12;
-    int t36a = (in9  *   897 + 2048) >> 12;
-    int t37a = (in23 * -2191 + 2048) >> 12;
-    int t38a = (in25 *  2359 + 2048) >> 12;
-    int t39a = (in7  *  -700 + 2048) >> 12;
-    int t40a = (in5  *   501 + 2048) >> 12;
-    int t41a = (in27 * -2520 + 2048) >> 12;
-    int t42a = (in21 *  2019 + 2048) >> 12;
-    int t43a = (in11 * -1092 + 2048) >> 12;
-    int t44a = (in13 *  1285 + 2048) >> 12;
-    int t45a = (in19 * -1842 + 2048) >> 12;
-    int t46a = (in29 *  2675 + 2048) >> 12;
-    int t47a = (in3  *  -301 + 2048) >> 12;
-    int t48a = (in3  *  4085 + 2048) >> 12;
-    int t49a = (in29 *  3102 + 2048) >> 12;
-    int t50a = (in19 *  3659 + 2048) >> 12;
-    int t51a = (in13 *  3889 + 2048) >> 12;
-    int t52a = (in11 *  3948 + 2048) >> 12;
-    int t53a = (in21 *  3564 + 2048) >> 12;
-    int t54a = (in27 *  3229 + 2048) >> 12;
-    int t55a = (in5  *  4065 + 2048) >> 12;
-    int t56a = (in7  *  4036 + 2048) >> 12;
-    int t57a = (in25 *  3349 + 2048) >> 12;
-    int t58a = (in23 *  3461 + 2048) >> 12;
-    int t59a = (in9  *  3996 + 2048) >> 12;
-    int t60a = (in15 *  3822 + 2048) >> 12;
-    int t61a = (in17 *  3745 + 2048) >> 12;
-    int t62a = (in31 *  2967 + 2048) >> 12;
-    int t63a = (in1  *  4095 + 2048) >> 12;
+    assert(stride > 0);
+    inv_dct32_1d_internal_c(c, stride << 1, min, max, 1);
 
-    int t32 = CLIP(t32a + t33a);
-    int t33 = CLIP(t32a - t33a);
-    int t34 = CLIP(t35a - t34a);
-    int t35 = CLIP(t35a + t34a);
-    int t36 = CLIP(t36a + t37a);
-    int t37 = CLIP(t36a - t37a);
-    int t38 = CLIP(t39a - t38a);
-    int t39 = CLIP(t39a + t38a);
-    int t40 = CLIP(t40a + t41a);
-    int t41 = CLIP(t40a - t41a);
-    int t42 = CLIP(t43a - t42a);
-    int t43 = CLIP(t43a + t42a);
-    int t44 = CLIP(t44a + t45a);
-    int t45 = CLIP(t44a - t45a);
-    int t46 = CLIP(t47a - t46a);
-    int t47 = CLIP(t47a + t46a);
-    int t48 = CLIP(t48a + t49a);
-    int t49 = CLIP(t48a - t49a);
-    int t50 = CLIP(t51a - t50a);
-    int t51 = CLIP(t51a + t50a);
-    int t52 = CLIP(t52a + t53a);
-    int t53 = CLIP(t52a - t53a);
-    int t54 = CLIP(t55a - t54a);
-    int t55 = CLIP(t55a + t54a);
-    int t56 = CLIP(t56a + t57a);
-    int t57 = CLIP(t56a - t57a);
-    int t58 = CLIP(t59a - t58a);
-    int t59 = CLIP(t59a + t58a);
-    int t60 = CLIP(t60a + t61a);
-    int t61 = CLIP(t60a - t61a);
-    int t62 = CLIP(t63a - t62a);
-    int t63 = CLIP(t63a + t62a);
+    t32a = (in1  *   101 + 2048) >> 12;
+    t33a = (in31 * -2824 + 2048) >> 12;
+    t34a = (in17 *  1660 + 2048) >> 12;
+    t35a = (in15 * -1474 + 2048) >> 12;
+    t36a = (in9  *   897 + 2048) >> 12;
+    t37a = (in23 * -2191 + 2048) >> 12;
+    t38a = (in25 *  2359 + 2048) >> 12;
+    t39a = (in7  *  -700 + 2048) >> 12;
+    t40a = (in5  *   501 + 2048) >> 12;
+    t41a = (in27 * -2520 + 2048) >> 12;
+    t42a = (in21 *  2019 + 2048) >> 12;
+    t43a = (in11 * -1092 + 2048) >> 12;
+    t44a = (in13 *  1285 + 2048) >> 12;
+    t45a = (in19 * -1842 + 2048) >> 12;
+    t46a = (in29 *  2675 + 2048) >> 12;
+    t47a = (in3  *  -301 + 2048) >> 12;
+    t48a = (in3  *  4085 + 2048) >> 12;
+    t49a = (in29 *  3102 + 2048) >> 12;
+    t50a = (in19 *  3659 + 2048) >> 12;
+    t51a = (in13 *  3889 + 2048) >> 12;
+    t52a = (in11 *  3948 + 2048) >> 12;
+    t53a = (in21 *  3564 + 2048) >> 12;
+    t54a = (in27 *  3229 + 2048) >> 12;
+    t55a = (in5  *  4065 + 2048) >> 12;
+    t56a = (in7  *  4036 + 2048) >> 12;
+    t57a = (in25 *  3349 + 2048) >> 12;
+    t58a = (in23 *  3461 + 2048) >> 12;
+    t59a = (in9  *  3996 + 2048) >> 12;
+    t60a = (in15 *  3822 + 2048) >> 12;
+    t61a = (in17 *  3745 + 2048) >> 12;
+    t62a = (in31 *  2967 + 2048) >> 12;
+    t63a = (in1  *  4095 + 2048) >> 12;
+
+    t32 = CLIP(t32a + t33a);
+    t33 = CLIP(t32a - t33a);
+    t34 = CLIP(t35a - t34a);
+    t35 = CLIP(t35a + t34a);
+    t36 = CLIP(t36a + t37a);
+    t37 = CLIP(t36a - t37a);
+    t38 = CLIP(t39a - t38a);
+    t39 = CLIP(t39a + t38a);
+    t40 = CLIP(t40a + t41a);
+    t41 = CLIP(t40a - t41a);
+    t42 = CLIP(t43a - t42a);
+    t43 = CLIP(t43a + t42a);
+    t44 = CLIP(t44a + t45a);
+    t45 = CLIP(t44a - t45a);
+    t46 = CLIP(t47a - t46a);
+    t47 = CLIP(t47a + t46a);
+    t48 = CLIP(t48a + t49a);
+    t49 = CLIP(t48a - t49a);
+    t50 = CLIP(t51a - t50a);
+    t51 = CLIP(t51a + t50a);
+    t52 = CLIP(t52a + t53a);
+    t53 = CLIP(t52a - t53a);
+    t54 = CLIP(t55a - t54a);
+    t55 = CLIP(t55a + t54a);
+    t56 = CLIP(t56a + t57a);
+    t57 = CLIP(t56a - t57a);
+    t58 = CLIP(t59a - t58a);
+    t59 = CLIP(t59a + t58a);
+    t60 = CLIP(t60a + t61a);
+    t61 = CLIP(t60a - t61a);
+    t62 = CLIP(t63a - t62a);
+    t63 = CLIP(t63a + t62a);
 
     t33a = ((t33 * (4096 - 4076) + t62 *   401         + 2048) >> 12) - t33;
     t34a = ((t34 *  -401         + t61 * (4096 - 4076) + 2048) >> 12) - t61;
@@ -631,38 +651,38 @@ static void inv_dct64_1d_c(stbv_i32 *const c, const int stride,
     t55a = ((t40  + t55 ) * 181 + 128) >> 8;
 
     {
-        const int t0  = c[ 0 * stride];
-        const int t1  = c[ 2 * stride];
-        const int t2  = c[ 4 * stride];
-        const int t3  = c[ 6 * stride];
-        const int t4  = c[ 8 * stride];
-        const int t5  = c[10 * stride];
-        const int t6  = c[12 * stride];
-        const int t7  = c[14 * stride];
-        const int t8  = c[16 * stride];
-        const int t9  = c[18 * stride];
-        const int t10 = c[20 * stride];
-        const int t11 = c[22 * stride];
-        const int t12 = c[24 * stride];
-        const int t13 = c[26 * stride];
-        const int t14 = c[28 * stride];
-        const int t15 = c[30 * stride];
-        const int t16 = c[32 * stride];
-        const int t17 = c[34 * stride];
-        const int t18 = c[36 * stride];
-        const int t19 = c[38 * stride];
-        const int t20 = c[40 * stride];
-        const int t21 = c[42 * stride];
-        const int t22 = c[44 * stride];
-        const int t23 = c[46 * stride];
-        const int t24 = c[48 * stride];
-        const int t25 = c[50 * stride];
-        const int t26 = c[52 * stride];
-        const int t27 = c[54 * stride];
-        const int t28 = c[56 * stride];
-        const int t29 = c[58 * stride];
-        const int t30 = c[60 * stride];
-        const int t31 = c[62 * stride];
+        t0  = c[ 0 * stride];
+        t1  = c[ 2 * stride];
+        t2  = c[ 4 * stride];
+        t3  = c[ 6 * stride];
+        t4  = c[ 8 * stride];
+        t5  = c[10 * stride];
+        t6  = c[12 * stride];
+        t7  = c[14 * stride];
+        t8  = c[16 * stride];
+        t9  = c[18 * stride];
+        t10 = c[20 * stride];
+        t11 = c[22 * stride];
+        t12 = c[24 * stride];
+        t13 = c[26 * stride];
+        t14 = c[28 * stride];
+        t15 = c[30 * stride];
+        t16 = c[32 * stride];
+        t17 = c[34 * stride];
+        t18 = c[36 * stride];
+        t19 = c[38 * stride];
+        t20 = c[40 * stride];
+        t21 = c[42 * stride];
+        t22 = c[44 * stride];
+        t23 = c[46 * stride];
+        t24 = c[48 * stride];
+        t25 = c[50 * stride];
+        t26 = c[52 * stride];
+        t27 = c[54 * stride];
+        t28 = c[56 * stride];
+        t29 = c[58 * stride];
+        t30 = c[60 * stride];
+        t31 = c[62 * stride];
 
         c[ 0 * stride] = CLIP(t0  + t63a);
         c[ 1 * stride] = CLIP(t1  + t62);
@@ -736,10 +756,10 @@ inv_adst4_1d_internal_c(const stbv_i32 *const in, const int in_s,
                         const int min, const int max,
                         stbv_i32 *const out, const int out_s)
 {
-    assert(in_s > 0 && out_s != 0);
     const int in0 = in[0 * in_s], in1 = in[1 * in_s];
     const int in2 = in[2 * in_s], in3 = in[3 * in_s];
 
+    assert(in_s > 0 && out_s != 0);
     out[0 * out_s] = (( 1321         * in0 + (3803 - 4096) * in2 +
                        (2482 - 4096) * in3 + (3344 - 4096) * in1 + 2048) >> 12) +
                      in2 + in3 + in1;
@@ -757,12 +777,13 @@ inv_adst8_1d_internal_c(const stbv_i32 *const in, const int in_s,
                         const int min, const int max,
                         stbv_i32 *const out, const int out_s)
 {
-    assert(in_s > 0 && out_s != 0);
     const int in0 = in[0 * in_s], in1 = in[1 * in_s];
     const int in2 = in[2 * in_s], in3 = in[3 * in_s];
     const int in4 = in[4 * in_s], in5 = in[5 * in_s];
     const int in6 = in[6 * in_s], in7 = in[7 * in_s];
 
+    /* note: in_s > 0 and out_s != 0 are guaranteed by callers (assert
+     * omitted here so every declaration stays before any statement). */
     const int t0a = (((4076 - 4096) * in7 +   401         * in0 + 2048) >> 12) + in7;
     const int t1a = ((  401         * in7 - (4076 - 4096) * in0 + 2048) >> 12) - in0;
     const int t2a = (((3612 - 4096) * in5 +  1931         * in2 + 2048) >> 12) + in5;
@@ -806,7 +827,6 @@ inv_adst16_1d_internal_c(const stbv_i32 *const in, const int in_s,
                          const int min, const int max,
                          stbv_i32 *const out, const int out_s)
 {
-    assert(in_s > 0 && out_s != 0);
     const int in0  = in[ 0 * in_s], in1  = in[ 1 * in_s];
     const int in2  = in[ 2 * in_s], in3  = in[ 3 * in_s];
     const int in4  = in[ 4 * in_s], in5  = in[ 5 * in_s];
@@ -816,6 +836,8 @@ inv_adst16_1d_internal_c(const stbv_i32 *const in, const int in_s,
     const int in12 = in[12 * in_s], in13 = in[13 * in_s];
     const int in14 = in[14 * in_s], in15 = in[15 * in_s];
 
+    /* note: in_s > 0 and out_s != 0 are guaranteed by callers (assert
+     * omitted here so every declaration stays before any statement). */
     int t0  = ((in15 * (4091 - 4096) + in0  *   201         + 2048) >> 12) + in15;
     int t1  = ((in15 *   201         - in0  * (4091 - 4096) + 2048) >> 12) - in0;
     int t2  = ((in13 * (3973 - 4096) + in2  *   995         + 2048) >> 12) + in13;

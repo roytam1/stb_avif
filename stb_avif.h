@@ -1017,7 +1017,7 @@ static int stb_av1_decode_uniform(struct stb_av1_bool_reader *br, int n)
     m = (1 << l) - n;
     v = (int)stb_av1_bool_decode_literal(br, l - 1);
     if (v < m) return v;
-    return (v << 1) | stb_av1_bool_decode(br, 128) - m;
+    return (v << 1) | (stb_av1_bool_decode(br, 128) - m);
 }
 
 /* NSYM symbol decoding (non-symmetric) with cumulative probabilities */
@@ -2741,17 +2741,19 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
         int y = by4 << 2;
         int w = bw4 << 2;
         int h = bh4 << 2;
-        int cw = rc->frame_w - x; if (cw > w) cw = w;
-        int ch = rc->frame_h - y; if (ch > h) ch = h;
+        int cw, ch;
         int mode = y_mode;
         int angle = y_angle;
         /* Intra-mode FILTER shares numeric 14 with IPRED_TOP_DC; map to the
          * real ipred FILTER and carry the filter-set index (y_angle). */
-        const int filt_idx = (mode == STBV_AV1_INTRA_FILTER) ? y_angle : 0;
-        if (mode == STBV_AV1_INTRA_FILTER)
-            mode = STBV_AV1_IPRED_FILTER;
         int bd = rc->bit_depth;
         int impl;
+        const int filt_idx = (mode == STBV_AV1_INTRA_FILTER) ? y_angle : 0;
+
+        cw = rc->frame_w - x; if (cw > w) cw = w;
+        ch = rc->frame_h - y; if (ch > h) ch = h;
+        if (mode == STBV_AV1_INTRA_FILTER)
+            mode = STBV_AV1_IPRED_FILTER;
         if (cw <= 0 || ch <= 0) return;
                 impl = stbv_av1_prepare_intra_edges_16(bx4, bx4 > 0, by4, by4 > 0,
                                               fw4, fh4,
@@ -2865,10 +2867,10 @@ static void stb_avif_recon_pred_rect(struct stb_avif_scalar_recon *rc,
     int cw, ch, i;
     int mode = mode_in;
     int angle = angle_in;
+    int impl;
     const int filt_idx = (mode == STBV_AV1_INTRA_FILTER) ? angle : 0;
     if (mode == STBV_AV1_INTRA_FILTER)
         mode = STBV_AV1_IPRED_FILTER;
-    int impl;
 
     if (tw4 <= 0 || th4 <= 0 || px4 >= fw4 || py4 >= fh4) return;
     if (tw4 > fw4 - px4) tw4 = fw4 - px4;
@@ -3003,11 +3005,10 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
 static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf)
 {
     struct stb_avif_scalar_recon *rc;
-    stbv_u8 *plane;
+    stbv_u16 *plane;
     int stride, pw, ph;
     int txw4 = stbv_av1_tx_dims[tx].w;
     int txh4 = stbv_av1_tx_dims[tx].h;
-    int cm;
     (void)eob;
     rc = (struct stb_avif_scalar_recon *)ud;
     if (!rc || !rc->plane_u || !rc->plane_v) return;

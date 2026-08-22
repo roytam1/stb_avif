@@ -12,9 +12,10 @@
 
 #ifdef STB_AV1_PARTITION_DEBUG
 #include <stdio.h>
-#define STBV_AV1_PARTDBG(...) fprintf(stderr, __VA_ARGS__)
-#else
-#define STBV_AV1_PARTDBG(...)
+/* Tracing uses plain #ifdef blocks instead of variadic macros: C89 and
+ * MSVC 6.0 have no support for '...' macro parameters.  The 64-bit MSAC
+ * state is printed as two 32-bit halves to stay off '%ll' formats. */
+#define STBV_AV1_PART_TRACE 1
 #endif
 
 #ifndef STB_AV1_PARTITION_H
@@ -163,13 +164,18 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
     if (have_h_split && have_v_split) {
         bp = (int)stb_av1_msac_symbol(d->msac, pc,
                                       stbv_av1_partition_type_count[bl]);
-        STBV_AV1_PARTDBG("P y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%016llx c=%d\n",
-                         by, bx, bl, ctx, bp, d->msac->rng,
-                         (unsigned long long)d->msac->dif,
-                         d->msac->cnt);
+#ifdef STBV_AV1_PART_TRACE
+        fprintf(stderr, "P y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%08x%08x c=%d\n",
+                by, bx, bl, ctx, bp, d->msac->rng,
+                (unsigned)(d->msac->dif >> 32), (unsigned)d->msac->dif,
+                d->msac->cnt);
+#endif
         if (bp < 0 || bp >= STBV_AV1_N_PARTITIONS) {
-            STBV_AV1_PARTDBG("PARDEC bl=%d bx=%d by=%d sym=%d rng=%u dif=%08x cnt=%d\n",
-                             bl, bx, by, bp, d->msac->rng, d->msac->dif, d->msac->cnt);
+#ifdef STBV_AV1_PART_TRACE
+            fprintf(stderr, "PARDEC bl=%d bx=%d by=%d sym=%d rng=%u dif=%08x cnt=%d\n",
+                    bl, bx, by, bp, d->msac->rng, (unsigned)d->msac->dif,
+                    d->msac->cnt);
+#endif
             return -1;
         }
 
@@ -277,10 +283,12 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         unsigned int is_split;
         is_split = stb_av1_msac_bool(d->msac,
                                      stbv_av1_gather_top_partition_prob(pc, bl));
-        STBV_AV1_PARTDBG("P y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%08x c=%d\n",
-                         by, bx, bl, ctx, is_split ? STBV_AV1_PARTITION_SPLIT
-                                                   : STBV_AV1_PARTITION_H,
-                         d->msac->rng, d->msac->dif, d->msac->cnt);
+#ifdef STBV_AV1_PART_TRACE
+        fprintf(stderr, "P y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%08x c=%d\n",
+                by, bx, bl, ctx, is_split ? STBV_AV1_PARTITION_SPLIT
+                                          : STBV_AV1_PARTITION_H,
+                d->msac->rng, (unsigned)d->msac->dif, d->msac->cnt);
+#endif
         if (is_split) {
             if (bl >= STBV_AV1_BL_8X8) {
                 int r;
@@ -303,7 +311,9 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         /* Bottom edge: the only legal non-split partition is H. */
         bs = stbv_av1_block_sizes[bl][STBV_AV1_PARTITION_H][0];
         if (bs == 0xff) {
-            STBV_AV1_PARTDBG("PARDEC-H bs=ff bl=%d bx=%d by=%d\n", bl, bx, by);
+#ifdef STBV_AV1_PART_TRACE
+            fprintf(stderr, "PARDEC-H bs=ff bl=%d bx=%d by=%d\n", bl, bx, by);
+#endif
             return -1;
         }
         {
@@ -318,10 +328,12 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         unsigned int is_split;
         is_split = stb_av1_msac_bool(d->msac,
                                      stbv_av1_gather_left_partition_prob(pc, bl));
-        STBV_AV1_PARTDBG("P y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%08x c=%d\n",
-                         by, bx, bl, ctx, is_split ? STBV_AV1_PARTITION_SPLIT
-                                                   : STBV_AV1_PARTITION_V,
-                         d->msac->rng, d->msac->dif, d->msac->cnt);
+#ifdef STBV_AV1_PART_TRACE
+        fprintf(stderr, "P y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%08x c=%d\n",
+                by, bx, bl, ctx, is_split ? STBV_AV1_PARTITION_SPLIT
+                                          : STBV_AV1_PARTITION_V,
+                d->msac->rng, (unsigned)d->msac->dif, d->msac->cnt);
+#endif
         if (is_split) {
             if (bl >= STBV_AV1_BL_8X8) {
                 int r;
@@ -344,7 +356,9 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         /* Right edge: the only legal non-split partition is V. */
         bs = stbv_av1_block_sizes[bl][STBV_AV1_PARTITION_V][0];
         if (bs == 0xff) {
-            STBV_AV1_PARTDBG("PARDEC-V bs=ff bl=%d bx=%d by=%d\n", bl, bx, by);
+#ifdef STBV_AV1_PART_TRACE
+            fprintf(stderr, "PARDEC-V bs=ff bl=%d bx=%d by=%d\n", bl, bx, by);
+#endif
             return -1;
         }
         {
