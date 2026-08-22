@@ -2819,7 +2819,7 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
     }
 }
 
-static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode)
+static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode, int cfl_alpha_u, int cfl_alpha_v)
 {
     struct stb_avif_scalar_recon *rc;
     int bw4, bh4;
@@ -2834,6 +2834,8 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
     rc->y_mode = y_mode;
     rc->y_angle = y_angle;
     rc->uv_mode = uv_mode;
+    rc->cfl_alpha_u = cfl_alpha_u;
+    rc->cfl_alpha_v = cfl_alpha_v;
     rc->block_skip = skip;
     rc->has_chroma = has_chroma;
     rc->pal_y = pal_sz_y;
@@ -3045,11 +3047,11 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
     const int cfw4 = (lfw4 + rc->ss_hor) >> rc->ss_hor;
     const int cfh4 = (lfh4 + rc->ss_ver) >> rc->ss_ver;
     int cx4 = x4, cy4 = y4, cm, cangle = 0, cimpl;
-    int w, h, cw, ch, i;
-    (void)pl;
+    int w, h, cw, ch, i, j;
+    stbv_i32 lac[32 * 32];
     if (!rc->plane_u || !rc->plane_v || !rc->has_chroma) return;
-    plane = rc->plane_u;
-    stride = rc->stride_u;
+    plane = pl == 0 ? rc->plane_u : rc->plane_v;
+    stride = pl == 0 ? rc->stride_u : rc->stride_v;
     cm = rc->uv_mode == STBV_AV1_INTRA_CFL ? STBV_AV1_INTRA_DC : rc->uv_mode;
     if (cx4 >= cfw4 || cy4 >= cfh4) return;
     w = stbv_av1_tx_dims[tx].w << 2;
@@ -3075,10 +3077,56 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
     stbv_av1_ipred_run_16(cimpl, rc->pred, w, edge, w, h,
                          cangle | stb_avif_recon_edge_flags(rc, 0, cx4, cy4),
                          0, w, h, rc->bit_depth);
+    /* Chroma-from-luma: chroma = DC + alpha * (luma_ac - luma_dc).
+     * A zero alpha means a flat mid-grey base instead of the edge DC
+     * (dav1d ipred_cfl_126/128). */
+    if (rc->uv_mode == STBV_AV1_INTRA_CFL && !rc->block_skip) {
+        const int alpha = pl == 0 ? rc->cfl_alpha_u : rc->cfl_alpha_v;
+        const stbv_u16 mx = (stbv_u16)((1 << rc->bit_depth) - 1);
+        if (!alpha) {
+            const stbv_u16 dc_flat = (stbv_u16)(128 << (rc->bit_depth - 8));
+            for (i = 0; i < ch; i++)
+                for (j = 0; j < cw; j++)
+                    rc->pred[i * w + j] = dc_flat;
+        } else {
+            const int lx0 = (cx4 << 2) << rc->ss_hor;
+            const int ly0 = (cy4 << 2) << rc->ss_ver;
+            int x, y;
+            long sum = 0;
+            int n = 0, avg;
+            for (y = 0; y < ch; y++) {
+                for (x = 0; x < cw; x++) {
+                    int lx = lx0 + (x << rc->ss_hor);
+                    int ly = ly0 + (y << rc->ss_ver);
+                    int dx = 1 << rc->ss_hor, dy = 1 << rc->ss_ver;
+                    int sx, sy, s = 0, cnt = 0;
+                    for (sy = 0; sy < dy; sy++)
+                        for (sx = 0; sx < dx; sx++) {
+                            if (lx + sx < rc->frame_w &&
+                                ly + sy < rc->frame_h) {
+                                s += (int)rc->plane_y[(ly + sy) * rc->stride_y +
+                                                      lx + sx];
+                                cnt++;
+                            }
+                        }
+                    lac[y * cw + x] = cnt ? (s + (cnt >> 1)) / cnt : 0;
+                    sum += lac[y * cw + x];
+                    n++;
+                }
+            }
+            avg = (int)((sum + (n >> 1)) / n);
+            for (i = 0; i < ch; i++)
+                for (j = 0; j < cw; j++) {
+                    stbv_i32 d = lac[i * cw + j] - avg;
+                    stbv_i32 v = (stbv_i32)rc->pred[i * w + j] +
+                                 ((alpha * (d << 6) + 32) >> 6);
+                    rc->pred[i * w + j] =
+                        (stbv_u16)(v < 0 ? 0 : (v > mx ? mx : v));
+                }
+        }
+    }
     for (i = 0; i < ch; i++) {
-        memcpy(rc->plane_u + ((cy4 << 2) + i) * rc->stride_u + (cx4 << 2),
-               rc->pred + i * w, (size_t)(cw * sizeof(stbv_u16)));
-        memcpy(rc->plane_v + ((cy4 << 2) + i) * rc->stride_v + (cx4 << 2),
+        memcpy(plane + ((cy4 << 2) + i) * stride + (cx4 << 2),
                rc->pred + i * w, (size_t)(cw * sizeof(stbv_u16)));
     }
 }

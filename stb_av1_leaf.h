@@ -28,7 +28,7 @@
 typedef struct stbv_av1_leaf_recon {
     void *ud;
     stbv_i32 *cf;
-    void (*block_info)(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode);
+    void (*block_info)(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode, int cfl_alpha_u, int cfl_alpha_v);
     void (*luma_txb)(void *ud, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf);
     void (*chroma_txb)(void *ud, int pl, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf);
     void (*luma_pal)(void *ud, const stbv_u8 *idx, int sz, int bw4, int bh4, const stbv_u16 *pal);
@@ -911,7 +911,8 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                             has_chroma, cbw4, cbh4, 0, 0,
                             state->pal_sz_y, state->pal_sz_uv,
                             (int)block_skip,
-                            intra.y_mode, intra.y_angle, intra.uv_mode);
+                            intra.y_mode, intra.y_angle, intra.uv_mode,
+                            intra.cfl_alpha_u, intra.cfl_alpha_v);
 
     /* dav1d stores y_mode_nofilt in the neighbour mode maps (set_ctx):
      * FILTER_PRED maps to DC_PRED, NOT to the filter angle's mode. */
