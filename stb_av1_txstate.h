@@ -110,7 +110,7 @@ static int stbv_av1_tx_tree_rec(struct stb_av1_msac *msac,
         if (cat < 0) cat = 0;
         if (cat > 6) cat = 6;
         split = stb_av1_msac_bool_adapt(msac,
-                    &cdf->txpart[cat * 6 + a + l]);
+                    &cdf->txpart[(cat * 3 + a + l) * 2]);
     }
 
     if (split && stbv_av1_tx_dims[from].max > STBV_AV1_TX_8X8) {

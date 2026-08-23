@@ -241,7 +241,7 @@ static int stbv_av1_decode_tx_split(struct stb_av1_msac *msac,
 
     ctx = (above_smaller ? 1 : 0) + (left_smaller ? 1 : 0);
     return (int)stb_av1_msac_bool_adapt(msac,
-                &cdf->txpart[cat * 6 + ctx]);
+                &cdf->txpart[(cat * 3 + ctx) * 2]);
 }
 
 /*

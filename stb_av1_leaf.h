@@ -108,7 +108,6 @@ static int stbv_av1_get_skip_ctx(const stbv_av1_res_state *s,
         not_one_blk = (bw4 != txw4) || (bh4 != txh4);
         ca = (int)(la != 0x40);
         cl = (int)(ll != 0x40);
-        if (bx4>=140 && bx4<=158 && by4>=28 && by4<=50) fprintf(stderr, "SKCTX p=%p x=%d y=%d w=%d h=%d la=%04x ll=%08x nob=%d ca=%d cl=%d\n", (void*)s, bx4, by4, txw4, txh4, (unsigned)la, (unsigned)ll, not_one_blk, ca, cl);
         ca = (int)(la != 0x40);
         cl = (int)(ll != 0x40);
         return 7 + not_one_blk * 3 + ca + cl;
@@ -137,7 +136,7 @@ static int stbv_av1_get_skip_ctx(const stbv_av1_res_state *s,
     ll &= 0x3fU;
     la = la > 4 ? 4 : la;
     ll = ll > 4 ? 4 : ll;
-    if (bx4 >= 296) fprintf(stderr, "SKY x=%d y=%d la=%02x ll=%02x -> %d\n", bx4, by4, (unsigned)la, (unsigned)ll, stbv_av1_skip_ctx[(int)la][(int)ll]);
+    /* if (bx4 >= 296) fprintf(stderr, "SKY x=%d y=%d la=%02x ll=%02x -> %d\n", bx4, by4, (unsigned)la, (unsigned)ll, stbv_av1_skip_ctx[(int)la][(int)ll]); */
     return stbv_av1_skip_ctx[(int)la][(int)ll];
 }
 
@@ -148,7 +147,7 @@ static void stbv_av1_res_mark(stbv_av1_res_state *s,
     int i;
     unsigned int n;
     if (!s) return;
-    if (bx4 >= 296 || by4 >= 118) fprintf(stderr, "MARK p=%p x=%d y=%d w=%d h=%d v=%02x\n", (void*)s, bx4, by4, txw4, txh4, res_ctx);
+    /* if (bx4 >= 296 || by4 >= 118) fprintf(stderr, "MARK p=%p x=%d y=%d w=%d h=%d v=%02x\n", (void*)s, bx4, by4, txw4, txh4, res_ctx); */
     n = s->above_mark_n ? s->above_mark_n : s->above_n;
     for (i = 0; i < txw4 && (unsigned int)(bx4 + i) < n; i++)
         s->above[bx4 + i] = res_ctx;
@@ -429,7 +428,6 @@ skip = stb_av1_msac_bool_adapt(
 
     if (skip) {
         /* A skipped transform has the fixed residual context 0x40. */
-        if (chroma && x4>=140 && x4<=158 && y4>=28 && y4<=50) fprintf(stderr, "MARK40 p=%p x=%d y=%d w=%d h=%d\n", (void*)rs, x4, y4, txw4, txh4);
         stbv_av1_res_mark_unc(rs, x4, y4, txw4, txh4, (stbv_u8)0x40);
         if (c->recon && c->recon->cf) {
             /* coefficient count is (4w)*(4h): dims are in 4x4 units */
@@ -553,7 +551,6 @@ skip = stb_av1_msac_bool_adapt(
                 if (c->recon->luma_txb) c->recon->luma_txb(c->recon->ud, x4, y4, tx, txtp, eob, c->recon->cf);
             }
         }
-        if (is_chroma && x4>=140 && x4<=158 && y4>=28 && y4<=50) fprintf(stderr, "MARKV p=%p x=%d y=%d w=%d h=%d v=%02x\n", (void*)rs, x4, y4, txw4, txh4, res_ctx);
     stbv_av1_res_mark(rs, x4, y4, txw4, txh4, res_ctx);
     }
     return 0;
@@ -1097,37 +1094,58 @@ if (frame && frame->txfm_mode == 1 &&
     }
 
     /* Coefficients: intra blocks use one transform size across the whole
-     * block, decoded in raster order (dav1d read_coef_blocks).  The luma
-     * plane first, then the two chroma planes at uv_tx. */
+     * block.  dav1d recon_b_intra walks 64x64-pixel QUADRANTS (init_y/x
+     * stepping 16 units); inside each quadrant it decodes that band's luma
+     * transforms followed immediately by that band's chroma transforms.
+     * The MSAC symbol order therefore interleaves per-quadrant, which we
+     * replicate here exactly. */
     {
         int txw4 = stbv_av1_tx_dims[tx0].w;
         int txh4 = stbv_av1_tx_dims[tx0].h;
         int y4, x4, cx4, cy4, pl, r;
         int uv_txw4 = stbv_av1_tx_dims[uv_tx].w;
         int uv_txh4 = stbv_av1_tx_dims[uv_tx].h;
-        int cbx4 = bx4 >> ss_hor;
-        int cby4 = by4 >> ss_ver;
         int first = 1;
+        int qy4, qx4, qh4, qw4, sch4, scw4;
 
         if (!block_skip) {
-            for (y4 = by4; y4 < by4 + bh4; y4 += txh4) {
-                for (x4 = bx4; x4 < bx4 + bw4; x4 += txw4) {
-                    r = stbv_av1_leaf_tx_plane(msac, cdf, &c, x4, y4,
-                                               tx0, 0, &state->res,
-                                               bw4, bh4, first ? out : NULL);
-                    first = 0;
-                    if (r) return -4;
-                }
-            }
-            if (has_chroma) {
-                for (pl = 0; pl < 2; pl++) {
-                    for (cy4 = cby4; cy4 < cby4 + cbh4; cy4 += uv_txh4) {
-                        for (cx4 = cbx4; cx4 < cbx4 + cbw4; cx4 += uv_txw4) {
-                            r = stbv_av1_leaf_tx_plane(msac, cdf, &c, cx4, cy4,
-                                                       uv_tx, pl + 1,
-                                                       &state->cres[pl],
-                                                       cbw4, cbh4, NULL);
+            for (qy4 = by4; qy4 < by4 + bh4; qy4 += 16) {
+                qh4 = by4 + bh4 - qy4;
+                if (qh4 > 16) qh4 = 16;
+                sch4 = (qh4 + ss_ver) >> ss_ver;
+                for (qx4 = bx4; qx4 < bx4 + bw4; qx4 += 16) {
+                    qw4 = bx4 + bw4 - qx4;
+                    if (qw4 > 16) qw4 = 16;
+                    scw4 = (qw4 + ss_hor) >> ss_hor;
+
+                    for (y4 = qy4; y4 < qy4 + qh4; y4 += txh4) {
+                        for (x4 = qx4; x4 < qx4 + qw4; x4 += txw4) {
+                            r = stbv_av1_leaf_tx_plane(msac, cdf, &c,
+                                                       x4, y4,
+                                                       tx0, 0, &state->res,
+                                                       bw4, bh4,
+                                                       first ? out : NULL);
+                            first = 0;
                             if (r) return -4;
+                        }
+                    }
+
+                    if (!has_chroma) continue;
+                    {
+                        int cbx4 = qx4 >> ss_hor;
+                        int cby4 = qy4 >> ss_ver;
+                        for (pl = 0; pl < 2; pl++) {
+                            for (cy4 = cby4; cy4 < cby4 + sch4;
+                                 cy4 += uv_txh4) {
+                                for (cx4 = cbx4; cx4 < cbx4 + scw4;
+                                     cx4 += uv_txw4) {
+                                    r = stbv_av1_leaf_tx_plane(msac, cdf,
+                                        &c, cx4, cy4, uv_tx, pl + 1,
+                                        &state->cres[pl], cbw4, cbh4,
+                                        NULL);
+                                    if (r) return -4;
+                                }
+                            }
                         }
                     }
                 }
@@ -1137,6 +1155,8 @@ if (frame && frame->txfm_mode == 1 &&
             stbv_av1_res_mark_unc(&state->res, bx4, by4, bw4, bh4,
                                   (stbv_u8)0x40);
             if (has_chroma) {
+                int cbx4 = bx4 >> ss_hor;
+                int cby4 = by4 >> ss_ver;
                 for (pl = 0; pl < 2; pl++)
                     stbv_av1_res_mark_unc(&state->cres[pl], cbx4, cby4,
                                           cbw4, cbh4, (stbv_u8)0x40);

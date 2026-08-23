@@ -39,7 +39,10 @@ static const unsigned char stbv_av1_filter_mode_to_y_mode[5] = {
 
 /* dav1d_cfl_allowed_mask: cfl is allowed for blocks no larger than 32x32
  * (bits for BS_32x32 .. BS_4x4, dav1d tables.h). */
-#define STBV_AV1_CFL_ALLOWED_MASK 0x3FFF80u
+/* dav1d_cfl_allowed_mask: cfl allowed for blocks <= 32x32 except rect
+ * 16x64/64x16/32x64/64x32 etc: bits {BS_32x32,32x16,32x8,16x32,16x16,
+ * 16x8,16x4,8x32,8x16,8x8,8x4,4x16,4x8,4x4} == {7,8,9,11..21}. */
+#define STBV_AV1_CFL_ALLOWED_MASK 0x3FFB80u
 
 /* dav1d_intra_mode_context[], in the same order as N_INTRA_PRED_MODES. */
 static const stbv_u8 stbv_av1_intra_mode_ctx[13] = {
@@ -77,11 +80,11 @@ static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
     lc = stbv_av1_intra_mode_ctx[left_mode];
     ycdf = cdf->kfym + (ac * 5 + lc) * 16;
 #ifdef STB_DBG_TRACE
-    if (stb_dbg_blknum <= 60) STB_DBG_PRE(msac);
+    if (stb_dbg_blknum < 100000) STB_DBG_PRE(msac);
 #endif
     sym = stb_av1_msac_symbol(msac, ycdf, 12);
 #ifdef STB_DBG_TRACE
-    if (stb_dbg_blknum <= 60)
+    if (stb_dbg_blknum < 100000)
         fprintf(stderr, "TYMODE x=%d y=%d pre=%u post=%u ac=%d lc=%d sym=%u\n",
                 stb_dbg_blkx, stb_dbg_blky, stb_dbg_pre, msac->rng, ac, lc, sym);
 #endif
@@ -98,14 +101,14 @@ static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
     if (cbw4 * cbh4 >= 4 && mode >= STBV_AV1_INTRA_VERT &&
         mode <= STBV_AV1_INTRA_VL) {
 #ifdef STB_DBG_TRACE
-        if (stb_dbg_blknum <= 60) STB_DBG_PRE(msac);
+        if (stb_dbg_blknum < 100000) STB_DBG_PRE(msac);
 #endif
         sym = stb_av1_msac_symbol(msac,
                                   cdf->angle_delta + (mode - STBV_AV1_INTRA_VERT) * 8,
                                   6);
         b->y_angle = (int)sym - 3;
 #ifdef STB_DBG_TRACE
-        if (stb_dbg_blknum <= 60)
+        if (stb_dbg_blknum < 100000)
             fprintf(stderr, "TANGLE x=%d y=%d pre=%u post=%u mode=%d sym=%u angle=%d\n",
                     stb_dbg_blkx, stb_dbg_blky, stb_dbg_pre, msac->rng, mode, sym,
                     b->y_angle);
@@ -120,11 +123,11 @@ static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
 
     uvcdf = cdf->uv_mode + ((cfl_allowed ? 1 : 0) * 13 + mode) * 16;
 #ifdef STB_DBG_TRACE
-    if (stb_dbg_blknum <= 60) STB_DBG_PRE(msac);
+    if (stb_dbg_blknum < 100000) STB_DBG_PRE(msac);
 #endif
     sym = stb_av1_msac_symbol(msac, uvcdf, cfl_allowed ? 13 : 12);
 #ifdef STB_DBG_TRACE
-    if (stb_dbg_blknum <= 60)
+    if (stb_dbg_blknum < 100000)
         fprintf(stderr, "TUVMODE x=%d y=%d pre=%u post=%u cfl_ok=%d sym=%u\n",
                 stb_dbg_blkx, stb_dbg_blky, stb_dbg_pre, msac->rng,
                 cfl_allowed, sym);

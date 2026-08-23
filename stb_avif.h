@@ -2588,6 +2588,12 @@ struct stb_avif_scalar_recon {
     unsigned int left_n;
     const stbv_u8 *above_uvmode;
     const stbv_u8 *left_uvmode;
+    /* dav1d CFL: one block-wide AC array shared by both chroma planes. */
+    stbv_i16 cfl_ac[32 * 32];
+    int cfl_ac_w, cfl_ac_h;
+    int cfl_ac_bx, cfl_ac_by;
+    int cfl_ac_ok;
+    int cur_ltw4, cur_lth4; /* block's max luma tx size (b->tx dims) */
 };
 
 /* Decoding-order key for availability checks: superblock row, then SB
@@ -2826,7 +2832,7 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
 {
     struct stb_avif_scalar_recon *rc;
     int bw4, bh4;
-    (void)cbw4; (void)cbh4; (void)uv_tx; (void)tx0;
+    (void)cbw4; (void)cbh4; (void)uv_tx;
     (void)pal_sz_y; (void)pal_sz_uv;
     rc = (struct stb_avif_scalar_recon *)ud;
     if (!rc || !intra) return;
@@ -2834,6 +2840,10 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
     rc->cur_by4 = by4;
     rc->cur_bw4 = stbv_av1_block_dimensions[bs][0];
     rc->cur_bh4 = stbv_av1_block_dimensions[bs][1];
+    rc->cur_ltw4 = stbv_av1_tx_dims[tx0 >= 0 && tx0 < STBV_AV1_N_TX_SIZES
+                                   ? tx0 : 0].w;
+    rc->cur_lth4 = stbv_av1_tx_dims[tx0 >= 0 && tx0 < STBV_AV1_N_TX_SIZES
+                                   ? tx0 : 0].h;
     rc->y_mode = y_mode;
     rc->y_angle = y_angle;
     rc->uv_mode = uv_mode;
@@ -2846,9 +2856,9 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
 #ifdef STB_DBG_TRACE
     {
         static int bi_n = 0;
-        if (bi_n < 120)
-            fprintf(stderr, "BINFO n=%d x=%d y=%d bs=%d skip=%d ym=%d paly=%d paluv=%d\n",
-                    bi_n++, bx4, by4, bs, skip, y_mode, pal_sz_y, pal_sz_uv);
+        if (bi_n < 20000)
+            fprintf(stderr, "BINFO n=%d x=%d y=%d bs=%d skip=%d ym=%d paly=%d paluv=%d uvm=%d\n",
+                    bi_n++, bx4, by4, bs, skip, y_mode, pal_sz_y, pal_sz_uv, uv_mode);
     }
 #endif
     /* dav1d predicts PER TRANSFORM so every txb sees freshly reconstructed
@@ -3008,7 +3018,7 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
 #endif
     {
         static int dbg_n = 0;
-        if (dbg_n < 300) {
+        if (dbg_n < 100000) {
             int i2;
             dbg_n++;
             fprintf(stderr, "OURTX x=%d y=%d tx=%d txtp=%d eob=%d w=%d\n",
@@ -3246,7 +3256,6 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
     const int cfh4 = (lfh4 + rc->ss_ver) >> rc->ss_ver;
     int cx4 = x4, cy4 = y4, cm, cangle = 0, cimpl;
     int w, h, cw, ch, i, j;
-    stbv_i32 lac[32 * 32];
     if (!rc->plane_u || !rc->plane_v || !rc->has_chroma) return;
     plane = pl == 0 ? rc->plane_u : rc->plane_v;
     stride = pl == 0 ? rc->stride_u : rc->stride_v;
@@ -3275,57 +3284,106 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
     stbv_av1_ipred_run_16(cimpl, rc->pred, w, edge, w, h,
                           cangle | stb_avif_recon_edge_flags(rc, 0, rc->cur_bx4, rc->cur_by4),
                           0, (cfw4 - cx4) << 2, (cfh4 - cy4) << 2, rc->bit_depth);
-    /* Chroma-from-luma: chroma = DC + alpha * (luma_ac - luma_dc).
-     * A zero alpha means a flat mid-grey base instead of the edge DC
-     * (dav1d ipred_cfl_126/128). */
+    /* Chroma-from-luma, ported from dav1d recon_b_intra + cfl_ac_c +
+     * cfl_pred: ONE block-wide AC array (built from the fully
+     * reconstructed co-located luma) shared by both planes;
+     * pred = edge-DC + alpha*ac with symmetric rounding; a plane with
+     * zero alpha keeps its plain DC prediction. */
     if (rc->uv_mode == STBV_AV1_INTRA_CFL && !rc->block_skip) {
         const int alpha = pl == 0 ? rc->cfl_alpha_u : rc->cfl_alpha_v;
-        const stbv_u16 mx = (stbv_u16)((1 << rc->bit_depth) - 1);
+        const int ss_h = rc->ss_hor, ss_v = rc->ss_ver;
         if (!alpha) {
-            const stbv_u16 dc_flat = (stbv_u16)(128 << (rc->bit_depth - 8));
-            for (i = 0; i < ch; i++)
-                for (j = 0; j < cw; j++)
-                    rc->pred[i * w + j] = dc_flat;
+            /* dav1d skips CFL entirely for this plane; the DC-family
+             * prediction already written above is the final result. */
         } else {
-            const int lx0 = (cx4 << 2) << rc->ss_hor;
-            const int ly0 = (cy4 << 2) << rc->ss_ver;
-            int x, y;
-            long sum = 0;
-            int n = 0, avg;
-            for (y = 0; y < ch; y++) {
-                for (x = 0; x < cw; x++) {
-                    int lx = lx0 + (x << rc->ss_hor);
-                    int ly = ly0 + (y << rc->ss_ver);
-                    int dx = 1 << rc->ss_hor, dy = 1 << rc->ss_ver;
-                    int sx, sy, s = 0, cnt = 0;
-                    for (sy = 0; sy < dy; sy++)
-                        for (sx = 0; sx < dx; sx++) {
-                            if (lx + sx < rc->frame_w &&
-                                ly + sy < rc->frame_h) {
-                                s += (int)rc->plane_y[(ly + sy) * rc->stride_y +
-                                                      lx + sx];
-                                cnt++;
+            const int fw4 = (rc->frame_w + 3) >> 2;
+            const int fh4 = (rc->frame_h + 3) >> 2;
+            int cw4u = rc->cur_bw4, ch4u = rc->cur_bh4;
+            int cbw4, cbh4, W, H, i, j;
+            const stbv_u16 mx = (stbv_u16)((1 << rc->bit_depth) - 1);
+            if (cw4u > fw4 - rc->cur_bx4) cw4u = fw4 - rc->cur_bx4;
+            if (ch4u > fh4 - rc->cur_by4) ch4u = fh4 - rc->cur_by4;
+            cbw4 = (cw4u + ss_h) >> ss_h;
+            cbh4 = (ch4u + ss_v) >> ss_v;
+            W = cbw4 << 2;
+            H = cbh4 << 2;
+            if (W > 32 || H > 32 || cw4u <= 0 || ch4u <= 0) {
+                /* out of contract; leave DC prediction */
+            } else {
+                const stbv_u16 *ysrc = rc->plane_y +
+                    (((rc->cur_by4 & ~ss_v) << 2)) * rc->stride_y +
+                    ((rc->cur_bx4 & ~ss_h) << 2);
+                const int sh_l = 1 + !ss_v + !ss_h;
+                int log2sz, x, y;
+                long acc;
+                if (!rc->cfl_ac_ok || rc->cfl_ac_bx != rc->cur_bx4 ||
+                    rc->cfl_ac_by != rc->cur_by4) {
+                    /* w_pad/h_pad: luma-tx-aligned valid extent (dav1d
+                     * furthest_r/furthest_b); padded cols replicate. */
+                    int twu = rc->cur_ltw4 ? rc->cur_ltw4 : 1;
+                    int thu = rc->cur_lth4 ? rc->cur_lth4 : 1;
+                    int furthest_r = ((cw4u << ss_h) + twu - 1) & ~(twu - 1);
+                    int furthest_b = ((ch4u << ss_v) + thu - 1) & ~(thu - 1);
+                    int w_pad = cbw4 - (furthest_r >> ss_h);
+                    int h_pad = cbh4 - (furthest_b >> ss_v);
+                    if (w_pad < 0) w_pad = 0;
+                    if (h_pad < 0) h_pad = 0;
+                    for (y = 0; y < H - 4 * h_pad; y++) {
+                        const stbv_u16 *row0 = ysrc +
+                            (y << ss_v) * rc->stride_y;
+                        const stbv_u16 *row1 = row0 +
+                            (ss_v ? rc->stride_y : 0);
+                        for (x = 0; x < W - 4 * w_pad; x++) {
+                            int s = row0[x << ss_h];
+                            if (ss_h) s += row0[x * 2 + 1];
+                            if (ss_v) {
+                                s += row1[x << ss_h];
+                                if (ss_h) s += row1[x * 2 + 1];
                             }
+                            rc->cfl_ac[y * W + x] =
+                                (stbv_i16)(s << sh_l);
                         }
-                    lac[y * cw + x] = cnt ? (s + (cnt >> 1)) / cnt : 0;
-                    sum += lac[y * cw + x];
-                    n++;
+                        for (; x < W; x++)
+                            rc->cfl_ac[y * W + x] = rc->cfl_ac[y * W + x - 1];
+                    }
+                    for (; y < H; y++)
+                        memcpy(rc->cfl_ac + y * W,
+                               rc->cfl_ac + (y - 1) * W,
+                               (size_t)(W * sizeof(stbv_i16)));
+                    log2sz = stbv_av1_ipred_ctz((unsigned)W) +
+                             stbv_av1_ipred_ctz((unsigned)H);
+                    acc = (long)1 << log2sz >> 1;
+                    for (y = 0; y < H; y++)
+                        for (x = 0; x < W; x++)
+                            acc += rc->cfl_ac[y * W + x];
+                    acc >>= log2sz;
+                    for (y = 0; y < H; y++)
+                        for (x = 0; x < W; x++)
+                            rc->cfl_ac[y * W + x] -= (stbv_i16)acc;
+                    rc->cfl_ac_w = W;
+                    rc->cfl_ac_h = H;
+                    rc->cfl_ac_bx = rc->cur_bx4;
+                    rc->cfl_ac_by = rc->cur_by4;
+                    rc->cfl_ac_ok = 1;
+                }
+                {
+                    const int off_x =
+                        (x4 - (rc->cur_bx4 >> ss_h)) << 2;
+                    const int off_y =
+                        (y4 - (rc->cur_by4 >> ss_v)) << 2;
+                    for (i = 0; i < ch; i++)
+                        for (j = 0; j < cw; j++) {
+                            int a = rc->cfl_ac[(off_y + i) * W + off_x + j];
+                            int diff = alpha * a;
+                            int adj = ((diff < 0 ? -diff : diff) + 32) >> 6;
+                            int v = (int)rc->pred[i * w + j] +
+                                    (diff < 0 ? -adj : adj);
+                            rc->pred[i * w + j] =
+                                (stbv_u16)(v < 0 ? 0 :
+                                           (v > mx ? mx : v));
+                        }
                 }
             }
-            avg = (int)((sum + (n >> 1)) / n);
-            /* cfl_ac scales the averaged luma by 8 (see dav1d cfl_ac_c:
-             * ac = sum << (1 + !ss_ver + !ss_hor)), and cfl_pred divides
-             * alpha*ac by 64 with symmetric rounding => net gain 1/8. */
-            for (i = 0; i < ch; i++)
-                for (j = 0; j < cw; j++) {
-                    stbv_i32 d = lac[i * cw + j] - avg;
-                    stbv_i32 diff = alpha * (d << 3);
-                    stbv_i32 adj = ((diff < 0 ? -diff : diff) + 32) >> 6;
-                    stbv_i32 v = (stbv_i32)rc->pred[i * w + j] +
-                                 (diff < 0 ? -adj : adj);
-                    rc->pred[i * w + j] =
-                        (stbv_u16)(v < 0 ? 0 : (v > mx ? mx : v));
-                }
         }
     }
     for (i = 0; i < ch; i++) {
