@@ -1,20 +1,14 @@
 /*
  * AV1 partition-tree decoder derived from dav1d 1.5.4 src/decode.c.
- *
- * Copyright (c) 2018-2024, VideoLAN and dav1d authors
- * Copyright (c) 2018, Two Orioles, LLC
- * All rights reserved.
- *
- * BSD-2-Clause. See the dav1d COPYING file for the complete license text.
+ * Copyright (c) 2018-2024, VideoLAN and dav1d authors; BSD-2-Clause.
  */
 #ifndef STB_AV1_PARTITION_DECODE_H
 #define STB_AV1_PARTITION_DECODE_H
 
 #ifdef STB_AV1_PARTITION_DEBUG
 #include <stdio.h>
-/* Tracing uses plain #ifdef blocks instead of variadic macros: C89 and
- * MSVC 6.0 have no support for '...' macro parameters.  The 64-bit MSAC
- * state is printed as two 32-bit halves to stay off '%ll' formats. */
+/* Plain #ifdef blocks instead of variadic macros (MSVC6/C89); the 64-bit
+ * MSAC state prints as two 32-bit halves to stay off '%ll' formats. */
 #define STBV_AV1_PART_TRACE 1
 #endif
 
@@ -28,10 +22,8 @@
 #error "include stb_av1_cdf.h first"
 #endif
 
-/* dav1d_al_part_ctx, used when a decoded block updates the partition
- * contexts on its top and left edges. */
 static const stbv_u8 stbv_av1_al_part_ctx[2][STBV_AV1_N_BL_LEVELS]
-                                      [STBV_AV1_N_PARTITIONS] = {
+                                          [STBV_AV1_N_PARTITIONS] = {
     {
         { 0x00, 0x00, 0x10, 0xff, 0x00, 0x10, 0x10, 0x10, 0xff, 0xff },
         { 0x10, 0x10, 0x18, 0xff, 0x10, 0x18, 0x18, 0x18, 0x10, 0x1c },
@@ -47,31 +39,19 @@ static const stbv_u8 stbv_av1_al_part_ctx[2][STBV_AV1_N_BL_LEVELS]
     }
 };
 
-/* Set the top/left partition contexts exactly in the form used by dav1d's
- * case_set_upto16(). The context arrays are frame-wide, indexed in 8x8
- * units. */
+/* case_set_upto16(): dav1d writes min(pow2(hsz),16) cells. */
 static void stbv_av1_partition_set_context(stbv_u8 *above, stbv_u8 *left,
                                             int above_n, int left_n,
                                             int bx8, int by8, int hsz,
                                             int bl, int bp)
 {
     int n, i;
-    stbv_u8 av, lv;
+    stbv_u8 av = stbv_av1_al_part_ctx[0][bl][bp];
+    stbv_u8 lv = stbv_av1_al_part_ctx[1][bl][bp];
 
-    av = stbv_av1_al_part_ctx[0][bl][bp];
-    lv = stbv_av1_al_part_ctx[1][bl][bp];
-    /* Note: dav1d writes the context unconditionally, even when the value
-     * is 0xff (SPLIT at 128x128..16x16).  0xff makes every later reader see
-     * "neighbour is smaller" (bit (4-bl) set), which is exactly what a
-     * split parent must convey to the blocks below/beside it. */
-
-    /* hsz is 4x4 units. dav1d's case_set_upto16(ulog2(hsz)) writes
-     * 1,2,4,8,16 entries. */
     n = 1;
     while (n < hsz && n < 16)
         n <<= 1;
-    if (n > 16)
-        n = 16;
 
     for (i = 0; i < n; i++) {
         if (bx8 + i >= 0 && bx8 + i < above_n)
@@ -94,7 +74,7 @@ static unsigned int stbv_av1_gather_top_partition_prob(const stbv_u16 *pc,
 }
 
 static unsigned int stbv_av1_gather_left_partition_prob(const stbv_u16 *pc,
-                                                         int bl)
+                                                          int bl)
 {
     unsigned int out;
     out = (unsigned int)pc[STBV_AV1_PARTITION_H - 1] - pc[STBV_AV1_PARTITION_H];
@@ -139,7 +119,7 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
     int have_h_split, have_v_split;
     int bx8, by8, ctx;
     stbv_u16 *pc;
-    int bp;
+    int bp = 0;
     int bs;
 
     hsz = 16 >> bl;
@@ -149,7 +129,7 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
     if (!have_h_split && !have_v_split) {
         if (bl >= STBV_AV1_BL_8X8)
             return stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
-                                   STBV_AV1_PARTITION_SPLIT, bx, by);
+                                           STBV_AV1_PARTITION_SPLIT, bx, by);
         return stbv_av1_partition_decode_sb(d, bl + 1, bx, by);
     }
 
@@ -165,34 +145,24 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         bp = (int)stb_av1_msac_symbol(d->msac, pc,
                                       stbv_av1_partition_type_count[bl]);
 #ifdef STBV_AV1_PART_TRACE
-        fprintf(stderr, "P y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%08x%08x c=%d\n",
+        fprintf(stderr, "P y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%08x%08x c=%d c0=%d c8=%d\n",
                 by, bx, bl, ctx, bp, d->msac->rng,
                 (unsigned)(d->msac->dif >> 32), (unsigned)d->msac->dif,
-                d->msac->cnt);
+                d->msac->cnt, pc[0], pc[8]);
 #endif
-        if (bp < 0 || bp >= STBV_AV1_N_PARTITIONS) {
-#ifdef STBV_AV1_PART_TRACE
-            fprintf(stderr, "PARDEC bl=%d bx=%d by=%d sym=%d rng=%u dif=%08x cnt=%d\n",
-                    bl, bx, by, bp, d->msac->rng, (unsigned)d->msac->dif,
-                    d->msac->cnt);
-#endif
+        if (bp < 0 || bp >= STBV_AV1_N_PARTITIONS)
             return -1;
-        }
 
         if (bp == STBV_AV1_PARTITION_SPLIT) {
             if (bl == STBV_AV1_BL_8X8) {
                 int r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
-                                STBV_AV1_PARTITION_SPLIT, bx, by);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
-                                STBV_AV1_PARTITION_SPLIT, bx + 1, by);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
-                                STBV_AV1_PARTITION_SPLIT, bx, by + 1);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by + 1);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
-                                STBV_AV1_PARTITION_SPLIT,
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp,
                                             bx + 1, by + 1);
                 if (r) return r;
             } else {
@@ -253,9 +223,6 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
                                             bx + hsz, by + hsz);
                 if (r) return r;
             } else if (bp == STBV_AV1_PARTITION_H4) {
-                /* dav1d steps by hsz >> 1 (a quarter of the parent edge in
-                 * 4x4 units); integer hsz/4 is zero for 16px parents and
-                 * would stack all four sub-blocks at the same position. */
                 int i, r;
                 int step = hsz >> 1;
                 for (i = 0; i < 4; i++) {
@@ -276,9 +243,8 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
             }
         }
 
-        /* Context write: exactly like dav1d, once per level, over the parent
-         * span (case_set_upto16(ulog2(hsz)) cells from the parent bx8/by8),
-         * and only when the parent is not an un-split SPLIT. */
+        /* dav1d decode.c:2414: once per level over the parent span
+         * (case_set_upto16(ulog2(hsz))), skipping un-split interior SPLTs. */
         if (bp != STBV_AV1_PARTITION_SPLIT || bl == STBV_AV1_BL_8X8)
             stbv_av1_partition_set_context(d->above, d->left, d->above_n,
                                            d->left_n, bx8, by8,
@@ -293,45 +259,35 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
                                           : STBV_AV1_PARTITION_H,
                 d->msac->rng, (unsigned)d->msac->dif, d->msac->cnt);
 #endif
+        bp = is_split ? (int)STBV_AV1_PARTITION_SPLIT : (int)STBV_AV1_PARTITION_H;
         if (is_split) {
             if (bl >= STBV_AV1_BL_8X8) {
                 int r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
-                                STBV_AV1_PARTITION_SPLIT, bx, by);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
-                                STBV_AV1_PARTITION_SPLIT, bx + 1, by);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
-                                STBV_AV1_PARTITION_SPLIT, bx, by + 1);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by + 1);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
-                                STBV_AV1_PARTITION_SPLIT, bx + 1, by + 1);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by + 1);
                 if (r) return r;
-                stbv_av1_partition_set_context(d->above, d->left,
-                    d->above_n, d->left_n, bx8, by8, hsz, bl,
-                    STBV_AV1_PARTITION_SPLIT);
-                return 0;
+            } else {
+                if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by)) return -1;
+                if (stbv_av1_partition_decode_sb(d, bl + 1, bx + hsz, by)) return -1;
             }
-            if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by)) return -1;
-            return stbv_av1_partition_decode_sb(d, bl + 1, bx + hsz, by);
-        }
-        /* Bottom edge: the only legal non-split partition is H. */
-        bs = stbv_av1_block_sizes[bl][STBV_AV1_PARTITION_H][0];
-        if (bs == 0xff) {
-#ifdef STBV_AV1_PART_TRACE
-            fprintf(stderr, "PARDEC-H bs=ff bl=%d bx=%d by=%d\n", bl, bx, by);
-#endif
-            return -1;
-        }
-        {
-            int r = stbv_av1_partition_emit(d, bl, bs, STBV_AV1_PARTITION_H, bx, by);
+        } else {
+            int r;
+            bs = stbv_av1_block_sizes[bl][STBV_AV1_PARTITION_H][0];
+            if (bs == 0xff)
+                return -1;
+            r = stbv_av1_partition_emit(d, bl, bs, STBV_AV1_PARTITION_H, bx, by);
             if (r) return r;
+        }
+        /* dav1d sets bp before reaching the shared write below. */
+        if (bp != STBV_AV1_PARTITION_SPLIT || bl == STBV_AV1_BL_8X8)
             stbv_av1_partition_set_context(d->above, d->left, d->above_n,
                                            d->left_n, bx8, by8,
-                                           hsz, bl, STBV_AV1_PARTITION_H);
-            return 0;
-        }
+                                           hsz, bl, bp);
     } else {
         unsigned int is_split;
         is_split = stb_av1_msac_bool(d->msac,
@@ -342,45 +298,34 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
                                           : STBV_AV1_PARTITION_V,
                 d->msac->rng, (unsigned)d->msac->dif, d->msac->cnt);
 #endif
+        bp = is_split ? (int)STBV_AV1_PARTITION_SPLIT : (int)STBV_AV1_PARTITION_V;
         if (is_split) {
             if (bl >= STBV_AV1_BL_8X8) {
                 int r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
-                                STBV_AV1_PARTITION_SPLIT, bx, by);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
-                                STBV_AV1_PARTITION_SPLIT, bx + 1, by);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
-                                STBV_AV1_PARTITION_SPLIT, bx, by + 1);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx, by + 1);
                 if (r) return r;
-                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4,
-                                STBV_AV1_PARTITION_SPLIT, bx + 1, by + 1);
+                r = stbv_av1_partition_emit(d, bl, STBV_AV1_BS_4x4, bp, bx + 1, by + 1);
                 if (r) return r;
-                stbv_av1_partition_set_context(d->above, d->left,
-                    d->above_n, d->left_n, bx8, by8, hsz, bl,
-                    STBV_AV1_PARTITION_SPLIT);
-                return 0;
+            } else {
+                if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by)) return -1;
+                if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by + hsz)) return -1;
             }
-            if (stbv_av1_partition_decode_sb(d, bl + 1, bx, by)) return -1;
-            return stbv_av1_partition_decode_sb(d, bl + 1, bx, by + hsz);
-        }
-        /* Right edge: the only legal non-split partition is V. */
-        bs = stbv_av1_block_sizes[bl][STBV_AV1_PARTITION_V][0];
-        if (bs == 0xff) {
-#ifdef STBV_AV1_PART_TRACE
-            fprintf(stderr, "PARDEC-V bs=ff bl=%d bx=%d by=%d\n", bl, bx, by);
-#endif
-            return -1;
-        }
-        {
-            int r = stbv_av1_partition_emit(d, bl, bs, STBV_AV1_PARTITION_V, bx, by);
+        } else {
+            int r;
+            bs = stbv_av1_block_sizes[bl][STBV_AV1_PARTITION_V][0];
+            if (bs == 0xff)
+                return -1;
+            r = stbv_av1_partition_emit(d, bl, bs, STBV_AV1_PARTITION_V, bx, by);
             if (r) return r;
+        }
+        if (bp != STBV_AV1_PARTITION_SPLIT || bl == STBV_AV1_BL_8X8)
             stbv_av1_partition_set_context(d->above, d->left, d->above_n,
                                            d->left_n, bx8, by8,
-                                           hsz, bl, STBV_AV1_PARTITION_V);
-            return 0;
-        }
+                                           hsz, bl, bp);
     }
 
     return 0;
