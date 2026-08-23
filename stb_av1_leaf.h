@@ -934,7 +934,7 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
         (bw4 > bh4 ? bw4 : bh4) <= 16 && bw4 + bh4 >= 4) {
         int sz_ctx = stbv_av1_block_dimensions[bs][2] +
                      stbv_av1_block_dimensions[bs][3] - 2;
-        int bpc = (seq && seq->hbd) ? 10 : 8;
+        int bpc = 8 + (seq ? seq->hbd : 0) * 2;
         if (intra.y_mode == STBV_AV1_INTRA_DC) {
             int pal_ctx = 0;
             if (state->above_pal_sz && (unsigned)bx4 < state->above_pal_sz_n &&

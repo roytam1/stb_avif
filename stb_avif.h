@@ -388,6 +388,7 @@ struct stb_avif_avif_info {
     /* AV1 codec config (from av1C box) */
     unsigned char av1c_data[32];
     int av1c_size;
+    int av1c_seen;
 
     /* Compressed AV1 data */
     const unsigned char *av1_data;
@@ -743,7 +744,18 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                         stb_avif_read_box_header(r, &prop);
 
                         if (prop.type == STB_AVIF_BOX_AV1C) {
-                            stb_avif_parse_av1c(r, info, (size_t)prop.data_size);
+                            /* FIXME: with alpha aux items there are TWO
+                             * av1C properties; the primary (color) item's
+                             * config must be selected via ipma+pitm. For
+                             * now keep the FIRST av1C seen: encoders list
+                             * the color item's properties before the
+                             * alpha aux item's. */
+                            if (!info->bit_depth || !info->av1c_seen) {
+                                stb_avif_parse_av1c(r, info, (size_t)prop.data_size);
+                                info->av1c_seen = 1;
+                            } else {
+                                r->pos = prop.data_start + prop.data_size;
+                            }
                         }
                         else if (prop.type == STB_AVIF_BOX_ISPE) {
                             /* Image spatial extents */
@@ -2995,6 +3007,16 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
                                x4 << 2, y4 << 2, rc->frame_w, rc->frame_h,
                                tx, txtp, eob, cf);
 #ifdef STB_DBG_TRACE
+    if ((x4 == 146 || x4 == 147 || x4 == 148) && y4 <= 3) {
+        int r8;
+        fprintf(stderr, "PLANEV x=%d y=%d:", x4, y4);
+        for (r8 = 0; r8 < 16; r8++)
+            fprintf(stderr, " %04x",
+                    (unsigned)rc->plane_y[r8 * rc->stride_y + 591]);
+        fprintf(stderr, "\n");
+    }
+#endif
+#ifdef STB_DBG_TRACE
     {
         static int over_n = 0;
         if (over_n < 4 && rc->bit_depth == 8) {
@@ -3092,13 +3114,23 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
                           filt_idx, rc->frame_w - (x4 << 2), rc->frame_h - (y4 << 2), bd);
 #ifdef STB_DBG_TRACE
     fprintf(stderr, "YTX %d %d %d\n", x4, y4, tx);
-    if ((x4 == 3 && y4 == 12 && tx == 0) ||
-        (x4 == 18 && y4 == 6 && tx == 1)) {
+    if ((x4 == 54 && y4 == 8) || (x4 == 24 && y4 == 0) || (x4 == 25 && y4 == 0) || (x4 == 148 && y4 == 0) || (x4 == 146 && y4 == 0)) {
+        static int fire_cnt = 0;
+        int my_fire = ++fire_cnt;
         int q7;
-        fprintf(stderr, "PREDGRID x=%d y=%d:", x4, y4);
+        fprintf(stderr, "PREDGRID f=%d x=%d y=%d impl=%d angle=%d:", my_fire, x4, y4, impl, angle);
         for (q7 = 0; q7 < w * h; q7++)
             fprintf(stderr, " %x", (int)rc->pred[q7] & 0xff);
         fprintf(stderr, "\n");
+        {
+            int e7;
+            fprintf(stderr, "EDGEL f=%d blflag=%d:", my_fire,
+                    stb_avif_recon_txb_edge_flags(rc,1,rc->cur_bx4,rc->cur_by4,rc->cur_bw4,rc->cur_bh4,x4,y4,stbv_av1_tx_dims[tx].w,stbv_av1_tx_dims[tx].h) & STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM);
+            for (e7 = 1; e7 <= 16; e7++) fprintf(stderr, " %x", (int)edge[-e7] & 0xff);
+            fprintf(stderr, "\nEDGET f=%d:", my_fire);
+            for (e7 = -1; e7 <= 16; e7++) fprintf(stderr, " %x", (int)edge[e7] & 0xff);
+            fprintf(stderr, "\n");
+        }
     }
     {
         static int ov5 = 0;
@@ -3648,7 +3680,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     recon.stride_y = tc->stride_y;
     recon.stride_u = tc->stride_u;
     recon.stride_v = tc->stride_v;
-    recon.bit_depth = stream.seq.hbd ? 10 : 8;
+    recon.bit_depth = 8 + stream.seq.hbd * 2;
     recon.ss_hor = stream.seq.ss_hor ? 1 : 0;
     recon.ss_ver = (stream.seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0;
     recon.frame_w = tc->frame_width;
@@ -3715,7 +3747,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     }
 #endif
     {
-        const int bd = stream.seq.hbd ? 10 : 8;
+        const int bd = 8 + stream.seq.hbd * 2;
         const int sh = bd - 8;
         const int rndv = (1 << sh) >> 1;
         int w, h, hh, y0, x0;
