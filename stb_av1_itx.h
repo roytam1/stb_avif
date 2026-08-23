@@ -35,22 +35,26 @@ static const stbv_av1_itx1d_fn stbv_av1_tx1d_fns[5][4] = {
  * buffer is transposed; replicating the EFFECTIVE mapping here:
  *   e.g. decoded ADST_DCT runs first=DCT (columns), second=ADST (rows). */
 static const stbv_u8 stbv_av1_tx1d_types[STBV_AV1_TX_WHT_WHT + 1][2] = {
+    /* pair = { horizontal 1-D type, vertical 1-D type }; 1-D types are
+     * 0=DCT, 1=ADST, 2=FLIPADST, 3=IDENTITY (see stbv_av1_tx1d_fns).
+     * Semantics per dav1d levels.h TxfmType (e.g. H_DCT == identity
+     * vertically, DCT horizontally). */
     { 0, 0 }, /* DCT_DCT           */
     { 0, 1 }, /* ADST_DCT          */
     { 1, 0 }, /* DCT_ADST          */
     { 1, 1 }, /* ADST_ADST         */
-    { 0, 3 }, /* FLIPADST_DCT      */
-    { 3, 0 }, /* DCT_FLIPADST      */
-    { 3, 3 }, /* FLIPADST_FLIPADST */
-    { 3, 1 }, /* ADST_FLIPADST     */
-    { 1, 3 }, /* FLIPADST_ADST     */
-    { 2, 2 }, /* IDTX              */
-    { 2, 0 }, /* V_DCT             */
-    { 0, 2 }, /* H_DCT             */
-    { 2, 1 }, /* V_ADST            */
-    { 1, 2 }, /* H_ADST            */
-    { 2, 3 }, /* V_FLIPADST        */
-    { 3, 2 }, /* H_FLIPADST        */
+    { 0, 2 }, /* FLIPADST_DCT      */
+    { 2, 0 }, /* DCT_FLIPADST      */
+    { 2, 2 }, /* FLIPADST_FLIPADST */
+    { 2, 1 }, /* ADST_FLIPADST     */
+    { 1, 2 }, /* FLIPADST_ADST     */
+    { 3, 3 }, /* IDTX              */
+    { 3, 0 }, /* V_DCT             */
+    { 0, 3 }, /* H_DCT             */
+    { 3, 1 }, /* V_ADST            */
+    { 1, 3 }, /* H_ADST            */
+    { 3, 2 }, /* V_FLIPADST        */
+    { 2, 3 }, /* H_FLIPADST        */
     { 0, 0 }  /* WHT_WHT (unused)  */
 };
 
