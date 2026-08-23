@@ -11,6 +11,13 @@
 #ifndef STB_AV1_IPRED_H
 #define STB_AV1_IPRED_H
 
+#include <stdio.h>
+/* Debug hooks: always defined so instrumented macro bodies compile
+ * regardless of STB_DBG_TRACE; the flags simply stay 0 when tracing
+ * is disabled and the fprintf sites are compiled out with it. */
+int stbv_av1_dbg_z2_go = 0;
+int stbv_av1_dbg_tx27 = 0;
+
 #ifndef STBV_U16_DEFINED
 typedef unsigned short stbv_u16;
 #define STBV_U16_DEFINED 1
@@ -307,11 +314,16 @@ STBV_AV1_IPRED_UNUSED static unsigned stbv_av1_dc_gen_##sfx( \
     for (i = 0; i < h; i++) dc += tl[-(i + 1)]; \
     dc >>= stbv_av1_ipred_ctz((unsigned)(w + h)); \
     if (w != h) { \
+        /* After the power-of-two shift above, the residual divisor is 3
+         * when the sides differ by 2x (w+h = 3*2^k) and 5 when they
+         * differ by 4x (w+h = 5*2^k).  dav1d MULTIPLIER_1x2 == 1/3
+         * (0x5556@16 / 0xAAAB@17), MULTIPLIER_1x4 == 1/5
+         * (0x3334@16 / 0x6667@17); match the ratio to the right one. */ \
         if (bd == 8) { \
-            dc *= (unsigned)((w > h * 2 || h > w * 2) ? 0x5556 : 0x3334); \
+            dc *= (unsigned)((w > h * 2 || h > w * 2) ? 0x3334 : 0x5556); \
             dc >>= 16; \
         } else { \
-            dc *= (unsigned)((w > h * 2 || h > w * 2) ? 0xAAAB : 0x6667); \
+            dc *= (unsigned)((w > h * 2 || h > w * 2) ? 0x6667 : 0xAAAB); \
             dc >>= 17; \
         } \
     } \
@@ -611,6 +623,19 @@ STBV_AV1_IPRED_UNUSED static void stbv_av1_ipred_z2_##sfx( \
     } \
     *topleft = *topleft_in; \
     left = &topleft[-(1 + upsample_left)]; \
+    { \
+        int dk; \
+        if (stbv_av1_dbg_z2_go) { \
+            fprintf(stderr, "Z2 ang=%d dx=%d dy=%d ua=%d ul=%d in:", \
+                    angle, dx, dy, upsample_above, upsample_left); \
+            for (dk = -4; dk <= 8; dk++) \
+                fprintf(stderr, " %x", (int)topleft_in[dk] & 0xff); \
+            fprintf(stderr, "\nZ2 up:"); \
+            for (dk = 0; dk <= 9; dk++) \
+                fprintf(stderr, " %x", (int)topleft[dk] & 0xff); \
+            fprintf(stderr, "\n"); \
+        } \
+    } \
     for (y = 0, xpos = ((1 + upsample_above) << 6) - dx; y < height; \
          y++, xpos -= dx, dst += stride) { \
         int base_x = xpos >> 6; \

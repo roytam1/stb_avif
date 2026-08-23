@@ -378,9 +378,10 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     stbv_u16 *lo_cdf;
     stbv_u16 *hi_cdf;
     stbv_u16 *dc_sign_cdf;
-    unsigned stride, shift, shift2, mask;
-    unsigned char *level;
-    int cf_max = 32767; /* dav1d ~(~127U << 8) for BITDEPTH 8 */
+unsigned stride, shift, shift2, mask;
+unsigned char *level;
+unsigned int dbg_pre;
+int cf_max = 32767; /* dav1d ~(~127U << 8) for BITDEPTH 8 */
 
     if (tx < 0 || tx >= STBV_AV1_N_TX_SIZES)
         return -1;
@@ -411,9 +412,10 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     if (dc_sign_ctx < 0) dc_sign_ctx = 0;
     if (dc_sign_ctx > 2) dc_sign_ctx = 2;
 
-    area = (4U << slw) * (4U << slh);
-    szctx = slw + slh;
-    is1d = tx_class != 0;
+area = (4U << slw) * (4U << slh);
+szctx = slw + slh;
+is1d = tx_class != 0;
+dbg_pre = msac->rng;
     memset(cf, 0, area * sizeof(*cf));
     memset(levels, 0, sizeof(levels));
 
@@ -452,6 +454,12 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     }
 
     eob = stb_av1_msac_symbol(msac, eob_bin_cdf, 4U + szctx);
+#ifdef STB_DBG_TRACE
+    if (stb_dbg_blknum <= 200000)
+        fprintf(stderr, "TEOB pl=%d tx=%d pre=%u post=%u "
+                        "bin=%u\n",
+                chroma, tx, dbg_pre, msac->rng, eob);
+#endif
     if (eob > 1U) {
         eob_bin = eob - 2U;
         /* eob_hi_bit[N_TX_SIZES][2][9][2] */
@@ -601,10 +609,19 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
             dc_tok = (int)stbv_av1_coef_hi_tok(msac, hi_cdf + ctx * 4U);
         }
     } else {
-        tok = stb_av1_msac_symbol(msac, eob_cdf + 0U, 2U);
+        /* dc-only (eob_bin == 0): dav1d evaluates the eob context with
+         * eob == 1 (base_tok row 1), and escapes via the br context of
+         * the DC position (x == y == 0 -> row 7).  One coefficient, the
+         * DC, is present. */
+        tok = stb_av1_msac_symbol(msac, eob_cdf, 2U);
         dc_tok = (int)(1U + tok);
+#ifdef STB_DBG_TRACE
+        if (stb_dbg_blknum <= 200000)
+            fprintf(stderr, "TDCLO pl=%d post=%u tok=%u\n",
+                    chroma, msac->rng, tok);
+#endif
         if (tok == 2U)
-            dc_tok = (int)stbv_av1_coef_hi_tok(msac, hi_cdf + 0U);
+            dc_tok = (int)stbv_av1_coef_hi_tok(msac, hi_cdf);
     }
 
     /* The final rc is the first non-zero coefficient in scan order.  dav1d's
@@ -618,6 +635,11 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
         dc_sign_cdf = cdf->coef + 3038U + (chroma != 0) * 6U +
                       (unsigned)dc_sign_ctx * 2U;
         dc_sign = (int)stb_av1_msac_bool_adapt(msac, dc_sign_cdf);
+#ifdef STB_DBG_TRACE
+        if (stb_dbg_blknum <= 200000)
+            fprintf(stderr, "TDCSGN pl=%d ctx=%d post=%u sign=%d\n",
+                    chroma, dc_sign_ctx, msac->rng, dc_sign);
+#endif
         dc_sign_level = (dc_sign - 1) & (2 << 6);
 
         dc_dq = dq_dc;
