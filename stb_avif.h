@@ -2765,10 +2765,10 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
                                               rc->stride_y, NULL,
                                               mode, &angle,
                                               bw4c, bh4c,
-                                              rc->intra_edge_filter, edge, bd);
+                                               rc->intra_edge_filter, edge, bd);
         stbv_av1_ipred_run_16(impl, rc->pred, w, edge, w, h,
                              angle | stb_avif_recon_edge_flags(rc, 1, bx4, by4),
-                             filt_idx, w, h, bd);
+                             filt_idx, rc->frame_w - x, rc->frame_h - y, bd);
         for (i = 0; i < ch; i++)
             memcpy(rc->plane_y + (y + i) * rc->stride_y + x,
                    rc->pred + i * w, (size_t)(cw * sizeof(stbv_u16)));
@@ -2810,9 +2810,9 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
                                                cbw4, cbh4,
                                                rc->intra_edge_filter,
                                                edge, rc->bit_depth);
-        stbv_av1_ipred_run_16(cimpl, rc->pred, w, edge, w, h,
-                             cangle | stb_avif_recon_edge_flags(rc, 0, cx4, cy4),
-                             0, w, h, rc->bit_depth);
+    stbv_av1_ipred_run_16(cimpl, rc->pred, w, edge, w, h,
+                          cangle | stb_avif_recon_edge_flags(rc, 0, bx4, by4),
+                          0, (cfw4 - cx4) << 2, (cfh4 - cy4) << 2, rc->bit_depth);
         for (i = 0; i < ch; i++) {
             memcpy(rc->plane_u + (y + i) * rc->stride_u + x,
                    rc->pred + i * w, (size_t)(cw * sizeof(stbv_u16)));
@@ -2919,10 +2919,17 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
     int h = stbv_av1_tx_dims[tx].h << 2;
     int cw, ch, i;
 #ifdef STB_DBG_TRACE
-    if (((px == 12 && py == 48 && tx == 0) || (px == 40 && py == 56 && tx == 1))) {
+    if (((px == 12 && py == 48 && tx == 0) || (px == 40 && py == 56 && tx == 1) ||
+         (px == 72 && py == 24 && tx == 1 && stride == rc->stride_y))) {
         fprintf(stderr, "ADDRES cf txtp=%d eob=%d:", txtp, eob);
         for (i = 0; i < 16; i++) fprintf(stderr, " %d", (int)cf[i]);
         fprintf(stderr, "\n");
+        if (px == 72 && py == 24 && tx == 1 && stride == rc->stride_y) {
+            int q9;
+            fprintf(stderr, "DQFULL:");
+            for (q9 = 0; q9 < 64; q9++) fprintf(stderr, " %d", (int)cf[q9]);
+            fprintf(stderr, "\n");
+        }
     }
 #endif
     cw = pw - px; if (cw > w) cw = w;
@@ -3071,13 +3078,14 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
     stbv_av1_dbg_z2_go = (stbv_av1_dbg_tx27 == 27 || stbv_av1_dbg_tx27 == 40);
 #endif
     stbv_av1_ipred_run_16(impl, rc->pred, w, edge, w, h,
-                         angle | stb_avif_recon_edge_flags(rc, 1, x4, y4),
-                         filt_idx, w, h, bd);
+                          angle | stb_avif_recon_edge_flags(rc, 1, rc->cur_bx4, rc->cur_by4),
+                          filt_idx, rc->frame_w - (x4 << 2), rc->frame_h - (y4 << 2), bd);
 #ifdef STB_DBG_TRACE
     fprintf(stderr, "YTX %d %d %d\n", x4, y4, tx);
-    if (x4 == 3 && y4 == 12 && tx == 0) {
+    if ((x4 == 3 && y4 == 12 && tx == 0) ||
+        (x4 == 18 && y4 == 6 && tx == 1)) {
         int q7;
-        fprintf(stderr, "PREDGRID:");
+        fprintf(stderr, "PREDGRID x=%d y=%d:", x4, y4);
         for (q7 = 0; q7 < w * h; q7++)
             fprintf(stderr, " %x", (int)rc->pred[q7] & 0xff);
         fprintf(stderr, "\n");
@@ -3230,8 +3238,8 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
     stbv_u16 *edge = tl + 320;
     stbv_u16 *plane;
     int stride;
-    const int pw = (rc->frame_w + 1) >> 1;
-    const int ph = (rc->frame_h + 1) >> 1;
+    const int pw = (rc->frame_w + rc->ss_hor) >> rc->ss_hor;
+    const int ph = (rc->frame_h + rc->ss_ver) >> rc->ss_ver;
     const int lfw4 = (rc->frame_w + 3) >> 2;
     const int lfh4 = (rc->frame_h + 3) >> 2;
     const int cfw4 = (lfw4 + rc->ss_hor) >> rc->ss_hor;
@@ -3265,8 +3273,8 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
                                            rc->intra_edge_filter,
                                            edge, rc->bit_depth);
     stbv_av1_ipred_run_16(cimpl, rc->pred, w, edge, w, h,
-                         cangle | stb_avif_recon_edge_flags(rc, 0, cx4, cy4),
-                         0, w, h, rc->bit_depth);
+                          cangle | stb_avif_recon_edge_flags(rc, 0, rc->cur_bx4, rc->cur_by4),
+                          0, (cfw4 - cx4) << 2, (cfh4 - cy4) << 2, rc->bit_depth);
     /* Chroma-from-luma: chroma = DC + alpha * (luma_ac - luma_dc).
      * A zero alpha means a flat mid-grey base instead of the edge DC
      * (dav1d ipred_cfl_126/128). */
