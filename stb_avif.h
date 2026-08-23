@@ -2840,6 +2840,14 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
     rc->has_chroma = has_chroma;
     rc->pal_y = pal_sz_y;
     rc->pal_uv = pal_sz_uv;
+#ifdef STB_DBG_TRACE
+    {
+        static int bi_n = 0;
+        if (bi_n < 120)
+            fprintf(stderr, "BINFO n=%d x=%d y=%d bs=%d skip=%d ym=%d paly=%d paluv=%d\n",
+                    bi_n++, bx4, by4, bs, skip, y_mode, pal_sz_y, pal_sz_uv);
+    }
+#endif
     /* dav1d predicts PER TRANSFORM so every txb sees freshly reconstructed
      * neighbours; the txb callbacks do that.  Whole-block-skip blocks never
      * reach the txb callbacks, so predict them in one shot here (no residual
@@ -2851,9 +2859,12 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
                                      y_mode, y_angle, uv_mode);
 }
 
-/* Per-transform-block intra prediction written into the plane.
- * px4/py4/tw4/th4 are 4x4 units in the given plane's coordinate system;
- * pw/ph are the plane's pixel dimensions. */
+    /* Per-transform-block intra prediction written into the plane.
+     * px4/py4/tw4/th4 are 4x4 units in the given plane's coordinate system;
+     * pw/ph are the plane's pixel dimensions. */
+    /* Palette blocks own their plane pixels: dav1d applies the palette
+     * instead of intra prediction (recon_b_intra goto skip_y_pred), so
+     * never let txb prediction clobber it here. */
 static void stb_avif_recon_pred_rect(struct stb_avif_scalar_recon *rc,
                                      stbv_u16 *plane, int stride,
                                      int px4, int py4, int tw4, int th4,
@@ -2904,6 +2915,13 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
     int w = stbv_av1_tx_dims[tx].w << 2;
     int h = stbv_av1_tx_dims[tx].h << 2;
     int cw, ch, i;
+#ifdef STB_DBG_TRACE
+    if (((px == 12 && py == 48 && tx == 0) || (px == 40 && py == 56 && tx == 1))) {
+        fprintf(stderr, "ADDRES cf txtp=%d eob=%d:", txtp, eob);
+        for (i = 0; i < 16; i++) fprintf(stderr, " %d", (int)cf[i]);
+        fprintf(stderr, "\n");
+    }
+#endif
     cw = pw - px; if (cw > w) cw = w;
     ch = ph - py; if (ch > h) ch = h;
     if (cw <= 0 || ch <= 0) return;
@@ -2939,8 +2957,11 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
      * (dav1d recon_b_intra: intra_pred -> coefs -> itxfm_add).
      * Intra-frame "skip" suppresses only the residual; the prediction
      * itself must always be written. */
-    stb_avif_recon_predict_txb_luma(rc, x4, y4, tx);
-    if (!rc->block_skip && eob > 0)
+    if (!rc->pal_y)
+        stb_avif_recon_predict_txb_luma(rc, x4, y4, tx);
+    /* eob is dav1d-style 0-based LAST-coefficient index: 0 == DC-only
+     * (coefficients present!), < 0 == none. */
+    if (!rc->block_skip && eob >= 0)
         stb_avif_recon_add_res(rc, rc->plane_y, rc->stride_y,
                                x4 << 2, y4 << 2, rc->frame_w, rc->frame_h,
                                tx, txtp, eob, cf);
@@ -3035,13 +3056,20 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
                                           stbv_av1_tx_dims[tx].h,
                                           rc->intra_edge_filter, edge, bd);
 #ifdef STB_DBG_TRACE
-    stbv_av1_dbg_z2_go = (stbv_av1_dbg_tx27 == 27);
+    stbv_av1_dbg_z2_go = (stbv_av1_dbg_tx27 == 27 || stbv_av1_dbg_tx27 == 40);
 #endif
     stbv_av1_ipred_run_16(impl, rc->pred, w, edge, w, h,
                          angle | stb_avif_recon_edge_flags(rc, 1, x4, y4),
                          filt_idx, w, h, bd);
 #ifdef STB_DBG_TRACE
     fprintf(stderr, "YTX %d %d %d\n", x4, y4, tx);
+    if (x4 == 3 && y4 == 12 && tx == 0) {
+        int q7;
+        fprintf(stderr, "PREDGRID:");
+        for (q7 = 0; q7 < w * h; q7++)
+            fprintf(stderr, " %x", (int)rc->pred[q7] & 0xff);
+        fprintf(stderr, "\n");
+    }
     {
         static int ov5 = 0;
         if (ov5 < 3 && bd == 8) {
@@ -3148,9 +3176,12 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
 #else
 #ifndef STB_AVIF_NO_RESIDUAL
     /* Prediction always runs for intra; "skip" only suppresses the
-     * residual (dav1d recon_b_intra semantics). */
-    stb_avif_recon_predict_txb_chroma(rc, pl, x4, y4, tx);
-    if (!rc->block_skip && !rc->pal_uv && eob > 0)
+     * residual (dav1d recon_b_intra semantics).  eob >= 0: DC-only
+     * still carries a coefficient.  UV-palette blocks own the chroma
+     * planes instead. */
+    if (!rc->pal_uv)
+        stb_avif_recon_predict_txb_chroma(rc, pl, x4, y4, tx);
+    if (!rc->block_skip && !rc->pal_uv && eob >= 0)
         stb_avif_recon_add_res(rc, plane, stride,
                                x4 << 2, y4 << 2, pw, ph,
                                tx, txtp, eob, cf);
@@ -3678,8 +3709,13 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         }
 #endif
         if (pu16 && pv16 && tc->plane_u && tc->plane_v) {
-            w = (tc->frame_width + 1) >> 1;
-            h = (tc->frame_height + 1) >> 1;
+            /* Chroma plane extent follows the ACTUAL subsampling
+             * (== full size for 4:4:4); hardcoding >>1 only works
+             * for 4:2:0. */
+            int ss_h = stream.seq.ss_hor ? 1 : 0;
+            int ss_v = stream.seq.ss_ver ? 1 : 0;
+            w = (tc->frame_width + ss_h) >> ss_h;
+            h = (tc->frame_height + ss_v) >> ss_v;
             for (hh = 0; hh < h; hh++)
                 for (x0 = 0; x0 < w; x0++) {
                     unsigned vu = (unsigned)pu16[hh * tc->stride_u + x0];

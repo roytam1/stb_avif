@@ -985,17 +985,12 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
                                      bw4, bh4, state->pal_tmp,
                                      state->pal_order, state->pal_ctxs))
             return -7;
-        if (c.recon && c.recon->luma_pal) c.recon->luma_pal(c.recon->ud, state->pal_tmp, state->pal_sz_y, bw4, bh4, state->pal_y);
     }
     if (state->pal_sz_uv) {
         if (stbv_av1_palette_indices(msac, cdf, 1, state->pal_sz_uv,
                                      cbw4, cbh4, state->pal_tmp,
                                      state->pal_order, state->pal_ctxs))
             return -8;
-        if (c.recon && c.recon->chroma_pal) {
-            c.recon->chroma_pal(c.recon->ud, 0, state->pal_tmp, state->pal_sz_uv, cbw4, cbh4, state->pal_u);
-            c.recon->chroma_pal(c.recon->ud, 1, state->pal_tmp, state->pal_sz_uv, cbw4, cbh4, state->pal_v);
-        }
     }
 
     /* block_info hook: fires AFTER all mode decisions are final (including
@@ -1009,6 +1004,18 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
                             (int)block_skip,
                             intra.y_mode, intra.y_angle, intra.uv_mode,
                             intra.cfl_alpha_u, intra.cfl_alpha_v);
+
+    /* Palette pixel application must run AFTER block_info (the callbacks
+     * read the recon context's current block position) and before the
+     * coefficient loop; txb prediction is suppressed for palette blocks
+     * so nothing overwrites these pixels. */
+    if (state->pal_sz_y && c.recon && c.recon->luma_pal)
+        c.recon->luma_pal(c.recon->ud, state->pal_tmp, state->pal_sz_y,
+                          bw4, bh4, state->pal_y);
+    if (state->pal_sz_uv && c.recon && c.recon->chroma_pal) {
+        c.recon->chroma_pal(c.recon->ud, 0, state->pal_tmp, state->pal_sz_uv, cbw4, cbh4, state->pal_u);
+        c.recon->chroma_pal(c.recon->ud, 1, state->pal_tmp, state->pal_sz_uv, cbw4, cbh4, state->pal_v);
+    }
 
     /* NOTE: neighbour-mode / palette context writes happen AFTER the
      * reconstruction loop below (dav1d calls set_ctx after recon), so
