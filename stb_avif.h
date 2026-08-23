@@ -2618,20 +2618,25 @@ static int stb_avif_recon_decoded_before(int qx4, int qy4,
  * on the row above (decoded earlier unless in a right-hand SB of this SB
  * row); bottom-left follows decoding order.  Values use our port's
  * STBV_AV1_EDGE_I444_* convention: bit0 TOP_HAS_RIGHT, bit1 LEFT_HAS_BOTTOM. */
+static int stb_avif_recon_block_edge_flags(struct stb_avif_scalar_recon *rc,
+                                           int luma, int x4, int y4,
+                                           int w4, int h4);
 static int stb_avif_recon_txb_edge_flags(struct stb_avif_scalar_recon *rc,
                                          int luma, int bx4, int by4,
                                          int bw4, int bh4,
                                          int tx4, int ty4, int tw4, int th4)
 {
+    /* Block-level availability == dav1d's decode_b intra_edge_flags. */
+    const int blk = stb_avif_recon_block_edge_flags(rc, luma, bx4, by4,
+                                                    bw4, bh4);
     const int ss_hor = luma ? 0 : rc->ss_hor;
     const int ss_ver = luma ? 0 : rc->ss_ver;
-    const int fw4 = luma ? (rc->frame_w + 3) >> 2
-                         : (((rc->frame_w + 3) >> 2) + ss_hor) >> ss_hor;
-    const int fh4 = luma ? (rc->frame_h + 3) >> 2
-                         : (((rc->frame_h + 3) >> 2) + ss_ver) >> ss_ver;
-    const int sbh = ss_hor ? (rc->sb_step4 + 1) >> 1 : rc->sb_step4;
-    const int sbv = ss_ver ? (rc->sb_step4 + 1) >> 1 : rc->sb_step4;
-    int init_x, init_y, sub_w4, sub_h4;
+    /* dav1d splits each block into 64x64 quadrants (init += 16 luma units)
+     * and evaluates per-txb flags against the QUADRANT base, not the
+     * per-txb offset. */
+    const int qw = luma ? 16 : 16 >> ss_hor;
+    const int qh = luma ? 16 : 16 >> ss_ver;
+    int xl, yl, qxl, qyl, sub_w4, sub_h4;
     int sb_has_tr, sb_has_bl, fl = 0;
     if (!luma) {
         /* block coords arrive in luma units; work in chroma units */
@@ -2640,24 +2645,22 @@ static int stb_avif_recon_txb_edge_flags(struct stb_avif_scalar_recon *rc,
         bw4 = (bw4 + ss_hor) >> ss_hor;
         bh4 = (bh4 + ss_ver) >> ss_ver;
     }
-    init_x = tx4 - bx4; init_y = ty4 - by4;
-    sub_w4 = bw4 < init_x + 16 ? bw4 : init_x + 16;
-    sub_h4 = bh4 < init_y + 16 ? bh4 : init_y + 16;
+    xl = tx4 - bx4; yl = ty4 - by4;
+    qxl = xl / qw * qw;
+    qyl = yl / qh * qh;
+    sub_w4 = bw4 < qxl + qw ? bw4 : qxl + qw;
+    sub_h4 = bh4 < qyl + qh ? bh4 : qyl + qh;
 
-    sb_has_tr = (init_x + 16 < bw4) || init_y ||
-                (by4 > 0 && bx4 + bw4 < fw4 &&
-                 stb_avif_recon_decoded_before(bx4 + bw4, by4 - 1,
-                                               bx4, by4, sbh));
-    sb_has_bl = init_x || (init_y + 16 < bh4) ||
-                (by4 + bh4 < fh4 && bx4 > 0 &&
-                 stb_avif_recon_decoded_before(bx4 - 1, by4 + bh4,
-                                               bx4, by4, sbv));
+    sb_has_tr = (qxl + qw < bw4) ? 1 :
+                (qyl ? 0 :
+                 (blk & STBV_AV1_EDGE_I444_TOP_HAS_RIGHT ? 1 : 0));
+    sb_has_bl = qxl ? 0 :
+                ((qyl + qh < bh4) ? 1 :
+                 (blk & STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM ? 1 : 0));
 
-    if (!(((ty4 > by4 + init_y) || !sb_has_tr) &&
-          (tx4 + tw4 >= bx4 + init_x + sub_w4)))
+    if (!((yl > qyl || !sb_has_tr) && (xl + tw4 >= qxl + sub_w4)))
         fl |= STBV_AV1_EDGE_I444_TOP_HAS_RIGHT;
-    if ((tx4 == bx4 + init_x) &&
-        (sb_has_bl || ty4 + th4 < by4 + init_y + sub_h4))
+    if (!(xl > qxl || (!sb_has_bl && yl + th4 >= qyl + sub_h4)))
         fl |= STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM;
     return fl;
 }
@@ -2959,6 +2962,15 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
      * itself must always be written. */
     if (!rc->pal_y)
         stb_avif_recon_predict_txb_luma(rc, x4, y4, tx);
+#ifdef STB_DBG_TRACE
+    if ((x4 == 8 && y4 == 14) || (x4 == 10 && y4 == 14))
+        fprintf(stderr, "OURFLG x=%d y=%d tx=%d fl=%d\n", x4, y4, tx,
+                stb_avif_recon_txb_edge_flags(rc, 1, rc->cur_bx4,
+                                              rc->cur_by4, rc->cur_bw4,
+                                              rc->cur_bh4, x4, y4,
+                                              stbv_av1_tx_dims[tx].w,
+                                              stbv_av1_tx_dims[tx].h));
+#endif
     /* eob is dav1d-style 0-based LAST-coefficient index: 0 == DC-only
      * (coefficients present!), < 0 == none. */
     if (!rc->block_skip && eob >= 0)
