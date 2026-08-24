@@ -2614,6 +2614,7 @@ struct stb_avif_scalar_recon {
     stbv_u8 *lf_txlw;
     stbv_u32 *lf_blkid_c;   /* chroma-plane coverage (separate set) */
     stbv_u8 *lf_txlw_c;
+    stbv_u8 *lf_done;       /* per-4x4-unit reconstruction bitmap (luma) */
     int lf_mapw4, lf_maph4;
     ptrdiff_t lf_b4stride;
 };
@@ -2707,12 +2708,24 @@ static int stb_avif_recon_block_edge_flags(struct stb_avif_scalar_recon *rc,
     const int sbh = ss_hor ? (rc->sb_step4 + 1) >> 1 : rc->sb_step4;
     const int sbv = ss_ver ? (rc->sb_step4 + 1) >> 1 : rc->sb_step4;
     int fl = 0;
-    if (y4 > 0 && x4 + w4 < fw4 &&
-        stb_avif_recon_decoded_before(x4 + w4, y4 - 1, x4, y4, sbh))
-        fl |= STBV_AV1_EDGE_I444_TOP_HAS_RIGHT;
-    if (y4 + h4 < fh4 && x4 > 0 &&
-        stb_avif_recon_decoded_before(x4 - 1, y4 + h4, x4, y4, sbv))
-        fl |= STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM;
+    (void)sbh; (void)sbv;
+    /* Exact availability: the neighbouring pixels must already be
+     * reconstructed.  Require the contiguous run the predictor will
+     * actually copy (up to w4 / h4 units) to be present. */
+    if (rc->lf_done && y4 > 0 && x4 + w4 < fw4) {
+        int k, ok = 1;
+        for (k = 0; k < w4; k++)
+            if (!rc->lf_done[(size_t)(y4 - 1) * rc->lf_b4stride +
+                             (x4 + w4 + k)]) { ok = 0; break; }
+        if (ok) fl |= STBV_AV1_EDGE_I444_TOP_HAS_RIGHT;
+    }
+    if (rc->lf_done && y4 + h4 < fh4 && x4 > 0) {
+        int k, ok = 1;
+        for (k = 0; k < h4; k++)
+            if (!rc->lf_done[(size_t)(y4 + h4 + k) * rc->lf_b4stride +
+                             (x4 - 1)]) { ok = 0; break; }
+        if (ok) fl |= STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM;
+    }
     return fl;
 }
 
@@ -2862,6 +2875,18 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
     rc->cur_by4 = by4;
     rc->cur_bw4 = stbv_av1_block_dimensions[bs][0];
     rc->cur_bh4 = stbv_av1_block_dimensions[bs][1];
+#ifdef STB_DBG_TRACE
+    fprintf(stderr, "OUREDGE bx=%d by=%d blk=%d txb=%d bw4=%d bh4=%d tx0=%d\n",
+            bx4, by4,
+            stb_avif_recon_block_edge_flags(rc, 1, bx4, by4,
+                                            rc->cur_bw4, rc->cur_bh4),
+            stb_avif_recon_txb_edge_flags(rc, 1, bx4, by4,
+                                          rc->cur_bw4, rc->cur_bh4,
+                                          bx4, by4,
+                                          stbv_av1_tx_dims[tx0 >= 0 ? tx0 : 0].w,
+                                          stbv_av1_tx_dims[tx0 >= 0 ? tx0 : 0].h),
+            rc->cur_bw4, rc->cur_bh4, tx0);
+#endif
     rc->cur_ltw4 = stbv_av1_tx_dims[tx0 >= 0 && tx0 < STBV_AV1_N_TX_SIZES
                                    ? tx0 : 0].w;
     rc->cur_lth4 = stbv_av1_tx_dims[tx0 >= 0 && tx0 < STBV_AV1_N_TX_SIZES
@@ -3028,6 +3053,7 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
                     rc->lf_blkid[(size_t)ly * rc->lf_b4stride + lx] = id;
                     rc->lf_txlw[(size_t)ly * rc->lf_b4stride + lx] =
                         (stbv_u8)stbv_av1_tx_dims[tx].lw;
+                    rc->lf_done[(size_t)ly * rc->lf_b4stride + lx] = 1;
                 }
         }
     }
@@ -3570,6 +3596,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     int res_w4, res_h4;
     stbv_u32 *lf_blkid_map = 0, *lf_blkid_map_c = 0;
     stbv_u8 *lf_txlw_map = 0, *lf_txlw_map_c = 0;
+    stbv_u8 *lf_done_map = 0;
     int bw8al, bh8al;
     stbv_u8 *above_cre0 = 0, *above_cre1 = 0, *left_cre0 = 0, *left_cre1 = 0;
     stbv_u8 *above_skip = 0, *left_skip = 0, *above_pal_sz = 0;
@@ -3763,8 +3790,9 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         lf_txlw_map = (stbv_u8*)stb_avif_calloc((size_t)mw * mh, 1);
         lf_blkid_map_c = (stbv_u32*)stb_avif_calloc((size_t)mw * mh, sizeof(stbv_u32));
         lf_txlw_map_c = (stbv_u8*)stb_avif_calloc((size_t)mw * mh, 1);
+        lf_done_map = (stbv_u8*)stb_avif_calloc((size_t)mw * mh, 1);
         if (!lf_blkid_map || !lf_txlw_map ||
-            !lf_blkid_map_c || !lf_txlw_map_c) { r = -5; goto oom16; }
+            !lf_blkid_map_c || !lf_txlw_map_c || !lf_done_map) { r = -5; goto oom16; }
         memset(lf_blkid_map_c, 0xFF, (size_t)mw * mh * sizeof(stbv_u32));
     }
     memset(&recon, 0, sizeof(recon));
@@ -3772,6 +3800,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     recon.lf_txlw = lf_txlw_map;
     recon.lf_blkid_c = lf_blkid_map_c;
     recon.lf_txlw_c = lf_txlw_map_c;
+    recon.lf_done = lf_done_map;
     recon.lf_mapw4 = res_w4;
     recon.lf_maph4 = res_h4;
     recon.lf_b4stride = res_w4;
@@ -4747,7 +4776,11 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
                     /* neutral chroma for monochrome -> grey = luma */
                     u_val = 128;
                     v_val = 128;
-                } else if (sh.subsampling_y > 0) {
+                } else if (sh.subsampling_x > 0 || sh.subsampling_y > 0) {
+                    /* any subsampling (4:2:0 AND 4:2:2) needs scaled
+                     * chroma coords; the old y-only test made 4:2:2
+                     * sample chroma at full rate -> half-width
+                     * stretched colour bands. */
                     int uv_r = row >> sh.subsampling_y;
                     int uv_c = col >> sh.subsampling_x;
                     if (uv_r >= uv_h) uv_r = uv_h - 1;
