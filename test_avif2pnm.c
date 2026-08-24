@@ -90,6 +90,29 @@ static int decode_to_ppm(const char *avif_path, const char *ppm_path, int req_ch
 
     fclose(out);
 
+    /* Auxiliary alpha plane -> sidecar PGM when present */
+    {
+        int astride = 0;
+        unsigned char *aplane = stb_avif_last_alpha(&astride);
+        if (aplane && c == 4) {
+            FILE *fa;
+            char apgmpath[1024];
+            size_t nl = strlen(ppm_path);
+            memcpy(apgmpath, ppm_path, nl + 1);
+            if (nl >= 4 && apgmpath[nl-4] == '.') strcpy(apgmpath + nl - 4, ".pgm");
+            else strcat(apgmpath, ".pgm");
+            fa = fopen(apgmpath, "wb");
+            if (fa) {
+                int r2;
+                fprintf(fa, "P5\n%d %d\n255\n", w, h);
+                for (r2 = 0; r2 < h; r2++)
+                    fwrite(aplane + (size_t)r2 * astride, 1, (size_t)w, fa);
+                fclose(fa);
+                printf("  OK: alpha -> %s\n", apgmpath);
+            }
+        }
+    }
+
     printf("  OK: %dx%d, %d chan -> %s\n", w, h, c, ppm_path);
 
     stb_avif_free(img);

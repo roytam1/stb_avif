@@ -1,4 +1,6 @@
+
     int sh_parsed_ok = 0;
+    int probe_seq_hbd = 0, probe_seq_mono = 0;
 /* stb_avif.h - v0.01 - AVIF image decoder - public domain
  *                                                  - http://github.com/nothings/stb
  *
@@ -94,6 +96,17 @@ unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
 void stb_avif_free(void *ptr);
 
 /* Returns a string describing the last error. */
+static unsigned char *stb_avif_g_last_alpha;
+static int stb_avif_g_last_alpha_stride;
+
+/* Returns the 8-bit alpha plane (w-strided) decoded from the AVIF
+ * auxiliary alpha item of the most recent load, or NULL. */
+static unsigned char *stb_avif_last_alpha(int *stride)
+{
+    if (stride) *stride = stb_avif_g_last_alpha_stride;
+    return stb_avif_g_last_alpha;
+}
+
 const char *stb_avif_failure_reason(void);
 
 /* -------------------------------------------------------------------------- */
@@ -318,6 +331,7 @@ static stbv_u32 stb_avif_read_uleb128(struct stb_avif_reader *r)
 #define STB_AVIF_BOX_ISPE   STB_AVIF_FOURCC('i','s','p','e')
 #define STB_AVIF_BOX_PIXI   STB_AVIF_FOURCC('p','i','x','i')
 #define STB_AVIF_BOX_AV1C   STB_AVIF_FOURCC('a','v','1','C')
+#define STB_AVIF_BOX_IREF   STB_AVIF_FOURCC('i','r','e','f')
 #define STB_AVIF_BOX_COLR   STB_AVIF_FOURCC('c','o','l','r')
 #define STB_AVIF_BOX_MDAT   STB_AVIF_FOURCC('m','d','a','t')
 #define STB_AVIF_BOX_MOOV   STB_AVIF_FOURCC('m','o','o','v')
@@ -404,6 +418,14 @@ struct stb_avif_avif_info {
     const unsigned char *input;
     int input_len;
     size_t meta_end_offset;
+
+    /* Auxiliary alpha item (raw AV1 payload + decoded 8-bit plane) */
+    int primary_item_id;
+    int alpha_item_id;
+    const unsigned char *alpha_av1;
+    size_t alpha_size;
+    unsigned char *alpha_plane;
+    int alpha_stride;
 
     /* Decoded planes (8-bit) */
     unsigned char *plane_y;
@@ -570,6 +592,7 @@ static void stb_avif_parse_av1c(struct stb_avif_reader *r,
 /* Parse the iloc box (item location) to find where coded data is stored */
 static void stb_avif_parse_iloc(struct stb_avif_reader *r,
                                  struct stb_avif_avif_info *info,
+                                 int primary_id,
                                  stbv_u32 *data_offset,
                                  stbv_u64 *data_size)
 {
@@ -577,25 +600,35 @@ static void stb_avif_parse_iloc(struct stb_avif_reader *r,
     int offset_size, length_size, base_offset_size, index_size;
     int item_count, i_item;
 
+#ifdef STB_AVIF_DEBUG_LOUD
+    fprintf(stderr, "DBG parse_iloc enter\n");
+#endif
     version = stb_avif_read_byte(r);
     {
-        int byte2 = stb_avif_read_byte(r);
-        offset_size = ((byte2 >> 4) & 0xF) + 1;
-        length_size = (byte2 & 0xF) + 1;
-    }
-
-    if (version >= 1) {
-        int byte3 = stb_avif_read_byte(r);
-        base_offset_size = ((byte3 >> 4) & 0xF) + 1;
-        index_size = (byte3 & 0xF) + 1;
-        (void)index_size;
-    } else {
-        base_offset_size = 1;
-        index_size = 0;
+        /* fullbox: version(1) + flags(3), then the sizes byte */
+        int fl;
+        stb_avif_read_byte(r);          /* version */
+        stb_avif_read_byte(r);
+        stb_avif_read_byte(r);
+        fl       = stb_avif_read_byte(r);
+        /* ISO/AVIF: these 4-bit fields store SIZE-1 (0 = absent) */
+        offset_size = (fl >> 4) & 0xF;
+        length_size = fl & 0xF;
+        /* base_offset_size / index_size byte is present in ALL versions */
+        fl = stb_avif_read_byte(r);
+        base_offset_size = (fl >> 4) & 0xF;
+        index_size = fl & 0xF;
+        if (version < 2) {
+            index_size = 0;
+            (void)index_size;
+        }
     }
 
     item_count = (int)stb_avif_read_be16(r);
-
+#ifdef STB_AVIF_DEBUG_LOUD
+    fprintf(stderr, "DBG iloc v=%d osz=%d lsz=%d bosz=%d cnt=%d\n",
+            version, offset_size, length_size, base_offset_size, item_count);
+#endif
     *data_offset = 0;
     *data_size = 0;
 
@@ -611,7 +644,9 @@ static void stb_avif_parse_iloc(struct stb_avif_reader *r,
             item_ID = (int)stb_avif_read_be16(r);
             stb_avif_read_be16(r);
         }
-        (void)item_ID;
+#ifdef STB_AVIF_DEBUG_LOUD
+        fprintf(stderr, "DBG iloc item id=%d\n", item_ID);
+#endif
 
         if (version >= 1) {
             /* construction_method */
@@ -629,12 +664,9 @@ static void stb_avif_parse_iloc(struct stb_avif_reader *r,
             int j;
             stbv_u64 base_offset_val = 0;
 
-            /* For version 0, base_offset size = offset_size (from first byte).
-               For version >= 1, base_offset size = base_offset_size. */
-            if (version == 0)
-                _off_sz = offset_size;
-            else
-                _off_sz = base_offset_size;
+            /* ISO/IEC 14496-12: per-item base_offset is base_offset_size
+             * units wide in every iloc version. */
+            _off_sz = base_offset_size;
 
             for (j = 0; j < _off_sz; j++) {
                 base_offset_val = (base_offset_val << 8) | (stbv_u64)stb_avif_read_byte(r);
@@ -654,17 +686,11 @@ static void stb_avif_parse_iloc(struct stb_avif_reader *r,
                     extent_length = (extent_length << 8) | (stbv_u64)stb_avif_read_byte(r);
                 }
 
-                /* Store the first extent for now */
-                if (i_item == 0 && i_extent == 0) {
+                if (item_ID == primary_id && i_extent == 0 &&
+                    !*data_size) {
                     *data_offset = (stbv_u32)(base_offset_val + extent_offset);
                     *data_size = extent_length;
                 }
-            }
-
-            /* For simplicity, we take the first item's data.
-               In a real decoder we'd match item_ID from pitm. */
-            if (i_item == 0) {
-                break; /* We'll use the first item */
             }
         }
     }
@@ -711,15 +737,49 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
         if (r->pos + 8 > r->size) break;
 
         stb_avif_read_box_header(r, &sub);
-
+#ifdef STB_AVIF_DEBUG_LOUD
+        fprintf(stderr, "DBG meta sub @%d type=%08x sz=%u\n",
+                (int)r->pos, (int)sub.type, (unsigned)sub.size);
+#endif
         if (sub.type == STB_AVIF_BOX_HDLR) {
             /* handler box - verify picture handler */
         }
         else if (sub.type == STB_AVIF_BOX_PITM) {
-            stb_avif_parse_pitm(r);
+            info->primary_item_id = stb_avif_parse_pitm(r);
         }
         else if (sub.type == STB_AVIF_BOX_ILOC) {
-            stb_avif_parse_iloc(r, info, &data_offset, &data_size);
+            stb_avif_parse_iloc(r, info, info->primary_item_id,
+                                &data_offset, &data_size);
+        }
+        else if (sub.type == STB_AVIF_BOX_IREF) {
+            /* iref: version/flags, then SUB-BOXES, one per reference
+             * type: { u32 size; u32 type('auxl'); u16 from_item_ID;
+             *         u16 reference_count; u16 to_item_ID[]; } */
+            struct stb_avif_box ir = sub;
+            stb_avif_enter_box(r, &ir);
+            stb_avif_read_byte(r);
+            stb_avif_read_byte(r); stb_avif_read_byte(r); stb_avif_read_byte(r);
+            while (r->pos + 8 <= (size_t)(ir.data_start + ir.data_size)) {
+                stbv_u32 esz = stb_avif_read_be32(r);
+                stbv_u32 ety = stb_avif_read_be32(r);
+                int from_id, ref_count, ri;
+                size_t ebody_end;
+                if (esz < 8) break;
+                ebody_end = r->pos + esz - 8;
+                if (ebody_end > (size_t)(ir.data_start + ir.data_size))
+                    ebody_end = (size_t)(ir.data_start + ir.data_size);
+                from_id = (int)stb_avif_read_be16(r);
+                ref_count = (int)stb_avif_read_be16(r);
+                for (ri = 0; ri < ref_count; ri++) {
+                    int to_id;
+                    if (r->pos + 2 > ebody_end) break;
+                    to_id = (int)stb_avif_read_be16(r);
+                    if (ety == STB_AVIF_FOURCC('a','u','x','l') &&
+                        to_id == info->primary_item_id)
+                        info->alpha_item_id = from_id;
+                }
+                r->pos = ebody_end;
+            }
         }
         else if (sub.type == STB_AVIF_BOX_IPRP) {
             /* Item properties container */
@@ -4328,6 +4388,8 @@ unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
                                           int req_channels)
 {
     struct stb_avif_reader r;
+    
+    
     struct stb_avif_avif_info info;
     struct stb_av1_sequence_header sh;
     struct stb_av1_frame_header fh;
@@ -4379,6 +4441,11 @@ unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
 
     /* Parse the meta box to extract all AVIF metadata */
     stb_avif_parse_meta(&r, &info);
+#ifdef STB_AVIF_DEBUG_LOUD
+    fprintf(stderr, "DBG postmeta w=%d h=%d alpha_id=%d av1_size=%u\n",
+            info.width, info.height, info.alpha_item_id,
+            (unsigned)info.av1_size);
+#endif
 
     /* Verify we have image dimensions */
     STB_AVIF_CHECK(info.width > 0 && info.height > 0,
@@ -4614,6 +4681,8 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
             sh.subsampling_y = probe.seq.ss_ver ? 1 : 0;
             sh.matrix_coefficients = probe.seq.mtrx;
             sh.color_range = probe.seq.color_range;
+            probe_seq_hbd = probe.seq.hbd;
+            probe_seq_mono = probe.seq.monochrome ? 1 : 0;
             sh_parsed_ok = 1;
 #ifdef STB_DBG_TRACE
             fprintf(stderr, "PROBESEQ bd=%d mono=%d ss=%d,%d mtrx=%d cr=%d\n",
@@ -4750,6 +4819,133 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
     }
 #endif
 
+    /* ---- auxiliary alpha item (AVIF auxl -> primary) ---- */
+#ifdef STB_AVIF_DEBUG_LOUD
+    fprintf(stderr, "DBG alpha_item_id=%d primary=%d\n",
+            info.alpha_item_id, info.primary_item_id);
+#endif
+    if (info.alpha_item_id > 0 && !info.alpha_plane) {
+        /* Locate the alpha item's coded data with a fresh iloc scan. */
+        struct stb_avif_reader ar;
+        size_t ameta_start = 0;
+        int found_iloc_box = 0;
+        {
+            /* re-find the meta box payload start */
+            size_t scan = 0;
+            while (scan + 8 <= (size_t)len) {
+                stbv_u32 bsz = ((stbv_u32)data[scan]<<24)|((stbv_u32)data[scan+1]<<16)|
+                               ((stbv_u32)data[scan+2]<<8)|data[scan+3];
+                stbv_u32 bty = ((stbv_u32)data[scan+4]<<24)|((stbv_u32)data[scan+5]<<16)|
+                               ((stbv_u32)data[scan+6]<<8)|data[scan+7];
+                if (bsz < 8) break;
+                if (bty == STB_AVIF_FOURCC('m','e','t','a')) { ameta_start = scan + 8 + 4; break; }
+                scan += bsz;
+            }
+        }
+        fprintf(stderr, "DBG rescan ameta_start=%u meta_end=%u\n",
+                (unsigned)ameta_start, (unsigned)info.meta_end_offset);
+        if (ameta_start) {
+            size_t ap = ameta_start;
+            size_t aend = info.meta_end_offset;
+            while (ap + 8 <= aend) {
+                stbv_u32 dbg_bsz = ((stbv_u32)data[ap]<<24)|((stbv_u32)data[ap+1]<<16)|
+                               ((stbv_u32)data[ap+2]<<8)|data[ap+3];
+                stbv_u32 dbg_bty = ((stbv_u32)data[ap+4]<<24)|((stbv_u32)data[ap+5]<<16)|
+                               ((stbv_u32)data[ap+6]<<8)|data[ap+7];
+                fprintf(stderr, "DBG child @%u %c%c%c%c sz=%u\n", (unsigned)ap,
+                        (int)(dbg_bty>>24), (int)((dbg_bty>>16)&255),
+                        (int)((dbg_bty>>8)&255), (int)(dbg_bty&255),
+                        (unsigned)dbg_bsz);
+                if (dbg_bsz < 8) break;
+                ap += dbg_bsz;
+            }
+            ap = ameta_start;
+            while (ap + 8 <= aend) {
+                stbv_u32 bsz = ((stbv_u32)data[ap]<<24)|((stbv_u32)data[ap+1]<<16)|
+                               ((stbv_u32)data[ap+2]<<8)|data[ap+3];
+                stbv_u32 bty = ((stbv_u32)data[ap+4]<<24)|((stbv_u32)data[ap+5]<<16)|
+                               ((stbv_u32)data[ap+6]<<8)|data[ap+7];
+                if (bsz < 8 || ap + bsz > aend + 4096) break;
+                if (bty == STB_AVIF_FOURCC('i','l','o','c')) {
+                    stbv_u32 aoff = 0; stbv_u64 asz = 0;
+                    fprintf(stderr, "DBG iloc branch entered sz=%u\n", bsz);
+                    stb_avif_reader_init(&ar, data + ap + 8, bsz - 8);
+                    stb_avif_parse_iloc(&ar, &info, info.alpha_item_id,
+                                        &aoff, &asz);
+                    fprintf(stderr, "DBG iloc parsed aoff=%u asz=%u\n",
+                            (unsigned)aoff, (unsigned)asz);
+                    if (asz > 0 && aoff + asz <= (stbv_u64)len) {
+                        info.alpha_av1 = info.input + aoff;
+                        info.alpha_size = (size_t)asz;
+                    }
+                    found_iloc_box = 1;
+                    break;
+                }
+                ap += bsz;
+            }
+        }
+        (void)found_iloc_box;
+        if (info.alpha_av1 && info.alpha_size > 0 &&
+            !sh.monochrome) {
+            /* Decode the mono alpha stream with the scalar path. */
+            struct stb_av1_tile_context tc2;
+            struct stb_av1_internal_stream astream;
+            memset(&astream, 0, sizeof(astream));
+            fprintf(stderr, "DBG alpha payload=%p size=%d\n",
+                    (void*)info.alpha_av1, (int)info.alpha_size);
+            if (stb_av1_parse_internal_stream(&astream, info.alpha_av1,
+                                              info.alpha_size) == 0 &&
+                astream.have_seq) {
+                /* C89: declarations first */
+                int abd = 8 + (int)astream.seq.hbd * 2;
+                int aw = fh.frame_width, ah = fh.frame_height;
+                int astride = (aw + 31) & ~31;
+                unsigned char *aplane;
+#ifdef STB_AVIF_DEBUG_LOUD
+                fprintf(stderr, "DBG astream ok mono=%d hbd=%d\n",
+                        (int)astream.seq.monochrome, (int)astream.seq.hbd);
+#endif
+                if (astream.seq.monochrome)
+                    aplane = (unsigned char *)stb_avif_calloc(
+                        (size_t)astride * (ah + 64), 1);
+                else
+                    aplane = NULL;
+                if (aplane) {
+                        memset(&tc2, 0, sizeof(tc2));
+                        tc2.sh = &sh; tc2.fh = &fh;
+                        tc2.frame_width = aw; tc2.frame_height = ah;
+                        tc2.mb_cols = (aw + 3) / 4; tc2.mb_rows = (ah + 3) / 4;
+                        tc2.qindex_y = fh.base_q_idx; tc2.qindex_u = fh.base_q_idx;
+                        tc2.qindex_v = fh.base_q_idx;
+                        tc2.plane_y = aplane;
+                        tc2.stride_y = astride;
+                        tc2.bit_depth = abd;
+                        tc2.pixel_max = (1 << abd) - 1;
+                        sh.bit_depth = abd;
+                        sh.monochrome = 1;
+                        if (stb_avif_decode_frame_scalar(&tc2,
+                                info.alpha_av1, info.alpha_size) == 0) {
+                            int yy2;
+                            info.alpha_plane = (unsigned char *)stb_avif_malloc(
+                                (size_t)aw * ah);
+                            if (info.alpha_plane)
+                                for (yy2 = 0; yy2 < ah; yy2++)
+                                    memcpy(info.alpha_plane + (size_t)yy2 * aw,
+                                           aplane + (size_t)yy2 * astride, aw);
+                            info.alpha_stride = aw;
+                        }
+                        stb_avif_free_internal(aplane);
+                        /* restore colour description clobbered above */
+                        sh.bit_depth = 8 + (int)probe_seq_hbd * 2;
+                        sh.monochrome = probe_seq_mono;
+                    }
+            }
+        }
+    }
+
+#ifdef STB_AVIF_DEBUG_LOUD
+    fprintf(stderr, "DBG post-decode\n");
+#endif
     /* Determine output channels */
     output_channels = req_channels;
     if (output_channels == 0) {
@@ -4856,11 +5052,21 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
                 result[(row * info.width + col) * output_channels + 2] = (unsigned char)b;
 
                 if (output_channels == 4) {
-                    result[(row * info.width + col) * output_channels + 3] = 255; /* Alpha */
+                    if (info.alpha_plane)
+                        result[(row * info.width + col) * 4 + 3] =
+                            info.alpha_plane[(size_t)row * info.alpha_stride + col];
+                    else
+                        result[(row * info.width + col) * 4 + 3] = 255;
                 }
             }
         }
     }
+
+#ifdef STB_AVIF_DEBUG_LOUD
+    fprintf(stderr, "DBG post-convert\n");
+#endif
+    stb_avif_g_last_alpha = info.alpha_plane;
+    stb_avif_g_last_alpha_stride = info.alpha_plane ? info.alpha_stride : 0;
 
     /* Set output parameters */
     *x = info.width;
