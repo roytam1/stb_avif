@@ -2650,14 +2650,20 @@ static int stb_avif_recon_decoded_before(int qx4, int qy4,
 static int stb_avif_recon_block_edge_flags(struct stb_avif_scalar_recon *rc,
                                            int luma, int x4, int y4,
                                            int w4, int h4);
+static int stb_avif_recon_block_edge_flags_run(struct stb_avif_scalar_recon *rc,
+                                               int luma, int x4, int y4,
+                                               int w4, int h4,
+                                               int tr_run, int bl_run);
+
 static int stb_avif_recon_txb_edge_flags(struct stb_avif_scalar_recon *rc,
                                          int luma, int bx4, int by4,
                                          int bw4, int bh4,
                                          int tx4, int ty4, int tw4, int th4)
 {
     /* Block-level availability == dav1d's decode_b intra_edge_flags. */
-    const int blk = stb_avif_recon_block_edge_flags(rc, luma, bx4, by4,
-                                                    bw4, bh4);
+    const int blk = stb_avif_recon_block_edge_flags_run(rc, luma, bx4, by4,
+                                                        bw4, bh4,
+                                                        tw4, th4);
     const int ss_hor = luma ? 0 : rc->ss_hor;
     const int ss_ver = luma ? 0 : rc->ss_ver;
     /* dav1d splits each block into 64x64 quadrants (init += 16 luma units)
@@ -2699,6 +2705,18 @@ static int stb_avif_recon_block_edge_flags(struct stb_avif_scalar_recon *rc,
                                            int luma, int x4, int y4,
                                            int w4, int h4)
 {
+    return stb_avif_recon_block_edge_flags_run(rc, luma, x4, y4, w4, h4,
+                                               w4, h4);
+}
+
+/* Run-aware variant: tr_run / bl_run give the number of 4x4 units the
+ * predictor will actually read beyond the edge (the transform extent,
+ * not necessarily the whole block). */
+static int stb_avif_recon_block_edge_flags_run(struct stb_avif_scalar_recon *rc,
+                                               int luma, int x4, int y4,
+                                               int w4, int h4,
+                                               int tr_run, int bl_run)
+{
     const int ss_hor = luma ? 0 : rc->ss_hor;
     const int ss_ver = luma ? 0 : rc->ss_ver;
     const int fw4 = luma ? (rc->frame_w + 3) >> 2
@@ -2712,16 +2730,16 @@ static int stb_avif_recon_block_edge_flags(struct stb_avif_scalar_recon *rc,
     /* Exact availability: the neighbouring pixels must already be
      * reconstructed.  Require the contiguous run the predictor will
      * actually copy (up to w4 / h4 units) to be present. */
-    if (rc->lf_done && y4 > 0 && x4 + w4 < fw4) {
+    if (rc->lf_done && y4 > 0 && x4 + tr_run < fw4) {
         int k, ok = 1;
-        for (k = 0; k < w4; k++)
+        for (k = 0; k < tr_run; k++)
             if (!rc->lf_done[(size_t)(y4 - 1) * rc->lf_b4stride +
                              (x4 + w4 + k)]) { ok = 0; break; }
         if (ok) fl |= STBV_AV1_EDGE_I444_TOP_HAS_RIGHT;
     }
-    if (rc->lf_done && y4 + h4 < fh4 && x4 > 0) {
+    if (rc->lf_done && y4 + bl_run < fh4 && x4 > 0) {
         int k, ok = 1;
-        for (k = 0; k < h4; k++)
+        for (k = 0; k < bl_run; k++)
             if (!rc->lf_done[(size_t)(y4 + h4 + k) * rc->lf_b4stride +
                              (x4 - 1)]) { ok = 0; break; }
         if (ok) fl |= STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM;
