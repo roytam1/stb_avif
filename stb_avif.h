@@ -129,6 +129,7 @@ const char *stb_avif_failure_reason(void);
 #include "stb_av1_scalar.h"
 #include "stb_av1_ipred.h"
 #include "stb_av1_leaf.h"
+#include "stb_av1_deblock.h"
 #endif
 
 
@@ -2607,6 +2608,14 @@ struct stb_avif_scalar_recon {
     int cfl_ac_bx, cfl_ac_by;
     int cfl_ac_ok;
     int cur_ltw4, cur_lth4; /* block's max luma tx size (b->tx dims) */
+    /* Deblocking: per-4x4-unit block identity + covering-transform
+     * log2-width maps (frame-sized, filled during recon). */
+    stbv_u32 *lf_blkid;
+    stbv_u8 *lf_txlw;
+    stbv_u32 *lf_blkid_c;   /* chroma-plane coverage (separate set) */
+    stbv_u8 *lf_txlw_c;
+    int lf_mapw4, lf_maph4;
+    ptrdiff_t lf_b4stride;
 };
 
 /* Decoding-order key for availability checks: superblock row, then SB
@@ -3007,6 +3016,21 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
         stb_avif_recon_add_res(rc, rc->plane_y, rc->stride_y,
                                x4 << 2, y4 << 2, rc->frame_w, rc->frame_h,
                                tx, txtp, eob, cf);
+    {
+        /* record transform coverage for the deblocking pass */
+        if (rc->lf_blkid) {
+            int tw = stbv_av1_tx_dims[tx].w, th = stbv_av1_tx_dims[tx].h;
+            int lx, ly;
+            stbv_u32 id = ((stbv_u32)rc->cur_bx4 << 16) |
+                          (stbv_u32)rc->cur_by4;
+            for (ly = y4; ly < y4 + th && ly < rc->lf_maph4; ly++)
+                for (lx = x4; lx < x4 + tw && lx < rc->lf_mapw4; lx++) {
+                    rc->lf_blkid[(size_t)ly * rc->lf_b4stride + lx] = id;
+                    rc->lf_txlw[(size_t)ly * rc->lf_b4stride + lx] =
+                        (stbv_u8)stbv_av1_tx_dims[tx].lw;
+                }
+        }
+    }
 #ifdef STB_DBG_TRACE
     if ((x4 == 146 || x4 == 147 || x4 == 148) && y4 <= 3) {
         int r8;
@@ -3251,6 +3275,22 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
         stb_avif_recon_add_res(rc, plane, stride,
                                x4 << 2, y4 << 2, pw, ph,
                                tx, txtp, eob, cf);
+    if (pl == 0 && rc->lf_blkid_c && rc->has_chroma) {
+        /* record this chroma txb's own extent (mapped to luma units);
+         * identity = chroma-plane origin so chroma-internal boundaries
+         * remain visible to the deblocker */
+        int tw = stbv_av1_tx_dims[tx].w << rc->ss_hor;
+        int th = stbv_av1_tx_dims[tx].h << rc->ss_ver;
+        int lx0 = x4 << rc->ss_hor, ly0 = y4 << rc->ss_ver;
+        int lx, ly;
+        stbv_u32 id = ((stbv_u32)x4 << 16) | (stbv_u32)y4;
+        for (ly = ly0; ly < ly0 + th && ly < rc->lf_maph4; ly++)
+            for (lx = lx0; lx < lx0 + tw && lx < rc->lf_mapw4; lx++) {
+                rc->lf_blkid_c[(size_t)ly * rc->lf_b4stride + lx] = id;
+                rc->lf_txlw_c[(size_t)ly * rc->lf_b4stride + lx] =
+                    (stbv_u8)stbv_av1_tx_dims[tx].lw;
+            }
+    }
 #ifdef STB_DBG_TRACE
     {
         static int dbg_cr2 = 0;
@@ -3528,6 +3568,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     stbv_u8 *above_mode = 0, *left_mode = 0, *above_tx = 0, *left_tx = 0;
     stbv_u8 *above_res = 0, *left_res = 0;
     int res_w4, res_h4;
+    stbv_u32 *lf_blkid_map = 0, *lf_blkid_map_c = 0;
+    stbv_u8 *lf_txlw_map = 0, *lf_txlw_map_c = 0;
     int bw8al, bh8al;
     stbv_u8 *above_cre0 = 0, *above_cre1 = 0, *left_cre0 = 0, *left_cre1 = 0;
     stbv_u8 *above_skip = 0, *left_skip = 0, *above_pal_sz = 0;
@@ -3713,7 +3755,26 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
             (size_t)tc->stride_v * uvh2, sizeof(stbv_u16));
         if (!pu16 || !pv16) { r = -5; goto oom16; }
     }
+    /* Deblocking maps: frame-sized 4x4-unit grid (SB-padded like the
+     * residual context arrays). */
+    {
+        int mw = res_w4, mh = res_h4;
+        lf_blkid_map = (stbv_u32*)stb_avif_calloc((size_t)mw * mh, sizeof(stbv_u32));
+        lf_txlw_map = (stbv_u8*)stb_avif_calloc((size_t)mw * mh, 1);
+        lf_blkid_map_c = (stbv_u32*)stb_avif_calloc((size_t)mw * mh, sizeof(stbv_u32));
+        lf_txlw_map_c = (stbv_u8*)stb_avif_calloc((size_t)mw * mh, 1);
+        if (!lf_blkid_map || !lf_txlw_map ||
+            !lf_blkid_map_c || !lf_txlw_map_c) { r = -5; goto oom16; }
+        memset(lf_blkid_map_c, 0xFF, (size_t)mw * mh * sizeof(stbv_u32));
+    }
     memset(&recon, 0, sizeof(recon));
+    recon.lf_blkid = lf_blkid_map;
+    recon.lf_txlw = lf_txlw_map;
+    recon.lf_blkid_c = lf_blkid_map_c;
+    recon.lf_txlw_c = lf_txlw_map_c;
+    recon.lf_mapw4 = res_w4;
+    recon.lf_maph4 = res_h4;
+    recon.lf_b4stride = res_w4;
     recon.plane_y = py16;
     recon.plane_u = pu16;
     recon.plane_v = pv16;
@@ -3749,6 +3810,42 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                             stream.tile_data, stream.tile_size,
                             stb_avif_leaf_cb, &state,
                             stb_avif_row_reset_cb);
+
+#ifdef STB_AVIF_DEBLOCK
+    if (!r) {
+        const struct stb_av1_framehdr *fh = &stream.frame;
+        int lvl_yv = (int)fh->loopfilter.level_y[0];
+        int lvl_yh = (int)fh->loopfilter.level_y[1];
+        int lvl_u = (int)fh->loopfilter.level_u;
+        int lvl_v = (int)fh->loopfilter.level_v;
+        int sharp = (int)fh->loopfilter.sharpness;
+        int maxv = (1 << recon.bit_depth) - 1;
+        if (recon.ss_ver && !lvl_u) lvl_u = lvl_v;
+        if (py16)
+            stb_avif_deblock_plane_u16(py16, tc->stride_y,
+                                       tc->frame_width, tc->frame_height,
+                                       lvl_yv, lvl_yh, sharp, 0, maxv,
+                                       recon.bit_depth - 8,
+                                       lf_blkid_map, lf_txlw_map, res_w4,
+                                       res_w4, res_h4, 0, 0);
+        if (pu16 && !stream.seq.monochrome) {
+            int cw = (tc->frame_width + (recon.ss_hor ? 1 : 0)) >> recon.ss_hor;
+            int ch = (tc->frame_height + (recon.ss_ver ? 1 : 0)) >> recon.ss_ver;
+            stb_avif_deblock_plane_u16(pu16, tc->stride_u, cw, ch,
+                                       lvl_u, lvl_u, sharp, 1, maxv,
+                                       recon.bit_depth - 8,
+                                       lf_blkid_map_c, lf_txlw_map_c, res_w4,
+                                       res_w4, res_h4,
+                                       recon.ss_hor, recon.ss_ver);
+            stb_avif_deblock_plane_u16(pv16, tc->stride_v, cw, ch,
+                                       lvl_v ? lvl_v : lvl_u, lvl_v ? lvl_v : lvl_u,
+                                       sharp, 1, maxv, recon.bit_depth - 8,
+                                       lf_blkid_map_c, lf_txlw_map_c, res_w4,
+                                       res_w4, res_h4,
+                                       recon.ss_hor, recon.ss_ver);
+        }
+    }
+#endif
 
     /* Convert internal u16 planes to the caller's 8-bit planes. */
 #ifdef STB_DBG_TRACE
