@@ -381,7 +381,9 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
 unsigned stride, shift, shift2, mask;
 unsigned char *level;
 unsigned int dbg_pre;
-int cf_max = 32767; /* dav1d ~(~127U << 8) for BITDEPTH 8 */
+/* Large enough for any bit depth; final pixel clipping happens
+ * in itxfm_add (iclip_pixel). */
+int cf_max = 1048575;
 
     if (tx < 0 || tx >= STBV_AV1_N_TX_SIZES)
         return -1;
@@ -645,6 +647,8 @@ dbg_pre = msac->rng;
         dc_sign_level = (dc_sign - 1) & (2 << 6);
 
         dc_dq = dq_dc;
+        {
+        int dc_tok_orig = dc_tok;
         if (dc_tok == 15) {
             dc_tok = (int)stbv_av1_coef_golomb(msac) + 15;
             dc_tok &= 0xfffff;
@@ -657,6 +661,19 @@ dbg_pre = msac->rng;
             dc_dq = cf_max + dc_sign;
         cf[0] = dc_sign ? -dc_dq : dc_dq;
         cul_level = (unsigned)dc_tok;
+#ifdef STB_DBG_TRACE
+        {
+            static int dbg_dc_n = 0;
+            if (dbg_dc_n < 8) {
+                fprintf(stderr, "DCVAL tok=%d dq_base=%d shift=%d "
+                        "dc_dq_final=%d sign=%d\n",
+                        (int)dc_tok_orig, (int)dq_dc, dq_shift,
+                        dc_dq, dc_sign);
+                dbg_dc_n++;
+            }
+        }
+#endif
+        }
     }
 
     if (rc) {

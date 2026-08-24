@@ -1,6 +1,3 @@
-
-    int sh_parsed_ok = 0;
-    int probe_seq_hbd = 0, probe_seq_mono = 0;
 /* stb_avif.h - v0.01 - AVIF image decoder - public domain
  *                                                  - http://github.com/nothings/stb
  *
@@ -224,6 +221,8 @@ static void stb_avif_free_internal(void *ptr)
 }
 
 /* ----------- BITSTREAM READER ----------- */
+int sh_parsed_ok = 0;
+int probe_seq_hbd = 0, probe_seq_mono = 0;
 
 struct stb_avif_reader {
     const unsigned char *data;
@@ -2641,8 +2640,6 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
                     (unsigned)rc->plane_y[r8 * rc->stride_y + (x4 << 2)]);
         fprintf(stderr, "\n");
     }
-#endif
-#ifdef STB_DBG_TRACE
     {
         static int over_n = 0;
         if (over_n < 4 && rc->bit_depth == 8) {
@@ -2663,7 +2660,6 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
                     }
         }
     }
-#endif
     {
         static int dbg_n = 0;
         if (dbg_n < 100000) {
@@ -2690,6 +2686,7 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
             fprintf(stderr, "\n");
         }
     }
+#endif
 #endif
 #endif
 }
@@ -3214,6 +3211,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
 
     memset(&stream, 0, sizeof(stream));
     r = stb_av1_parse_internal_stream(&stream, av1_data, av1_size);
+#ifdef STB_DBG_TRACE
     fprintf(stderr, "LF y0=%d y1=%d u=%d v=%d dltlf=%d\n",
         (int)stream.frame.loopfilter.level_y[0], (int)stream.frame.loopfilter.level_y[1],
         (int)stream.frame.loopfilter.level_u, (int)stream.frame.loopfilter.level_v,
@@ -3223,6 +3221,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         (int)stream.seq.filter_intra, (int)stream.seq.screen_content_tools,
         (int)stream.seq.cdef, (int)stream.seq.restoration,
         (int)stream.seq.super_res, (int)stream.seq.order_hint);
+#endif
     if (r < 0 || !stream.have_seq || !stream.have_frame)
         return -1;
     if ((int)stream.frame.width[0] != tc->frame_width ||
