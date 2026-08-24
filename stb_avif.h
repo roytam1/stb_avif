@@ -3523,6 +3523,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     int frame_w4, frame_h4, frame_w8, frame_h8;
     stbv_u8 *above_mode = 0, *left_mode = 0, *above_tx = 0, *left_tx = 0;
     stbv_u8 *above_res = 0, *left_res = 0;
+    int res_w4, res_h4;
+    int bw8al, bh8al;
     stbv_u8 *above_cre0 = 0, *above_cre1 = 0, *left_cre0 = 0, *left_cre1 = 0;
     stbv_u8 *above_skip = 0, *left_skip = 0, *above_pal_sz = 0;
     stbv_u8 *left_pal_sz = 0, *above_pal_uv = 0, *left_pal_uv = 0;
@@ -3579,8 +3581,20 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     left_mode = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
     above_tx = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
     left_tx = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
-    above_res = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
-    left_res = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
+    /* Residual-context arrays must be superblock-padded like dav1d's
+     * f->bw/f->lh row/col contexts: edge transforms write their full
+     * extent (e.g. a 16x32 txb at the right frame edge marks columns
+     * beyond the 8-aligned frame width) and later dc_sign/skip ctx
+     * reads those positions. */
+    {
+        int sbstep4 = stream.seq.sb128 ? 32 : 16;
+        res_w4 = ((frame_w4 + sbstep4 - 1) / sbstep4) * sbstep4;
+        res_h4 = ((frame_h4 + sbstep4 - 1) / sbstep4) * sbstep4;
+        bw8al = (int)(((tc->frame_width + 7U) & ~7U) >> 2);
+        bh8al = (int)(((tc->frame_height + 7U) & ~7U) >> 2);
+    }
+    above_res = (stbv_u8*)stb_avif_calloc(res_w4, 1);
+    left_res = (stbv_u8*)stb_avif_calloc(res_h4, 1);
     /* Chroma context/pal_uv arrays must cover the CHROMA plane extent
      * (== luma extent for 4:4:4), SB-rounded like dav1d's f->bw arrays;
      * frame_w8 alone only fits the subsampled case. */
@@ -3589,13 +3603,26 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         int ss_v = stream.seq.ss_ver ? 1 : 0;
         int cfw4 = (frame_w4 + ss_h) >> ss_h;
         int cfh4 = (frame_h4 + ss_v) >> ss_v;
-        cframe_w8 = ss_h ? frame_w8 : (((cfw4 + 31) >> 5) << 5);
-        cframe_h8 = ss_v ? frame_h8 : (((cfh4 + 31) >> 5) << 5);
+        /* Chroma context arrays are SB-padded on the CHROMA grid
+         * (sbstep4>>ss per superblock), matching dav1d whose f->bw-derived
+         * write clip never rejects in-extent marks. */
+        int step_h = ((stream.seq.sb128 ? 32 : 16) >> ss_h);
+        int step_v = ((stream.seq.sb128 ? 32 : 16) >> ss_v);
+        cframe_w8 = ((cfw4 + step_h - 1) / step_h) * step_h;
+        cframe_h8 = ((cfh4 + step_v - 1) / step_v) * step_v;
     }
     above_cre0 = (stbv_u8*)stb_avif_calloc(cframe_w8, 1);
     above_cre1 = (stbv_u8*)stb_avif_calloc(cframe_w8, 1);
     left_cre0 = (stbv_u8*)stb_avif_calloc(cframe_h8, 1);
     left_cre1 = (stbv_u8*)stb_avif_calloc(cframe_h8, 1);
+    /* dav1d's BlockContexts default to 0x40 (reset_context) at tile init;
+     * never-written positions must read as 'no residual', not zero. */
+    memset(above_res, 0x40, (size_t)res_w4);
+    memset(left_res, 0x40, (size_t)res_h4);
+    memset(above_cre0, 0x40, (size_t)cframe_w8);
+    memset(above_cre1, 0x40, (size_t)cframe_w8);
+    memset(left_cre0, 0x40, (size_t)cframe_h8);
+    memset(left_cre1, 0x40, (size_t)cframe_h8);
     above_skip = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
     left_skip = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
     above_pal_sz = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
@@ -3621,8 +3648,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     arrays.left_mode = left_mode; arrays.left_mode_n = frame_h4;
     arrays.above_tx = above_tx; arrays.above_tx_n = frame_w4;
     arrays.left_tx = left_tx; arrays.left_tx_n = frame_h4;
-    arrays.above_res = above_res; arrays.above_res_n = frame_w4;
-    arrays.left_res = left_res; arrays.left_res_n = frame_h4;
+    arrays.above_res = above_res; arrays.above_res_n = res_w4;
+    arrays.left_res = left_res; arrays.left_res_n = res_h4;
     /* dav1d's f->bw/f->bh are SB-ALIGNED unit counts, so its write clip
      * (imin(txw, f->bw - bx)) never rejects in-frame marks; context arrays
      * keep every mark including past-pixel-edge units.  Clipping disabled
@@ -3632,16 +3659,25 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
      * imin(uvtx_w, (f->bw - bx + ss_hor) >> ss_hor).  With f->bw =
      * frame_w4 this is simply "units inside the chroma plane
      * extent". SKIP marking bypasses the clip entirely. */
-    arrays.above_res_mark_n = 0;   /* luma: array size == f->bw */
-    arrays.left_res_mark_n = 0;
-    arrays.above_cre_mark_n[0] = arrays.above_cre_mark_n[1] =
-        (frame_w4 + (stream.seq.ss_hor ? 1 : 0)) >> (stream.seq.ss_hor ? 1 : 0);
-    arrays.left_cre_mark_n[0] = arrays.left_cre_mark_n[1] =
-        (frame_h4 + (stream.seq.ss_ver ? 1 : 0)) >> (stream.seq.ss_ver ? 1 : 0);
-    arrays.above_cre[0] = above_cre0; arrays.above_cre_n[0] = frame_w8;
-    arrays.above_cre[1] = above_cre1; arrays.above_cre_n[1] = frame_w8;
-    arrays.left_cre[0] = left_cre0; arrays.left_cre_n[0] = frame_h8;
-    arrays.left_cre[1] = left_cre1; arrays.left_cre_n[1] = frame_h8;
+    arrays.above_res_mark_n = bw8al;
+    arrays.left_res_mark_n = bh8al;
+    /* dav1d clips CODED residual marking to f->bw/f->bh (8-aligned px
+     * width): luma imin(txw, f->bw - bx); chroma ctw =
+     * imin(uvtx_w, (f->bw - bx + ss_hor) >> ss_hor).  Expressed as an
+     * absolute column limit on our frame-wide arrays this is simply
+     * bw8al (=f->bw) for luma and (bw8al+ss)>>ss for chroma. */
+    arrays.above_cre_mark_n[0] = (bw8al + (stream.seq.ss_hor ? 1 : 0)) >>
+                                 (stream.seq.ss_hor ? 1 : 0);
+    arrays.above_cre_mark_n[1] = (bw8al + (stream.seq.ss_hor ? 1 : 0)) >>
+                                 (stream.seq.ss_hor ? 1 : 0);
+    arrays.left_cre_mark_n[0] = (bh8al + (stream.seq.ss_ver ? 1 : 0)) >>
+                                 (stream.seq.ss_ver ? 1 : 0);
+    arrays.left_cre_mark_n[1] = (bh8al + (stream.seq.ss_ver ? 1 : 0)) >>
+                                 (stream.seq.ss_ver ? 1 : 0);
+    arrays.above_cre[0] = above_cre0; arrays.above_cre_n[0] = cframe_w8;
+    arrays.above_cre[1] = above_cre1; arrays.above_cre_n[1] = cframe_w8;
+    arrays.left_cre[0] = left_cre0; arrays.left_cre_n[0] = cframe_h8;
+    arrays.left_cre[1] = left_cre1; arrays.left_cre_n[1] = cframe_h8;
     arrays.above_skip = above_skip; arrays.above_skip_n = frame_w4;
     arrays.left_skip = left_skip; arrays.left_skip_n = frame_h4;
     arrays.above_pal_sz = above_pal_sz; arrays.above_pal_sz_n = frame_w4;

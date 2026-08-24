@@ -19,6 +19,8 @@ int stb_dbg_blknum;
 int stb_dbg_blkx;
 int stb_dbg_blky;
 unsigned int stb_dbg_pre;
+unsigned int stb_dbg_tx_dec;
+int stb_dbg_dcsign_s;
 #define STB_DBG_PRE(s) ((stb_dbg_pre = (s)->rng))
 #endif
 

@@ -349,6 +349,8 @@ typedef struct stbv_av1_leaf_decode_ctx {
     const struct stb_av1_intra_block *intra;
     int bs;
     int bw4, bh4;
+    /* Unclipped luma block dims (dav1d uses full b_dim for skip ctx). */
+    int bw4_unc, bh4_unc;
     int cbw4, cbh4;
     /* Unclipped chroma block dims (dav1d uses full b_dim for skip ctx). */
     int cbw4_unc, cbh4_unc;
@@ -382,11 +384,21 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
     int is_chroma = chroma != 0; /* dav1d: chroma = !!plane */
 
     sctx = stbv_av1_get_skip_ctx(rs, x4, y4,
-                                 is_chroma ? c->cbw4_unc : bw4,
-                                 is_chroma ? c->cbh4_unc : bh4,
+                                 is_chroma ? c->cbw4_unc : c->bw4_unc,
+                                 is_chroma ? c->cbh4_unc : c->bh4_unc,
                                  txw4, txh4, is_chroma);
 #ifdef STB_DBG_TRACE
     STB_DBG_PRE(msac);
+    if (chroma == 1 && x4 >= 382 && y4 >= 80 && y4 <= 88)
+        fprintf(stderr, "CSKIPCTX x=%d y=%d w=%d h=%d sctx=%d "
+                        "a=[%02x %02x %02x] l=[%02x %02x %02x %02x]\n",
+                x4, y4, txw4, txh4, sctx,
+                rs ? rs->above[x4] : 0xEE, rs && x4+1 < rs->above_n ? rs->above[x4+1] : 0xEE,
+                rs && x4+2 < rs->above_n ? rs->above[x4+2] : 0xEE,
+                rs ? rs->left[y4] : 0xEE,
+                rs && y4+1 < rs->left_n ? rs->left[y4+1] : 0xEE,
+                rs && y4+2 < rs->left_n ? rs->left[y4+2] : 0xEE,
+                rs && y4+3 < rs->left_n ? rs->left[y4+3] : 0xEE);
 #endif
 skip = stb_av1_msac_bool_adapt(
     msac, cdf->coef + stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2);
@@ -471,6 +483,24 @@ skip = stb_av1_msac_bool_adapt(
         s -= txh4;
         dc_sign_ctx = (s != 0) + (s > 0);
 #ifdef STB_DBG_TRACE
+        if (!chroma && x4 >= 764 && y4 == 168)
+            fprintf(stderr, "DCSBYTES x=%d y=%d a=[%02x %02x %02x %02x] "
+                            "l=[%02x %02x %02x %02x %02x %02x %02x %02x]\n",
+                    x4, y4,
+                    rs->above[x4], rs->above[x4+1], rs->above[x4+2],
+                    rs->above[x4+3],
+                    rs->left[y4], rs->left[y4+1], rs->left[y4+2],
+                    rs->left[y4+3], rs->left[y4+4], rs->left[y4+5],
+                    rs->left[y4+6], rs->left[y4+7]);
+        if (chroma == 1 && x4 >= 382 && y4 == 84)
+            fprintf(stderr, "DCSCBYTES x=%d y=%d w=%d h=%d "
+                            "a=[%02x %02x %02x] l=[%02x %02x %02x %02x]\n",
+                    x4, y4, txw4, txh4,
+                    rs->above[x4], rs->above[x4+1],
+                    txw4 > 2 ? rs->above[x4+2] : 0xEE,
+                    rs->left[y4], rs->left[y4+1],
+                    rs->left[y4+2], rs->left[y4+3]);
+        stb_dbg_dcsign_s = s;
         if (stb_dbg_blknum <= 200000 && chroma)
             fprintf(stderr, "TSGNCTX pl=%d x=%d y=%d w=%d h=%d "
                             "a=[%u %u %u %u] l=[%u %u %u %u %u %u %u %u] "
@@ -808,7 +838,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
 {
     struct stb_av1_intra_block intra;
     stbv_av1_leaf_decode_ctx c;
-    int bw4, bh4, max_tx, uv_tx, tx0;
+    int bw4, bh4, bw4_unc, bh4_unc, max_tx, uv_tx, tx0;
     int layout, ss_hor, ss_ver, sb_step;
     int cfl_allowed, cbw4, cbh4, has_chroma;
     int cbw4_unc, cbh4_unc;
@@ -849,10 +879,19 @@ c.recon = recon;
     if (frame && frame->width[0] > 0 && frame->height > 0) {
         int fw4 = (((int)frame->width[0] + 7) & ~7) >> 2;
         int fh4 = (((int)frame->height + 7) & ~7) >> 2;
+        /* Syntax decisions (skip ctx, tx size, palette/filter-intra gates)
+         * must use the block's own dimensions; only coefficient-grid
+         * extents may be clipped to the padded frame (dav1d keeps b_dim
+         * unclipped and clips during recon). */
+        bw4_unc = bw4;
+        bh4_unc = bh4;
         if (fw4 - bx4 < bw4) bw4 = fw4 - bx4;
         if (fh4 - by4 < bh4) bh4 = fh4 - by4;
         if (bw4 <= 0 || bh4 <= 0)
             return 0;
+    } else {
+        bw4_unc = bw4;
+        bh4_unc = bh4;
     }
     cbw4 = (bw4 + ss_hor) >> ss_hor;
     cbh4 = (bh4 + ss_ver) >> ss_ver;
@@ -1041,17 +1080,18 @@ if (frame && frame->txfm_mode == 1 &&
                                   stbv_av1_tx_is_large(state->tx.left_tx, by4,
                                                        stbv_av1_tx_dims[max_tx].lh,
                                                        state->tx.left_n));
-    /* A decoded transform must never exceed the block's own extent
-     * (dav1d's tx tree only splits within the block); clamp down via
-     * the sub-transform chain if the symbol overshot. */
-    while (tx0 > STBV_AV1_TX_4X4 &&
-           (stbv_av1_tx_dims[tx0].w > bw4 ||
-            stbv_av1_tx_dims[tx0].h > bh4))
-        tx0 = stbv_av1_tx_dims[tx0].sub;
+#ifdef STB_DBG_TRACE
+    stb_dbg_tx_dec = tx0;
+#endif
+    /* NOTE: no size-based clamp here — dav1d derives b->tx purely from
+     * max_txfm_size_for_bs[bs] and the sub-chain; the tx-size symbol
+     * semantics do not depend on frame-edge clipping of bw4/bh4. */
 #ifdef STB_DBG_TRACE
     if (stb_dbg_blknum <= 200000)
         fprintf(stderr, "TTX x=%d y=%d pre=%u post=%u sym=%u\n",
                 bx4, by4, stb_dbg_pre, msac->rng, (unsigned)tx0);
+    fprintf(stderr, "TTXDUMP bs=%d bw4=%d bh4=%d max=%d dec=%u\n",
+            bs, bw4, bh4, max_tx, (unsigned)stb_dbg_tx_dec);
 #endif
     }
 }
@@ -1063,6 +1103,8 @@ if (frame && frame->txfm_mode == 1 &&
     c.intra = &intra;
     c.bs = bs;
     c.bw4 = bw4;
+    c.bw4_unc = bw4_unc;
+    c.bh4_unc = bh4_unc;
     c.bh4 = bh4;
     c.cbw4 = cbw4;
     c.cbh4 = cbh4;

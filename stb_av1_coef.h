@@ -637,8 +637,10 @@ dbg_pre = msac->rng;
         dc_sign = (int)stb_av1_msac_bool_adapt(msac, dc_sign_cdf);
 #ifdef STB_DBG_TRACE
         if (stb_dbg_blknum <= 200000)
-            fprintf(stderr, "TDCSGN pl=%d ctx=%d post=%u sign=%d\n",
-                    chroma, dc_sign_ctx, msac->rng, dc_sign);
+            fprintf(stderr, "TDCSGN pl=%d ctx=%d pre=%u post=%u sign=%d "
+                            "dc_tok=%d s=%d\n",
+                    chroma, dc_sign_ctx, stb_dbg_pre, msac->rng, dc_sign,
+                    dc_tok, stb_dbg_dcsign_s);
 #endif
         dc_sign_level = (dc_sign - 1) & (2 << 6);
 
