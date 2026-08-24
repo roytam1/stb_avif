@@ -1,3 +1,4 @@
+    int sh_parsed_ok = 0;
 /* stb_avif.h - v0.01 - AVIF image decoder - public domain
  *                                                  - http://github.com/nothings/stb
  *
@@ -2816,8 +2817,8 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
         if (cbw4 <= 0 || cbh4 <= 0) return;
         w = cbw4 << 2;
         h = cbh4 << 2;
-        cw = ((rc->frame_w + 1) >> 1) - x; if (cw > w) cw = w;
-        ch = ((rc->frame_h + 1) >> 1) - y; if (ch > h) ch = h;
+        cw = ((rc->frame_w + ss_hor) >> ss_hor) - x; if (cw > w) cw = w;
+        ch = ((rc->frame_h + ss_ver) >> ss_ver) - y; if (ch > h) ch = h;
         if (cw <= 0 || ch <= 0) return;
         cimpl = stbv_av1_prepare_intra_edges_16(cx4, cx4 > 0, cy4, cy4 > 0,
                                                cfw4, cfh4,
@@ -3230,8 +3231,11 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
     if (!rc || !rc->plane_u || !rc->plane_v) return;
     plane = pl == 0 ? rc->plane_u : rc->plane_v;
     stride = pl == 0 ? rc->stride_u : rc->stride_v;
-    pw = (rc->frame_w + 1) >> 1;
-    ph = (rc->frame_h + 1) >> 1;
+    /* Chroma plane extent follows ACTUAL subsampling: full width for
+     * 4:2:2/4:4:4, half height for 4:2:2/4:2:0. Hardcoded >>1 broke
+     * 4:2:2 (right half of chroma never written). */
+    pw = (rc->frame_w + rc->ss_hor) >> rc->ss_hor;
+    ph = (rc->frame_h + rc->ss_ver) >> rc->ss_ver;
     (void)txw4; (void)txh4;
 #ifdef STB_AVIF_PRED_ONLY
     (void)cf; (void)tx; (void)txtp;
@@ -4287,37 +4291,6 @@ unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
         obu_size = 0;
 
 while (more_obus && obu_reader.pos < obu_reader.size) {
-            if (!seq_header_found) {
-                /* Before we read OBUs, we may need to use the config OBU from av1C */
-                                if (info.av1c_size > 0 && !seq_header_found) {
-                    /* Parse sequence header from av1C config OBUs */
-                    struct stb_avif_reader config_r;
-                    int config_obu_type, config_obu_ext, config_obu_hassize;
-                    stbv_u32 config_obu_sz;
-
-                    stb_avif_reader_init(&config_r, info.av1c_data, (size_t)info.av1c_size);
-                    stb_av1_read_obu_header(&config_r, &config_obu_type,
-                                             &config_obu_ext, &config_obu_hassize);
-                    if (config_obu_hassize)
-                        config_obu_sz = stb_av1_read_obu_size(&config_r);
-                    else
-                        config_obu_sz = (stbv_u32)(info.av1c_size - (size_t)(config_r.pos));
-
-if (config_obu_type == STB_AV1_OBU_SEQUENCE_HEADER && config_obu_sz > 0) {
-                        struct stb_avif_reader seq_config_r;
-                        struct stb_av1_bool_reader seq_config_br;
-                        stb_avif_reader_init(&seq_config_r,
-                                              config_r.data + config_r.pos,
-                                              (size_t)config_obu_sz);
-                        stb_av1_bool_reader_init(&seq_config_br,
-                                                   config_r.data + config_r.pos,
-                                                   (size_t)config_obu_sz);
-                        stb_av1_parse_sequence_header_obu(&seq_config_r, &sh, &seq_config_br);
-                        seq_header_found = 1;
-                    }
-                }
-            }
-
             /* Parse OBU header */
             if (obu_reader.pos + 1 > obu_reader.size)
                 break;
@@ -4441,12 +4414,69 @@ if (config_obu_type == STB_AV1_OBU_SEQUENCE_HEADER && config_obu_sz > 0) {
                 more_obus = 0;
         }
 
+        /* Fallback: no sequence-header OBU in the item stream (AVIF
+         * encoders often put it only inside av1C).  Parse the config
+         * OBU from av1C now — AFTER the stream walk, so the stream's
+         * own seq header always wins. */
+        if (!seq_header_found && info.av1c_size > 0) {
+            struct stb_avif_reader config_r;
+            int config_obu_type, config_obu_ext, config_obu_hassize;
+            stbv_u32 config_obu_sz;
+
+            stb_avif_reader_init(&config_r, info.av1c_data, (size_t)info.av1c_size);
+            stb_av1_read_obu_header(&config_r, &config_obu_type,
+                                     &config_obu_ext, &config_obu_hassize);
+            if (config_obu_hassize)
+                config_obu_sz = stb_av1_read_obu_size(&config_r);
+            else
+                config_obu_sz = (stbv_u32)(info.av1c_size - (size_t)(config_r.pos));
+
+            if (config_obu_type == STB_AV1_OBU_SEQUENCE_HEADER && config_obu_sz > 0) {
+                struct stb_avif_reader seq_config_r;
+                struct stb_av1_bool_reader seq_config_br;
+                stb_avif_reader_init(&seq_config_r,
+                                      config_r.data + config_r.pos,
+                                      (size_t)config_obu_sz);
+                stb_av1_bool_reader_init(&seq_config_br,
+                                           config_r.data + config_r.pos,
+                                           (size_t)config_obu_sz);
+                stb_av1_parse_sequence_header_obu(&seq_config_r, &sh, &seq_config_br);
+                seq_header_found = 1;
+            }
+        }
+
         /* For reduced still_picture_header, restore dimensions from ISPE */
         if (sh.reduced_still_picture_header && info.width > 0 && info.height > 0) {
             sh.max_frame_width = info.width;
             sh.max_frame_height = info.height;
         }
         STB_AVIF_CHECK(seq_header_found, "No AV1 sequence header found");
+        sh_parsed_ok = 1;
+    }
+
+    /* Authoritative re-parse: the legacy bool-reader based sequence
+     * decode above mis-reads real streams (it arithmetic-decodes what
+     * is actually plain f(n) bit syntax).  stb_av1_parse_internal_stream
+     * uses the raw-bit seqhdr parser that matches dav1d bit-for-bit on
+     * the whole sample set; let it own colour/geometry description. */
+    {
+        struct stb_av1_internal_stream probe;
+        if (stb_av1_parse_internal_stream(&probe, info.av1_data,
+                                          info.av1_size) == 0 &&
+            probe.have_seq) {
+            sh.monochrome = probe.seq.monochrome ? 1 : 0;
+            sh.bit_depth = 8 + (int)probe.seq.hbd * 2;
+            sh.subsampling_x = probe.seq.ss_hor ? 1 : 0;
+            sh.subsampling_y = probe.seq.ss_ver ? 1 : 0;
+            sh.matrix_coefficients = probe.seq.mtrx;
+            sh.color_range = probe.seq.color_range;
+            sh_parsed_ok = 1;
+#ifdef STB_DBG_TRACE
+            fprintf(stderr, "PROBESEQ bd=%d mono=%d ss=%d,%d mtrx=%d cr=%d\n",
+                    sh.bit_depth, sh.monochrome, sh.subsampling_x,
+                    sh.subsampling_y, sh.matrix_coefficients, sh.color_range);
+#endif
+        }
     }
 
     /* If we didn't find a frame header, use defaults for still picture */
@@ -4462,13 +4492,18 @@ if (config_obu_type == STB_AV1_OBU_SEQUENCE_HEADER && config_obu_sz > 0) {
         /* enable_cdef in sh, not fh */
     }
 
-    /* Trust the av1C box colour fields over the legacy header re-parse:
-     * the quick bit-parse can mis-read monochrome/bit-depth on real files,
-     * which previously left chroma planes unallocated (grayscale output). */
-    sh.monochrome = info.monochrome;
-    sh.bit_depth = info.bit_depth;
-    sh.subsampling_x = info.chroma_subsampling_x;
-    sh.subsampling_y = info.chroma_subsampling_y;
+    /* Geometry comes from the REAL OBU sequence header parsed above
+     * (bit-exact vs dav1d on the whole sample set).  av1C is only a
+     * fallback: some encoders write wrong subsampling there (e.g. 444
+     * in av1C for a profile-2 stream whose seq header forces ss_x=1),
+     * which used to corrupt plane allocation and YUV->RGB sampling.
+     * Only fill fields when the OBU parse left them unset. */
+    if (!sh_parsed_ok) {
+        sh.monochrome = info.monochrome;
+        sh.bit_depth = info.bit_depth;
+        sh.subsampling_x = info.chroma_subsampling_x;
+        sh.subsampling_y = info.chroma_subsampling_y;
+    }
 
     /* Allocate image planes */
     info.stride_y = (info.width + 31) & ~31;
