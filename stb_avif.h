@@ -600,9 +600,6 @@ static void stb_avif_parse_iloc(struct stb_avif_reader *r,
     int offset_size, length_size, base_offset_size, index_size;
     int item_count, i_item;
 
-#ifdef STB_AVIF_DEBUG_LOUD
-    fprintf(stderr, "DBG parse_iloc enter\n");
-#endif
     version = stb_avif_read_byte(r);
     {
         /* fullbox: version(1) + flags(3), then the sizes byte */
@@ -625,10 +622,6 @@ static void stb_avif_parse_iloc(struct stb_avif_reader *r,
     }
 
     item_count = (int)stb_avif_read_be16(r);
-#ifdef STB_AVIF_DEBUG_LOUD
-    fprintf(stderr, "DBG iloc v=%d osz=%d lsz=%d bosz=%d cnt=%d\n",
-            version, offset_size, length_size, base_offset_size, item_count);
-#endif
     *data_offset = 0;
     *data_size = 0;
 
@@ -644,9 +637,6 @@ static void stb_avif_parse_iloc(struct stb_avif_reader *r,
             item_ID = (int)stb_avif_read_be16(r);
             stb_avif_read_be16(r);
         }
-#ifdef STB_AVIF_DEBUG_LOUD
-        fprintf(stderr, "DBG iloc item id=%d\n", item_ID);
-#endif
 
         if (version >= 1) {
             /* construction_method */
@@ -737,10 +727,6 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
         if (r->pos + 8 > r->size) break;
 
         stb_avif_read_box_header(r, &sub);
-#ifdef STB_AVIF_DEBUG_LOUD
-        fprintf(stderr, "DBG meta sub @%d type=%08x sz=%u\n",
-                (int)r->pos, (int)sub.type, (unsigned)sub.size);
-#endif
         if (sub.type == STB_AVIF_BOX_HDLR) {
             /* handler box - verify picture handler */
         }
@@ -3141,7 +3127,7 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
         fprintf(stderr, "PLANEV x=%d y=%d:", x4, y4);
         for (r8 = 0; r8 < 16; r8++)
             fprintf(stderr, " %04x",
-                    (unsigned)rc->plane_y[r8 * rc->stride_y + 591]);
+                    (unsigned)rc->plane_y[r8 * rc->stride_y + (x4 << 2)]);
         fprintf(stderr, "\n");
     }
 #endif
@@ -3956,9 +3942,6 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
 
     /* Convert internal u16 planes to the caller's 8-bit planes. */
 #ifdef STB_DBG_TRACE
-    fprintf(stderr, "CONV_ENTER pu16=%p pv16=%p tc_u=%p mono=%d\n",
-            (void*)pu16, (void*)pv16, (void*)tc->plane_u,
-            (int)stream.seq.monochrome);
     {
         int k2, nz2 = 0;
         unsigned mx = 0;
@@ -4441,11 +4424,6 @@ unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
 
     /* Parse the meta box to extract all AVIF metadata */
     stb_avif_parse_meta(&r, &info);
-#ifdef STB_AVIF_DEBUG_LOUD
-    fprintf(stderr, "DBG postmeta w=%d h=%d alpha_id=%d av1_size=%u\n",
-            info.width, info.height, info.alpha_item_id,
-            (unsigned)info.av1_size);
-#endif
 
     /* Verify we have image dimensions */
     STB_AVIF_CHECK(info.width > 0 && info.height > 0,
@@ -4820,10 +4798,6 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
 #endif
 
     /* ---- auxiliary alpha item (AVIF auxl -> primary) ---- */
-#ifdef STB_AVIF_DEBUG_LOUD
-    fprintf(stderr, "DBG alpha_item_id=%d primary=%d\n",
-            info.alpha_item_id, info.primary_item_id);
-#endif
     if (info.alpha_item_id > 0 && !info.alpha_plane) {
         /* Locate the alpha item's coded data with a fresh iloc scan. */
         struct stb_avif_reader ar;
@@ -4842,23 +4816,9 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
                 scan += bsz;
             }
         }
-        fprintf(stderr, "DBG rescan ameta_start=%u meta_end=%u\n",
-                (unsigned)ameta_start, (unsigned)info.meta_end_offset);
         if (ameta_start) {
             size_t ap = ameta_start;
             size_t aend = info.meta_end_offset;
-            while (ap + 8 <= aend) {
-                stbv_u32 dbg_bsz = ((stbv_u32)data[ap]<<24)|((stbv_u32)data[ap+1]<<16)|
-                               ((stbv_u32)data[ap+2]<<8)|data[ap+3];
-                stbv_u32 dbg_bty = ((stbv_u32)data[ap+4]<<24)|((stbv_u32)data[ap+5]<<16)|
-                               ((stbv_u32)data[ap+6]<<8)|data[ap+7];
-                fprintf(stderr, "DBG child @%u %c%c%c%c sz=%u\n", (unsigned)ap,
-                        (int)(dbg_bty>>24), (int)((dbg_bty>>16)&255),
-                        (int)((dbg_bty>>8)&255), (int)(dbg_bty&255),
-                        (unsigned)dbg_bsz);
-                if (dbg_bsz < 8) break;
-                ap += dbg_bsz;
-            }
             ap = ameta_start;
             while (ap + 8 <= aend) {
                 stbv_u32 bsz = ((stbv_u32)data[ap]<<24)|((stbv_u32)data[ap+1]<<16)|
@@ -4868,12 +4828,9 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
                 if (bsz < 8 || ap + bsz > aend + 4096) break;
                 if (bty == STB_AVIF_FOURCC('i','l','o','c')) {
                     stbv_u32 aoff = 0; stbv_u64 asz = 0;
-                    fprintf(stderr, "DBG iloc branch entered sz=%u\n", bsz);
-                    stb_avif_reader_init(&ar, data + ap + 8, bsz - 8);
+                                stb_avif_reader_init(&ar, data + ap + 8, bsz - 8);
                     stb_avif_parse_iloc(&ar, &info, info.alpha_item_id,
                                         &aoff, &asz);
-                    fprintf(stderr, "DBG iloc parsed aoff=%u asz=%u\n",
-                            (unsigned)aoff, (unsigned)asz);
                     if (asz > 0 && aoff + asz <= (stbv_u64)len) {
                         info.alpha_av1 = info.input + aoff;
                         info.alpha_size = (size_t)asz;
@@ -4891,8 +4848,6 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
             struct stb_av1_tile_context tc2;
             struct stb_av1_internal_stream astream;
             memset(&astream, 0, sizeof(astream));
-            fprintf(stderr, "DBG alpha payload=%p size=%d\n",
-                    (void*)info.alpha_av1, (int)info.alpha_size);
             if (stb_av1_parse_internal_stream(&astream, info.alpha_av1,
                                               info.alpha_size) == 0 &&
                 astream.have_seq) {
@@ -4901,10 +4856,6 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
                 int aw = fh.frame_width, ah = fh.frame_height;
                 int astride = (aw + 31) & ~31;
                 unsigned char *aplane;
-#ifdef STB_AVIF_DEBUG_LOUD
-                fprintf(stderr, "DBG astream ok mono=%d hbd=%d\n",
-                        (int)astream.seq.monochrome, (int)astream.seq.hbd);
-#endif
                 if (astream.seq.monochrome)
                     aplane = (unsigned char *)stb_avif_calloc(
                         (size_t)astride * (ah + 64), 1);
@@ -4943,9 +4894,6 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
         }
     }
 
-#ifdef STB_AVIF_DEBUG_LOUD
-    fprintf(stderr, "DBG post-decode\n");
-#endif
     /* Determine output channels */
     output_channels = req_channels;
     if (output_channels == 0) {
@@ -5062,9 +5010,6 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
         }
     }
 
-#ifdef STB_AVIF_DEBUG_LOUD
-    fprintf(stderr, "DBG post-convert\n");
-#endif
     stb_avif_g_last_alpha = info.alpha_plane;
     stb_avif_g_last_alpha_stride = info.alpha_plane ? info.alpha_stride : 0;
 
