@@ -2777,18 +2777,14 @@ static int stb_avif_recon_block_edge_flags_run(struct stb_avif_scalar_recon *rc,
      * reconstructed.  Require the contiguous run the predictor will
      * actually copy (up to w4 / h4 units) to be present. */
     if (rc->lf_done && y4 > 0 && x4 + tr_run < fw4) {
-        int k, ok = 1;
-        for (k = 0; k < tr_run; k++)
-            if (!rc->lf_done[(size_t)(y4 - 1) * rc->lf_b4stride +
-                             (x4 + w4 + k)]) { ok = 0; break; }
-        if (ok) fl |= STBV_AV1_EDGE_I444_TOP_HAS_RIGHT;
+        if (rc->lf_done[(size_t)(y4 - 1) * rc->lf_b4stride +
+                        (x4 + w4)])
+            fl |= STBV_AV1_EDGE_I444_TOP_HAS_RIGHT;
     }
     if (rc->lf_done && y4 + bl_run < fh4 && x4 > 0) {
-        int k, ok = 1;
-        for (k = 0; k < bl_run; k++)
-            if (!rc->lf_done[(size_t)(y4 + h4 + k) * rc->lf_b4stride +
-                             (x4 - 1)]) { ok = 0; break; }
-        if (ok) fl |= STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM;
+        if (rc->lf_done[(size_t)(y4 + h4) * rc->lf_b4stride +
+                        (x4 - 1)])
+            fl |= STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM;
     }
     return fl;
 }
@@ -2940,6 +2936,8 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
     rc->cur_bw4 = stbv_av1_block_dimensions[bs][0];
     rc->cur_bh4 = stbv_av1_block_dimensions[bs][1];
 #ifdef STB_DBG_TRACE
+    if (bx4 == 160 && by4 == 0)
+        fprintf(stderr, "OURCFL au=%d av=%d\n", cfl_alpha_u, cfl_alpha_v);
     fprintf(stderr, "OUREDGE bx=%d by=%d blk=%d txb=%d bw4=%d bh4=%d tx0=%d\n",
             bx4, by4,
             stb_avif_recon_block_edge_flags(rc, 1, bx4, by4,
@@ -3361,10 +3359,40 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
      * planes instead. */
     if (!rc->pal_uv)
         stb_avif_recon_predict_txb_chroma(rc, pl, x4, y4, tx);
+#ifdef STB_DBG_TRACE
+    if (pl == 0 && x4 == 0 && y4 == 2) {
+        int r5, c5;
+        int tw = stbv_av1_tx_dims[tx].w << 2;
+        fprintf(stderr, "CHPRE x=%d y=%d w=%d\n", x4, y4, tw);
+        for (r5 = 0; r5 < 8; r5++) {
+            fprintf(stderr, "PRG");
+            for (c5 = 0; c5 < tw && c5 < 8; c5++)
+                fprintf(stderr, " %02x", (unsigned)rc->pred[r5 * tw + c5]);
+            fprintf(stderr, "\n");
+        }
+    }
+#endif
     if (!rc->block_skip && !rc->pal_uv && eob >= 0)
         stb_avif_recon_add_res(rc, plane, stride,
                                x4 << 2, y4 << 2, pw, ph,
                                tx, txtp, eob, cf);
+#ifdef STB_DBG_TRACE
+    {
+        int tw = stbv_av1_tx_dims[tx].w << 2;
+        int th = stbv_av1_tx_dims[tx].h << 2;
+        int r3, c3;
+        fprintf(stderr, "CHTXB pl=%d x=%d y=%d w=%d h=%d\n",
+                pl, x4, y4, tw, th);
+        for (r3 = 0; r3 < th && r3 < 8; r3++) {
+            fprintf(stderr, "CHG");
+            for (c3 = 0; c3 < tw && c3 < 8; c3++)
+                fprintf(stderr, " %02x",
+                        (unsigned)plane[(y4 << 2) * stride + (x4 << 2) +
+                                        r3 * stride + c3]);
+            fprintf(stderr, "\n");
+        }
+    }
+#endif
     if (pl == 0 && rc->lf_blkid_c && rc->has_chroma) {
         /* record this chroma txb's own extent (mapped to luma units);
          * identity = chroma-plane origin so chroma-internal boundaries
@@ -4067,7 +4095,12 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         }
     }
 #ifdef STB_DBG_TRACE
-    if (getenv("PLNDUMP")) {
+    {
+    static int plndump_done = 0;
+    if (getenv("PLNDUMP") && !plndump_done) {
+        plndump_done = 1; /* primary pass only: the auxiliary-alpha
+                             decode calls this function a second time
+                             and must not overwrite the dumps */
         FILE *fy = fopen("plane_y.raw", "wb");
         FILE *fu = fopen("plane_u.raw", "wb");
         FILE *fv = fopen("plane_v.raw", "wb");
@@ -4076,6 +4109,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         if (fv) { fwrite(tc->plane_v, 1, (size_t)tc->stride_v * (((tc->frame_height + 1) >> 1)), fv); fclose(fv); }
         fprintf(stderr, "PLNDUMP written stride_y=%d h=%d\n",
                 tc->stride_y, tc->frame_height);
+    }
     }
 #endif
 oom16:
@@ -4657,8 +4691,12 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
             sh.bit_depth = 8 + (int)probe.seq.hbd * 2;
             sh.subsampling_x = probe.seq.ss_hor ? 1 : 0;
             sh.subsampling_y = probe.seq.ss_ver ? 1 : 0;
+#ifdef STB_AVIF_TEST_NO_MC_OVERRIDE
+            /* A/B test hook */
+#else
             sh.matrix_coefficients = probe.seq.mtrx;
             sh.color_range = probe.seq.color_range;
+#endif
             probe_seq_hbd = probe.seq.hbd;
             probe_seq_mono = probe.seq.monochrome ? 1 : 0;
             sh_parsed_ok = 1;
@@ -4911,6 +4949,7 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
         goto error_exit;
     }
 
+
     /* Convert YUV to RGB */
     if (sh.monochrome && output_channels == 1) {
         /* Direct copy of luma */
@@ -5036,5 +5075,6 @@ error_exit:
     if (result) stb_avif_free_internal(result);
     return NULL;
 }
+
 
 #endif /* STB_AVIF_IMPLEMENTATION */
