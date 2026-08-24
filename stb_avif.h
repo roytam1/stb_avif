@@ -2277,10 +2277,17 @@ static int stb_avif_recon_block_edge_flags_run(struct stb_avif_scalar_recon *rc,
 {
     const int ss_hor = luma ? 0 : rc->ss_hor;
     const int ss_ver = luma ? 0 : rc->ss_ver;
-    const int fw4 = luma ? (rc->frame_w + 3) >> 2
-                         : (((rc->frame_w + 3) >> 2) + ss_hor) >> ss_hor;
-    const int fh4 = luma ? (rc->frame_h + 3) >> 2
-                         : (((rc->frame_h + 3) >> 2) + ss_ver) >> ss_ver;
+    /* Availability must use the 8-ALIGNED frame extent (dav1d f->bw/f->bh),
+     * NOT the ceil extent: dav1d reconstructs the padded rows/columns up to
+     * the aligned size and grants diagonals into them (e.g. Gb5 h=1530:
+     * ceil fh4=383 but f->bh=384 - denying unit 383 killed directional
+     * prediction context for the whole last superblock row). */
+    const int fw4a = (rc->frame_w + 7) & ~7;
+    const int fh4a = (rc->frame_h + 7) & ~7;
+    const int fw4 = luma ? fw4a >> 2
+                         : ((fw4a >> 2) + ss_hor) >> ss_hor;
+    const int fh4 = luma ? fh4a >> 2
+                         : ((fh4a >> 2) + ss_ver) >> ss_ver;
     const int sbh = ss_hor ? (rc->sb_step4 + 1) >> 1 : rc->sb_step4;
     const int sbv = ss_ver ? (rc->sb_step4 + 1) >> 1 : rc->sb_step4;
     int fl = 0;
@@ -2289,13 +2296,17 @@ static int stb_avif_recon_block_edge_flags_run(struct stb_avif_scalar_recon *rc,
      * reconstructed.  Require the contiguous run the predictor will
      * actually copy (up to w4 / h4 units) to be present. */
     if (rc->lf_done && y4 > 0 && x4 + tr_run < fw4) {
-        if (rc->lf_done[(size_t)(y4 - 1) * rc->lf_b4stride +
-                        (x4 + w4)])
+        /* Clamp to the map: blocks ending exactly on the aligned frame
+         * extent probe one past the map (row/col == map dim).  dav1d
+         * grants these diagonals positionally; the equivalent exact
+         * check is the neighbour's mark on the last valid unit. */
+        int cxr = x4 + w4;
+        if (rc->lf_done[(size_t)(y4 - 1) * rc->lf_b4stride + cxr])
             fl |= STBV_AV1_EDGE_I444_TOP_HAS_RIGHT;
     }
     if (rc->lf_done && y4 + bl_run < fh4 && x4 > 0) {
-        if (rc->lf_done[(size_t)(y4 + h4) * rc->lf_b4stride +
-                        (x4 - 1)])
+        int cyb = y4 + h4;
+        if (rc->lf_done[(size_t)cyb * rc->lf_b4stride + (x4 - 1)])
             fl |= STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM;
     }
     return fl;
@@ -2343,8 +2354,10 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
 {
     stbv_u16 tl[640];
     stbv_u16 *edge = tl + 320;
-    const int fw4 = (rc->frame_w + 3) >> 2;
-    const int fh4 = (rc->frame_h + 3) >> 2;
+    /* 8-aligned extent (dav1d f->bw/f->bh): prediction edge prep must
+     * reach the reconstructed padded row/column. */
+    const int fw4 = (rc->frame_w + 7) >> 3 << 1;
+    const int fh4 = (rc->frame_h + 7) >> 3 << 1;
     int bw4c, bh4c, i;
 
     bw4c = fw4 - bx4; if (bw4c > bw4) bw4c = bw4;
@@ -2550,8 +2563,7 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
     int h = stbv_av1_tx_dims[tx].h << 2;
     int cw, ch, i;
 #ifdef STB_DBG_TRACE
-    if (((px == 12 && py == 48 && tx == 0) || (px == 40 && py == 56 && tx == 1) ||
-         (px == 72 && py == 24 && tx == 1 && stride == rc->stride_y))) {
+    if (stride == rc->stride_y && py >= 1500 && px < 128) {
         fprintf(stderr, "ADDRES cf txtp=%d eob=%d:", txtp, eob);
         for (i = 0; i < 16; i++) fprintf(stderr, " %d", (int)cf[i]);
         fprintf(stderr, "\n");
@@ -2563,7 +2575,11 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
         }
     }
 #endif
-    cw = pw - px; if (cw > w) cw = w;
+    /* Clip against BUFFER capacity (stride/rows incl. padding), not the
+     * visible frame: reconstruction must fill the full padded tx extent so
+     * CFL AC gather on adjacent edge blocks never reads zero padding.
+     * ph is the ALLOCATED row count (visible + pad). */
+    cw = (stride - px); if (cw > w) cw = w;
     ch = ph - py; if (ch > h) ch = h;
     if (cw <= 0 || ch <= 0) return;
     for (i = 0; i < ch; i++) {
@@ -2573,6 +2589,15 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
                (size_t)((w - cw) * sizeof(stbv_u16)));
     }
     stbv_av1_inv_txfm_add16(rc->pred, w, cf, eob, tx, txtp, rc->bit_depth);
+#ifdef STB_DBG_TRACE
+    if (stride == rc->stride_y && px == 0 && py >= 1500) {
+        int q;
+        fprintf(stderr, "ADOUT px=%d py=%d tx=%d w=%d h=%d cw=%d ch=%d"
+                " pred0:", px, py, tx, w, h, cw, ch);
+        for (q = 0; q < 8; q++) fprintf(stderr, " %d", rc->pred[q]);
+        fprintf(stderr, "\n");
+    }
+#endif
     for (i = 0; i < ch; i++)
         memcpy(plane + (py + i) * stride + px, rc->pred + i * w,
                (size_t)(cw * sizeof(stbv_u16)));
@@ -2613,7 +2638,8 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
      * (coefficients present!), < 0 == none. */
     if (!rc->block_skip && eob >= 0)
         stb_avif_recon_add_res(rc, rc->plane_y, rc->stride_y,
-                               x4 << 2, y4 << 2, rc->frame_w, rc->frame_h,
+                               x4 << 2, y4 << 2, rc->frame_w,
+                               rc->frame_h + 64,
                                tx, txtp, eob, cf);
     {
         /* record transform coverage for the deblocking pass */
@@ -2697,8 +2723,10 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
 {
     stbv_u16 tl[640];
     stbv_u16 *edge = tl + 320;
-    const int fw4 = (rc->frame_w + 3) >> 2;
-    const int fh4 = (rc->frame_h + 3) >> 2;
+    /* 8-aligned extent (dav1d f->bw/f->bh): prediction edge prep must
+     * reach the reconstructed padded row/column. */
+    const int fw4 = (rc->frame_w + 7) >> 3 << 1;
+    const int fh4 = (rc->frame_h + 7) >> 3 << 1;
     int w = stbv_av1_tx_dims[tx].w << 2;
     int h = stbv_av1_tx_dims[tx].h << 2;
     int cw, ch, i;
@@ -2711,8 +2739,12 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
     if (mode == STBV_AV1_INTRA_FILTER)
         mode = STBV_AV1_IPRED_FILTER;
     if (x4 >= fw4 || y4 >= fh4) return;
-    cw = rc->frame_w - (x4 << 2); if (cw > w) cw = w;
-    ch = rc->frame_h - (y4 << 2); if (ch > h) ch = h;
+    /* Write the FULL tx extent into the padded plane: later blocks'
+     * intra edges read these pixels (dav1d recon_b_intra does the same).
+     * Clipping here left zero rows below the frame -> DC/directional
+     * bias for every bottom-edge block (the green fog). */
+    cw = ((rc->frame_w + 7) & ~7) - (x4 << 2); if (cw > w) cw = w;
+    ch = ((rc->frame_h + 7) & ~7) - (y4 << 2); if (ch > h) ch = h;
     if (cw <= 0 || ch <= 0) return;
     impl = stbv_av1_prepare_intra_edges_16(x4, x4 > 0, y4, y4 > 0,
                                           fw4, fh4,
@@ -2730,11 +2762,32 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
                                           stbv_av1_tx_dims[tx].h,
                                           rc->intra_edge_filter, edge, bd);
 #ifdef STB_DBG_TRACE
-    stbv_av1_dbg_z2_go = (stbv_av1_dbg_tx27 == 27 || stbv_av1_dbg_tx27 == 40);
+    stbv_av1_dbg_z2_go = 0;
+#endif
+#ifdef STB_DBG_TRACE
+    if ((x4 == 16 || x4 == 0 || x4 == 8) && y4 == 376) {
+        int q;
+        fprintf(stderr, "YPRED x=%d y=%d mode=%d impl=%d ang=%d"
+                " top:", x4, y4, mode, impl, angle);
+        for (q = 0; q < 8; q++) fprintf(stderr, " %d", edge[q]);
+        fprintf(stderr, " left:");
+        for (q = 1; q <= 8; q++) fprintf(stderr, " %d", edge[-q]);
+        fprintf(stderr, " pred0:");
+        for (q = 0; q < 8; q++) fprintf(stderr, " %d", rc->pred[q]);
+        fprintf(stderr, "\n");
+    }
 #endif
     stbv_av1_ipred_run_16(impl, rc->pred, w, edge, w, h,
                           angle | stb_avif_recon_edge_flags(rc, 1, rc->cur_bx4, rc->cur_by4),
                           filt_idx, rc->frame_w - (x4 << 2), rc->frame_h - (y4 << 2), bd);
+#ifdef STB_DBG_TRACE
+    if ((x4 == 16 || x4 == 0 || x4 == 8) && y4 == 376) {
+        int q;
+        fprintf(stderr, "YPAFTER x=%d y=%d pred0:", x4, y4);
+        for (q = 0; q < 8; q++) fprintf(stderr, " %d", rc->pred[q]);
+        fprintf(stderr, "\n");
+    }
+#endif
 #ifdef STB_DBG_TRACE
     fprintf(stderr, "YTX %d %d %d\n", x4, y4, tx);
     if ((x4 == 54 && y4 == 8) || (x4 == 24 && y4 == 0) || (x4 == 25 && y4 == 0) || (x4 == 148 && y4 == 0) || (x4 == 146 && y4 == 0)) {
@@ -2821,7 +2874,7 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
                 fprintf(stderr, " %x", (int)rc->pred[i2] & 0xff);
             fprintf(stderr, "\n");
         }
-        stbv_av1_dbg_tx27++;
+        /* stbv_av1_dbg_tx27++; */
     }
 #endif
     for (i = 0; i < ch; i++)
@@ -2856,8 +2909,9 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
     /* Chroma plane extent follows ACTUAL subsampling: full width for
      * 4:2:2/4:4:4, half height for 4:2:2/4:2:0. Hardcoded >>1 broke
      * 4:2:2 (right half of chroma never written). */
+    /* pw unused for clipping now; ph = ALLOCATED chroma rows. */
     pw = (rc->frame_w + rc->ss_hor) >> rc->ss_hor;
-    ph = (rc->frame_h + rc->ss_ver) >> rc->ss_ver;
+    ph = ((rc->frame_h + rc->ss_ver) >> rc->ss_ver) + 32;
     (void)txw4; (void)txh4;
 #ifdef STB_AVIF_PRED_ONLY
     (void)cf; (void)tx; (void)txtp;
@@ -2954,8 +3008,9 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
     int stride;
     const int pw = (rc->frame_w + rc->ss_hor) >> rc->ss_hor;
     const int ph = (rc->frame_h + rc->ss_ver) >> rc->ss_ver;
-    const int lfw4 = (rc->frame_w + 3) >> 2;
-    const int lfh4 = (rc->frame_h + 3) >> 2;
+    /* 8-aligned (dav1d f->bw/f->bh), see note in block_edge_flags_run. */
+    const int lfw4 = (rc->frame_w + 7) >> 3 << 1;
+    const int lfh4 = (rc->frame_h + 7) >> 3 << 1;
     const int cfw4 = (lfw4 + rc->ss_hor) >> rc->ss_hor;
     const int cfh4 = (lfh4 + rc->ss_ver) >> rc->ss_ver;
     int cx4 = x4, cy4 = y4, cm, cangle = 0, cimpl;
@@ -2967,8 +3022,11 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
     if (cx4 >= cfw4 || cy4 >= cfh4) return;
     w = stbv_av1_tx_dims[tx].w << 2;
     h = stbv_av1_tx_dims[tx].h << 2;
-    cw = pw - (cx4 << 2); if (cw > w) cw = w;
-    ch = ph - (cy4 << 2); if (ch > h) ch = h;
+    /* Full padded extent (see predict_txb_luma note). */
+    cw = (((rc->frame_w + 7) & ~7) >> rc->ss_hor) - (cx4 << 2);
+    ch = (((rc->frame_h + 7) & ~7) >> rc->ss_ver) - (cy4 << 2);
+    if (cw > w) cw = w;
+    if (ch > h) ch = h;
     if (cw <= 0 || ch <= 0) return;
     cimpl = stbv_av1_prepare_intra_edges_16(cx4, cx4 > 0, cy4, cy4 > 0,
                                            cfw4, cfh4,
@@ -2985,6 +3043,21 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
                                            stbv_av1_tx_dims[tx].h,
                                            rc->intra_edge_filter,
                                            edge, rc->bit_depth);
+#ifdef STB_DBG_TRACE
+    if (!pl && cx4 == 180 && cy4 >= 160) {
+        int q;
+        fprintf(stderr, "CHEDGE cx=%d cy=%d cm=%d impl=%d ang=%d fl=%d"
+                " cfw4=%d cfh4=%d top:", cx4, cy4, cm, cimpl, cangle,
+                stb_avif_recon_txb_edge_flags(rc, 0, rc->cur_bx4,
+                    rc->cur_by4, rc->cur_bw4, rc->cur_bh4, x4, y4,
+                    stbv_av1_tx_dims[tx].w, stbv_av1_tx_dims[tx].h),
+                cfw4, cfh4);
+        for (q = 0; q < 8; q++) fprintf(stderr, " %d", edge[q]);
+        fprintf(stderr, " left:");
+        for (q = 1; q <= 8; q++) fprintf(stderr, " %d", edge[-q]);
+        fprintf(stderr, "\n");
+    }
+#endif
     stbv_av1_ipred_run_16(cimpl, rc->pred, w, edge, w, h,
                           cangle | stb_avif_recon_edge_flags(rc, 0, rc->cur_bx4, rc->cur_by4),
                           0, (cfw4 - cx4) << 2, (cfh4 - cy4) << 2, rc->bit_depth);
@@ -2993,15 +3066,19 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
      * reconstructed co-located luma) shared by both planes;
      * pred = edge-DC + alpha*ac with symmetric rounding; a plane with
      * zero alpha keeps its plain DC prediction. */
+#ifdef STB_AVIF_TEST_NO_CFL
+    if (0 && !rc->block_skip) {
+#else
     if (rc->uv_mode == STBV_AV1_INTRA_CFL && !rc->block_skip) {
+#endif
         const int alpha = pl == 0 ? rc->cfl_alpha_u : rc->cfl_alpha_v;
         const int ss_h = rc->ss_hor, ss_v = rc->ss_ver;
         if (!alpha) {
             /* dav1d skips CFL entirely for this plane; the DC-family
              * prediction already written above is the final result. */
         } else {
-            const int fw4 = (rc->frame_w + 3) >> 2;
-            const int fh4 = (rc->frame_h + 3) >> 2;
+            const int fw4 = (rc->frame_w + 7) >> 3 << 1;
+            const int fh4 = (rc->frame_h + 7) >> 3 << 1;
             int cw4u = rc->cur_bw4, ch4u = rc->cur_bh4;
             int cbw4, cbh4, W, H, i, j;
             const stbv_u16 mx = (stbv_u16)((1 << rc->bit_depth) - 1);

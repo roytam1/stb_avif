@@ -883,6 +883,9 @@ c.recon = recon;
          * must use the block's own dimensions; only coefficient-grid
          * extents may be clipped to the padded frame (dav1d keeps b_dim
          * unclipped and clips during recon). */
+        /* Clip coefficient-loop dims to the 8-aligned frame extent
+         * (dav1d read_coef_blocks: w4 = imin(bw4, f->bw - t->bx)).
+         * bw4_unc/bh4_unc stay unclipped for syntax decisions. */
         bw4_unc = bw4;
         bh4_unc = bh4;
         if (fw4 - bx4 < bw4) bw4 = fw4 - bx4;
@@ -1194,14 +1197,19 @@ if (frame && frame->txfm_mode == 1 &&
             }
         } else {
             /* dav1d read_coef_blocks marks the full block edges 0x40. */
-            stbv_av1_res_mark_unc(&state->res, bx4, by4, bw4, bh4,
+            /* dav1d memsets context with UNCLIPPED b_dim; clipping here
+             * left unit 383 unmarked for boundary blocks (bh4=7 case),
+             * corrupting skip_ctx for every later block in the SB row. */
+            stbv_av1_res_mark_unc(&state->res, bx4, by4, bw4_unc, bh4_unc,
                                   (stbv_u8)0x40);
             if (has_chroma) {
                 int cbx4 = bx4 >> ss_hor;
                 int cby4 = by4 >> ss_ver;
                 for (pl = 0; pl < 2; pl++)
                     stbv_av1_res_mark_unc(&state->cres[pl], cbx4, cby4,
-                                          cbw4, cbh4, (stbv_u8)0x40);
+                                          (bw4_unc + ss_hor) >> ss_hor,
+                                          (bh4_unc + ss_ver) >> ss_ver,
+                                          (stbv_u8)0x40);
             }
             if (out) {
                 out->x4 = bx4;
