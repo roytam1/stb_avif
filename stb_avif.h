@@ -2218,10 +2218,6 @@ static int stb_avif_recon_txb_edge_flags(struct stb_avif_scalar_recon *rc,
                                          int bw4, int bh4,
                                          int tx4, int ty4, int tw4, int th4)
 {
-    /* Block-level availability == dav1d's decode_b intra_edge_flags. */
-    const int blk = stb_avif_recon_block_edge_flags_run(rc, luma, bx4, by4,
-                                                        bw4, bh4,
-                                                        tw4, th4);
     const int ss_hor = luma ? 0 : rc->ss_hor;
     const int ss_ver = luma ? 0 : rc->ss_ver;
     /* dav1d splits each block into 64x64 quadrants (init += 16 luma units)
@@ -2229,15 +2225,20 @@ static int stb_avif_recon_txb_edge_flags(struct stb_avif_scalar_recon *rc,
      * per-txb offset. */
     const int qw = luma ? 16 : 16 >> ss_hor;
     const int qh = luma ? 16 : 16 >> ss_ver;
+    int blk;
     int xl, yl, qxl, qyl, sub_w4, sub_h4;
     int sb_has_tr, sb_has_bl, fl = 0;
+    /* txb callbacks carry block coordinates in luma 4x4 units even for
+     * chroma. Convert the block exactly once before querying the plane map. */
     if (!luma) {
-        /* block coords arrive in luma units; work in chroma units */
         bx4 = (bx4 + ss_hor) >> ss_hor;
         by4 = (by4 + ss_ver) >> ss_ver;
         bw4 = (bw4 + ss_hor) >> ss_hor;
         bh4 = (bh4 + ss_ver) >> ss_ver;
     }
+    /* Block-level availability == dav1d's decode_b intra_edge_flags. */
+    blk = stb_avif_recon_block_edge_flags_run(rc, luma, bx4, by4,
+                                               bw4, bh4, tw4, th4);
     xl = tx4 - bx4; yl = ty4 - by4;
     qxl = xl / qw * qw;
     qyl = yl / qh * qh;
@@ -2277,37 +2278,52 @@ static int stb_avif_recon_block_edge_flags_run(struct stb_avif_scalar_recon *rc,
 {
     const int ss_hor = luma ? 0 : rc->ss_hor;
     const int ss_ver = luma ? 0 : rc->ss_ver;
-    /* Availability must use the 8-ALIGNED frame extent (dav1d f->bw/f->bh),
-     * NOT the ceil extent: dav1d reconstructs the padded rows/columns up to
-     * the aligned size and grants diagonals into them (e.g. Gb5 h=1530:
-     * ceil fh4=383 but f->bh=384 - denying unit 383 killed directional
-     * prediction context for the whole last superblock row). */
     const int fw4a = (rc->frame_w + 7) & ~7;
     const int fh4a = (rc->frame_h + 7) & ~7;
-    const int fw4 = luma ? fw4a >> 2
-                         : ((fw4a >> 2) + ss_hor) >> ss_hor;
-    const int fh4 = luma ? fh4a >> 2
-                         : ((fh4a >> 2) + ss_ver) >> ss_ver;
-    const int sbh = ss_hor ? (rc->sb_step4 + 1) >> 1 : rc->sb_step4;
-    const int sbv = ss_ver ? (rc->sb_step4 + 1) >> 1 : rc->sb_step4;
+    const int fw4 = luma ? (fw4a >> 2) : ((fw4a >> 2) + ss_hor) >> ss_hor;
+    const int fh4 = luma ? (fh4a >> 2) : ((fh4a >> 2) + ss_ver) >> ss_ver;
+    stbv_u32 *cmap = luma ? 0 : rc->lf_blkid_c;
     int fl = 0;
-    (void)sbh; (void)sbv;
-    /* Exact availability: the neighbouring pixels must already be
-     * reconstructed.  Require the contiguous run the predictor will
-     * actually copy (up to w4 / h4 units) to be present. */
-    if (rc->lf_done && y4 > 0 && x4 + tr_run < fw4) {
-        /* Clamp to the map: blocks ending exactly on the aligned frame
-         * extent probe one past the map (row/col == map dim).  dav1d
-         * grants these diagonals positionally; the equivalent exact
-         * check is the neighbour's mark on the last valid unit. */
-        int cxr = x4 + w4;
-        if (rc->lf_done[(size_t)(y4 - 1) * rc->lf_b4stride + cxr])
-            fl |= STBV_AV1_EDGE_I444_TOP_HAS_RIGHT;
+
+    /* Coordinates are in the plane being predicted. Chroma coverage is
+     * stored on the luma 4x4 grid, so a chroma unit maps to a 2x2 luma
+     * footprint for 4:2:0. */
+    if (x4 < 0 || y4 < 0 || x4 >= fw4 || y4 >= fh4)
+        return 0;
+
+    if (y4 > 0 && x4 + tr_run < fw4) {
+        int qx = x4 + w4;
+        int qy = y4 - 1;
+        if (luma) {
+            if (rc->lf_done && qx >= 0 && qx < rc->lf_mapw4 &&
+                qy >= 0 && qy < rc->lf_maph4 &&
+                rc->lf_done[(size_t)qy * rc->lf_b4stride + qx])
+                fl |= STBV_AV1_EDGE_I444_TOP_HAS_RIGHT;
+        } else if (cmap) {
+            int mx = qx << ss_hor;
+            int my = qy << ss_ver;
+            if (mx >= 0 && mx < rc->lf_mapw4 &&
+                my >= 0 && my < rc->lf_maph4 &&
+                cmap[(size_t)my * rc->lf_b4stride + mx] != 0xffffffffU)
+                fl |= STBV_AV1_EDGE_I444_TOP_HAS_RIGHT;
+        }
     }
-    if (rc->lf_done && y4 + bl_run < fh4 && x4 > 0) {
-        int cyb = y4 + h4;
-        if (rc->lf_done[(size_t)cyb * rc->lf_b4stride + (x4 - 1)])
-            fl |= STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM;
+    if (x4 > 0 && y4 + bl_run < fh4) {
+        int qx = x4 - 1;
+        int qy = y4 + h4;
+        if (luma) {
+            if (rc->lf_done && qx >= 0 && qx < rc->lf_mapw4 &&
+                qy >= 0 && qy < rc->lf_maph4 &&
+                rc->lf_done[(size_t)qy * rc->lf_b4stride + qx])
+                fl |= STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM;
+        } else if (cmap) {
+            int mx = qx << ss_hor;
+            int my = qy << ss_ver;
+            if (mx >= 0 && mx < rc->lf_mapw4 &&
+                my >= 0 && my < rc->lf_maph4 &&
+                cmap[(size_t)my * rc->lf_b4stride + mx] != 0xffffffffU)
+                fl |= STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM;
+        }
     }
     return fl;
 }
