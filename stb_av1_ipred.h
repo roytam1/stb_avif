@@ -17,6 +17,7 @@
  * is disabled and the fprintf sites are compiled out with it. */
 int stbv_av1_dbg_z2_go = 0;
 int stbv_av1_dbg_tx27 = 0;
+int stbv_av1_dbg_z3 = 0;
 
 #ifndef STBV_U16_DEFINED
 typedef unsigned short stbv_u16;
@@ -628,10 +629,10 @@ STBV_AV1_IPRED_UNUSED static void stbv_av1_ipred_z2_##sfx( \
         if (stbv_av1_dbg_z2_go) { \
             fprintf(stderr, "Z2 ang=%d dx=%d dy=%d ua=%d ul=%d in:", \
                     angle, dx, dy, upsample_above, upsample_left); \
-            for (dk = -4; dk <= 8; dk++) \
+            for (dk = -40; dk <= 80; dk++) \
                 fprintf(stderr, " %x", (int)topleft_in[dk] & 0xff); \
-            fprintf(stderr, "\nZ2 up:"); \
-            for (dk = 0; dk <= 9; dk++) \
+            fprintf(stderr, "\nZ2 upL:"); \
+            for (dk = -12; dk <= 4; dk++) \
                 fprintf(stderr, " %x", (int)topleft[dk] & 0xff); \
             fprintf(stderr, "\n"); \
         } \
@@ -665,6 +666,8 @@ STBV_AV1_IPRED_UNUSED static void stbv_av1_ipred_z3_##sfx( \
     px left_out[256]; \
     const px *left; \
     int max_wh, upsample_left, base_inc, dy, max_base_y, x, y, ypos; \
+    if (stbv_av1_dbg_z3 && width==32 && height==32 && (bd==10)) { \
+        fprintf(stderr, "Z3IN ang=%d en=%d sm=%d\n", angle, enable_intra_edge_filter, is_sm); } \
     angle &= 511; \
     max_wh = width + height; \
     upsample_left = enable_intra_edge_filter ? \
@@ -682,6 +685,7 @@ STBV_AV1_IPRED_UNUSED static void stbv_av1_ipred_z3_##sfx( \
     } else { \
         const int fs = enable_intra_edge_filter ? \
             stbv_av1_get_filter_strength(max_wh, angle - 180, is_sm) : 0; \
+        if (stbv_av1_dbg_z3 && width==32 && height==32 && bd==10) { int _q; fprintf(stderr, "Z3FS fs=%d left:", fs); for(_q=0;_q<40;_q++) fprintf(stderr, " %d", topleft_in[-1-_q]); fprintf(stderr, "\n"); } \
         if (fs) { \
             stbv_av1_filter_edge_##sfx(left_out, max_wh, 0, max_wh, \
                                        &topleft_in[-max_wh], \

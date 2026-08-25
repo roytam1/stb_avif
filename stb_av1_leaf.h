@@ -377,6 +377,7 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
                                   int bw4, int bh4,
                                   stbv_av1_leaf_tx_result *out)
 {
+    const int _quiet = !getenv("ROWDUMP");
     int txw4 = stbv_av1_tx_dims[tx].w;
     int txh4 = stbv_av1_tx_dims[tx].h;
     int sctx, txtp, max;
@@ -403,7 +404,7 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
 skip = stb_av1_msac_bool_adapt(
     msac, cdf->coef + stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2);
 #ifdef STB_DBG_TRACE
-    if (stb_dbg_blknum <= 200000)
+    if (!_quiet && stb_dbg_blknum <= 200000)
         fprintf(stderr, "TCFSKIP pl=%d tx=%d x=%d y=%d sctx=%d "
                         "pre=%u post=%u sym=%u\n",
                 chroma, tx, x4, y4, sctx, stb_dbg_pre, msac->rng, skip);
@@ -553,14 +554,33 @@ skip = stb_av1_msac_bool_adapt(
             dq_ac = stbv_av1_dq_tbl[hbd_i][qac][1];
             dq_shift = stbv_av1_tx_dims[tx].ctx - 2;
             if (dq_shift < 0) dq_shift = 0;
+#ifdef STB_DBG_TRACE
+            if (x4==168 && y4==296 && !is_chroma)
+                fprintf(stderr, "DQ x=%d y=%d base=%d qdc=%d qac=%d dq_dc=%d dq_ac=%d shift=%d\n",
+                        x4,y4,base_q,qdc,qac,dq_dc,dq_ac,dq_shift);
+#endif
+#ifdef STB_DBG_TRACE
+            if (x4==168 && y4==296 && !is_chroma)
+                fprintf(stderr, "DQCF x=%d y=%d cf0=%d dq_dc=%d dq_ac=%d shift=%d\n", x4,y4,cf[0],dq_dc,dq_ac,dq_shift);
+#endif
             dbg_pre = msac->rng;
+#ifdef STB_DBG_TRACE
+            if ((y4==0 && !is_chroma) || (x4==168&&y4==296)) fprintf(stderr, "RNGPRE %u\n", msac->rng);
+#endif
+
             eob = stbv_av1_decode_coeffs_square(msac, cdf, tx, is_chroma,
                                     txclass,
                                     dq_dc, dq_ac, dq_shift,
                                     sctx, dc_sign_ctx, cf,
                                     &res_ctx);
 #ifdef STB_DBG_TRACE
-        if (stb_dbg_blknum <= 200000)
+            if (getenv("ROWDUMP") && ((y4==0 && !is_chroma) || (x4==168&&y4==296))) {
+                int _q;
+                fprintf(stderr, "RNGPOST x=%d y=%d rng=%u eob=%d cf:", x4, y4, msac->rng, eob);
+                for(_q=0;_q<12;_q++) fprintf(stderr, " %d", (int)cf[_q]);
+                fprintf(stderr, "\n");
+            }
+        if (!_quiet && stb_dbg_blknum <= 200000)
             fprintf(stderr, "TCFCF pl=%d tx=%d x=%d y=%d pre=%u "
                             "post=%u eob=%d\n",
                     chroma, tx, x4, y4, dbg_pre, msac->rng, eob);
@@ -1189,6 +1209,11 @@ if (frame && frame->txfm_mode == 1 &&
                                         &state->cres[pl], cbw4, cbh4,
                                         NULL);
                                     if (r) return -4;
+#ifdef STB_DBG_TRACE
+                                    if (cx4 == 0 && cy4 == 0)
+                                        fprintf(stderr, "C0RNG pl=%d rng=%u\n",
+                                                pl, (unsigned)msac->rng);
+#endif
                                 }
                             }
                         }

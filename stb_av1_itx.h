@@ -96,6 +96,7 @@ static int stbv_av1_inv_txfm_core(stbv_i32 *coeff, const int eob,
     const int sh = h < 32 ? h : 32, sw = w < 32 ? w : 32;
     const stbv_u8 *txtps;
     stbv_av1_itx1d_fn first_fn, second_fn;
+    int cf_dbg_hit = 0;
     int row_clip_min, row_clip_max, col_clip_min, col_clip_max;
     stbv_i32 *c;
     int y, x, i;
@@ -141,6 +142,21 @@ static int stbv_av1_inv_txfm_core(stbv_i32 *coeff, const int eob,
             c[x] = 0;
         first_fn(c, 1, row_clip_min, row_clip_max);
     }
+#ifdef STB_DBG_TRACE
+    if (w==32 && bd==10 && coeff[0]==5439 && eob==178) {
+        int _q;
+        cf_dbg_hit=1;
+        fprintf(stderr,"OURT1 ");
+        {
+            int _r,_c;
+            for(_r=0;_r<4;_r++){
+                fprintf(stderr,"|");
+                for(_c=0;_c<12;_c++) fprintf(stderr," %d",(int)tmp[_r*32+_c]);
+            }
+        }
+        for(_q=0;_q<0;_q++) fprintf(stderr," %d",(int)tmp[_q]); fprintf(stderr,"\n");
+    }
+#endif
     if (sh < h)
         memset(tmp + sh * w, 0, (size_t)((h - sh) * w) * sizeof(stbv_i32));
 
@@ -151,6 +167,14 @@ static int stbv_av1_inv_txfm_core(stbv_i32 *coeff, const int eob,
 
     for (x = 0; x < w; x++)
         second_fn(&tmp[x], w, col_clip_min, col_clip_max);
+#ifdef STB_DBG_TRACE
+    if (w==32 && bd==10 && cf_dbg_hit) {
+        int _q;
+        fprintf(stderr,"OURT3 ");
+        for(_q=0;_q<12;_q++) fprintf(stderr," %d",(int)tmp[_q]);
+        fprintf(stderr,"\n");
+    }
+#endif
     return 1;
 }
 

@@ -2450,6 +2450,11 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
 
 static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode, int cfl_alpha_u, int cfl_alpha_v)
 {
+#ifdef STB_DBG_TRACE
+    if (bx4 == 176 && by4 == 288)
+        fprintf(stderr, "HB blk bs=%d palY=%d skip=%d ymode=%d ang=%d tx0=%d\n",
+                bs, pal_sz_y, skip, y_mode, y_angle, tx0);
+#endif
     struct stb_avif_scalar_recon *rc;
     int bw4, bh4;
     (void)cbw4; (void)cbh4; (void)uv_tx;
@@ -2590,6 +2595,30 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
     }
     stbv_av1_inv_txfm_add16(rc->pred, w, cf, eob, tx, txtp, rc->bit_depth);
 #ifdef STB_DBG_TRACE
+    if ((px==0||px==32) && py==0 && w>=8) {
+        int _q;
+        stbv_u16 _p[32];
+        for(_q=0;_q<32;_q++)
+            _p[_q]=rc->pred[_q];
+        fprintf(stderr, "SEEDPRE ");
+        for(_q=0;_q<12;_q++)
+            fprintf(stderr, " %d", _p[_q]);
+        fprintf(stderr, "\nSEEDRES ");
+        for(_q=0;_q<12;_q++)
+            fprintf(stderr, " %d", (int)rc->pred[_q]-(int)_p[_q]);
+        fprintf(stderr, "\n");
+    }
+#endif
+#ifdef STB_DBG_TRACE
+    if (px==672 && py==1184) {
+        int _k;
+        fprintf(stderr, "ITXOUT ");
+        for(_k=0; _k<8; _k++)
+            fprintf(stderr, " %d", rc->pred[_k]);
+        fprintf(stderr, "\n");
+    }
+#endif
+#ifdef STB_DBG_TRACE
     if (stride == rc->stride_y && px == 0 && py >= 1500) {
         int q;
         fprintf(stderr, "ADOUT px=%d py=%d tx=%d w=%d h=%d cw=%d ch=%d"
@@ -2608,6 +2637,10 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc, 
 
 static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf)
 {
+#ifdef STB_DBG_TRACE
+    if (((x4==176 || x4==184) && y4==288) || (x4==168 && y4==296))
+        fprintf(stderr, "HLTXB x=%d y=%d tx=%d eob=%d cf0=%d\n", x4, y4, tx, eob, cf? (int)cf[0]:-9999);
+#endif
     struct stb_avif_scalar_recon *rc;
     int txw4 = stbv_av1_tx_dims[tx].w;
     int txh4 = stbv_av1_tx_dims[tx].h;
@@ -2654,6 +2687,10 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
                     rc->lf_txlw[(size_t)ly * rc->lf_b4stride + lx] =
                         (stbv_u8)stbv_av1_tx_dims[tx].lw;
                     rc->lf_done[(size_t)ly * rc->lf_b4stride + lx] = 1;
+#ifdef STB_DBG_TRACE
+                    if (ly==296 && lx==175)
+                        fprintf(stderr, "MARK y=%d x=%d by bx=%d by=%d bw=%d bh=%d\n", ly, lx, rc->cur_bx4, rc->cur_by4, rc->cur_bw4, rc->cur_bh4);
+#endif
                 }
         }
     }
@@ -2688,7 +2725,7 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
     }
     {
         static int dbg_n = 0;
-        if (dbg_n < 100000) {
+        if (getenv("ROWDUMP") && dbg_n < 100000) {
             int i2;
             dbg_n++;
             fprintf(stderr, "OURTX x=%d y=%d tx=%d txtp=%d eob=%d w=%d\n",
@@ -2762,7 +2799,21 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
                                           stbv_av1_tx_dims[tx].h,
                                           rc->intra_edge_filter, edge, bd);
 #ifdef STB_DBG_TRACE
+        if ((x4<<2)<=511 && (x4<<2)+w>511 && (y4<<2)<=17 && (y4<<2)+h>17) {
+            int _k;
+            fprintf(stderr, "ORIG x=%d y=%d tx=%d mode=%d impl=%d angle=%d\n", x4,y4,tx,mode,impl,angle);
+            fprintf(stderr, "OTOP");
+            for (_k=0;_k<16;_k++) fprintf(stderr, " %d", edge[_k]);
+            fprintf(stderr, "\nOLEFT");
+            for (_k=1;_k<=16;_k++) fprintf(stderr, " %d", edge[-_k]);
+            fprintf(stderr, "\n");
+        }
+#endif
+#ifdef STB_DBG_TRACE
     stbv_av1_dbg_z2_go = 0;
+#endif
+#ifdef STB_DBG_TRACE
+    stbv_av1_dbg_z3 = 1;
 #endif
 #ifdef STB_DBG_TRACE
     if ((x4 == 16 || x4 == 0 || x4 == 8) && y4 == 376) {
@@ -2770,8 +2821,10 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
         fprintf(stderr, "YPRED x=%d y=%d mode=%d impl=%d ang=%d"
                 " top:", x4, y4, mode, impl, angle);
         for (q = 0; q < 8; q++) fprintf(stderr, " %d", edge[q]);
-        fprintf(stderr, " left:");
+        fprintf(stderr, " left8:");
         for (q = 1; q <= 8; q++) fprintf(stderr, " %d", edge[-q]);
+        fprintf(stderr, " left32:");
+        for (q = 1; q <= 32; q++) fprintf(stderr, " %d", edge[-q]);
         fprintf(stderr, " pred0:");
         for (q = 0; q < 8; q++) fprintf(stderr, " %d", rc->pred[q]);
         fprintf(stderr, "\n");
@@ -2784,6 +2837,40 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
     if ((x4 == 16 || x4 == 0 || x4 == 8) && y4 == 376) {
         int q;
         fprintf(stderr, "YPAFTER x=%d y=%d pred0:", x4, y4);
+        for (q = 0; q < 8; q++) fprintf(stderr, " %d", rc->pred[q]);
+        fprintf(stderr, "\n");
+    }
+#endif
+#ifdef STB_DBG_TRACE
+    if ((rc->cur_bx4 == 176 && rc->cur_by4 == 288) || (rc->cur_bx4 == 168 && rc->cur_by4 == 296)) {
+        int q;
+        /* raw plane top row (before filtering) for comparison */
+        fprintf(stderr, "HRAW x=%d y=%d rawtop:", x4, y4);
+        for (q = 0; q < 8; q++) fprintf(stderr, " %d",
+                (int)rc->plane_y[((y4<<2)-1)*rc->stride_y + (x4<<2)+q]);
+        fprintf(stderr, " rawleft:");
+        for (q = 0; q < 8; q++) fprintf(stderr, " %d",
+                (int)rc->plane_y[((y4<<2)+q)*rc->stride_y + (x4<<2)-1]);
+        fprintf(stderr, "\n");
+        if (rc->cur_bx4 == 176 && rc->cur_by4 == 288)
+            fprintf(stderr, "LFCHK y=296 x=175 val=%d\n", (int)rc->lf_done[296*rc->lf_b4stride+175]);
+        fprintf(stderr, "HPRED x=%d y=%d tx=%d mode=%d impl=%d ang=%d"
+                " top:", x4, y4, tx, mode, impl, angle);
+        for (q = 0; q < 8; q++) fprintf(stderr, " %d", edge[q]);
+        fprintf(stderr, " left8:");
+        for (q = 1; q <= 8; q++) fprintf(stderr, " %d", edge[-q]);
+        fprintf(stderr, " left32:");
+        for (q = 1; q <= 32; q++) fprintf(stderr, " %d", edge[-q]);
+        fprintf(stderr, " futplane:");
+        for (q = 0; q < 8; q++) fprintf(stderr, " %d",
+                (int)rc->plane_y[((y4<<2)+ (stbv_av1_tx_dims[tx].h<<2) + q)*rc->stride_y + (x4<<2)-1]);
+        fprintf(stderr, "\n");
+    }
+#endif
+#ifdef STB_DBG_TRACE
+    if ((rc->cur_bx4 == 176 && rc->cur_by4 == 288) || (rc->cur_bx4 == 168 && rc->cur_by4 == 296)) {
+        int q;
+        fprintf(stderr, "HPAFTER x=%d y=%d pred0:", x4, y4);
         for (q = 0; q < 8; q++) fprintf(stderr, " %d", rc->pred[q]);
         fprintf(stderr, "\n");
     }
@@ -2896,6 +2983,12 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
 
 static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf)
 {
+#ifdef STB_DBG_TRACE
+    if (x4 == 0 && y4 == 0)
+        fprintf(stderr, "C0TXB pl=%d txtp=%d eob=%d cf0=%d cf1=%d\n",
+                pl, txtp, eob, cf ? (int)cf[0] : -9999,
+                cf ? (int)cf[1] : -9999);
+#endif
     struct stb_avif_scalar_recon *rc;
     stbv_u16 *plane;
     int stride, pw, ph;
@@ -3002,6 +3095,12 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
 static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
                                               int pl, int x4, int y4, int tx)
 {
+#ifdef STB_DBG_TRACE
+    if (x4 == 0 && y4 == 0)
+        fprintf(stderr, "C0 pl=%d uvm=%d au=%d av=%d skip=%d bx=%d\n",
+                pl, rc->uv_mode, rc->cfl_alpha_u, rc->cfl_alpha_v,
+                rc->block_skip, rc->cur_bx4);
+#endif
     stbv_u16 tl[640];
     stbv_u16 *edge = tl + 320;
     stbv_u16 *plane;
@@ -3143,6 +3242,11 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
                             rc->cfl_ac[y * W + x] -= (stbv_i16)acc;
                     rc->cfl_ac_w = W;
                     rc->cfl_ac_h = H;
+#ifdef STB_DBG_TRACE
+                    if (rc->cur_bx4==0 && rc->cur_by4==0) {
+                        int _i; fprintf(stderr, "CFLAC "); for(_i=0; _i<8 && _i<W*H; _i++) fprintf(stderr, " %d", rc->cfl_ac[_i]); fprintf(stderr, " acc=%ld log2=%d\n", acc, log2sz);
+                    }
+#endif
                     rc->cfl_ac_bx = rc->cur_bx4;
                     rc->cfl_ac_by = rc->cur_by4;
                     rc->cfl_ac_ok = 1;
@@ -3164,6 +3268,11 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
                                            (v > mx ? mx : v));
                         }
                 }
+#ifdef STB_DBG_TRACE
+                if (rc->cur_bx4==0 && rc->cur_by4==0 && pl==1) {
+                    int _k; fprintf(stderr, "CFLPRED pl=%d ", pl); for(_k=0; _k<8; _k++) fprintf(stderr, " %d", rc->pred[_k]); fprintf(stderr, "\n");
+                }
+#endif
             }
         }
     }
@@ -3693,14 +3802,27 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         FILE *fy = fopen("plane_y.raw", "wb");
         FILE *fu = fopen("plane_u.raw", "wb");
         FILE *fv = fopen("plane_v.raw", "wb");
-        if (fy) { fwrite(tc->plane_y, 1, (size_t)tc->stride_y * tc->frame_height, fy); fclose(fy); }
-        if (fu) { fwrite(tc->plane_u, 1, (size_t)tc->stride_u * (((tc->frame_height + 1) >> 1)), fu); fclose(fu); }
-        if (fv) { fwrite(tc->plane_v, 1, (size_t)tc->stride_v * (((tc->frame_height + 1) >> 1)), fv); fclose(fv); }
+        if (fy) { size_t _ps = tc->bit_depth>8?2:1; fwrite(tc->plane_y, _ps, (size_t)tc->stride_y * tc->frame_height, fy); fclose(fy); }
+        {
+            int uv_rows = (tc->frame_height + (recon.ss_ver ? 1 : 0)) >> recon.ss_ver;
+            if (fu) { fwrite(tc->plane_u, 1, (size_t)tc->stride_u * uv_rows, fu); fclose(fu); }
+            if (fv) { fwrite(tc->plane_v, 1, (size_t)tc->stride_v * uv_rows, fv); fclose(fv); }
+        }
         fprintf(stderr, "PLNDUMP written stride_y=%d h=%d\n",
                 tc->stride_y, tc->frame_height);
     }
     }
 #endif
+    {
+        static int plndump_done2 = 0;
+        if (getenv("PLNDUMP") && !plndump_done2) {
+            FILE *fy2;
+            plndump_done2 = 1;
+            fy2 = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/plane_y10.raw", "wb");
+            if (fy2) { size_t _n2 = fwrite(py16, 2, (size_t)3104 * 2112, fy2); fprintf(stderr, "PY16W n=%zu ferror=%d\n", _n2, ferror(fy2)); fclose(fy2); }
+            fprintf(stderr, "PLNDUMP2 written\n");
+        }
+    }
 oom16:
     if (py16) stb_avif_free_internal(py16);
     if (pu16) stb_avif_free_internal(pu16);
