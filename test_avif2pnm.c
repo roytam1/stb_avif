@@ -126,6 +126,10 @@ int main(int argc, char *argv[])
     int fail = 0;
     int i;
 
+#ifdef STB_DBG_TRACE
+    setvbuf(stderr, NULL, _IOFBF, 1 << 24);
+#endif
+
     /* Default file list */
     const char *files[] = {
 "example_avif/fox.profile0.10bpc.yuv420.avif",
