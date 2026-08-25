@@ -1769,6 +1769,13 @@ struct stb_av1_tile_context {
     int pixel_max;
 };
 
+/* Get dequant value for given quantization index and is_dc flag.
+   Simplified: uses DC table for DC, AC table for AC. */
+/* NOTE: dequantization for the active scalar decode path uses
+   * stbv_av1_dq_tbl[] in stb_av1_quant.h (bit-depth-aware, from dav1d).
+   * The legacy stb_av1_get_dequant below is unused by the active path.
+   */
+#if 0
 /* DC dequant lookup table (simplified version for 8-bit) */
 static const int stb_av1_dc_qlookup[256] = {
     4,    8,    8,    9,    10,   11,   12,   13,
@@ -1841,12 +1848,497 @@ static const int stb_av1_ac_qlookup[256] = {
     255,  256,  257,  258,  259,  260,  261,  262
 };
 
-/* Get dequant value for given quantization index and is_dc flag.
-   Simplified: uses DC table for DC, AC table for AC. */
-/* NOTE: dequantization for the active scalar decode path uses
-   * stbv_av1_dq_tbl[] in stb_av1_quant.h (bit-depth-aware, from dav1d).
-   * The legacy stb_av1_get_dequant below is unused by the active path.
-   */
+static int stb_av1_get_dequant(int qindex, int is_dc, int bit_depth)
+{
+    (void)bit_depth;
+    if (qindex > 255) qindex = 255;
+    if (qindex < 0) qindex = 0;
+    if (is_dc)
+        return stb_av1_dc_qlookup[qindex];
+    else
+        return stb_av1_ac_qlookup[qindex];
+}
+
+/* -------------------------------------------------------------------------- */
+/* 1D DCT and ADST transforms                                                */
+/* -------------------------------------------------------------------------- */
+
+/* DCT II transform (type II DCT) for 1D array of size n.
+   In-place. n is 4, 8, 16, or 32. */
+static void stb_av1_dct(int *coeffs, int n)
+{
+    int i, k;
+    int *tmp;
+    double pi = 3.14159265358979323846;
+
+    /* Use heap allocation to avoid C89 VLA issues */
+    tmp = (int *)stb_avif_malloc((size_t)n * sizeof(int));
+    if (!tmp) return;
+
+    for (k = 0; k < n; k++) {
+        double sum = 0.0;
+        for (i = 0; i < n; i++) {
+            double angle = pi * (double)(2 * i + 1) * (double)k / (double)(2 * n);
+            sum += (double)coeffs[i] * cos(angle);
+        }
+        if (k == 0)
+            tmp[k] = (int)(sum * (1.0 / sqrt((double)n)) + 0.5);
+        else
+            tmp[k] = (int)(sum * (sqrt(2.0 / (double)n)) + 0.5);
+    }
+
+    for (i = 0; i < n; i++)
+        coeffs[i] = tmp[i];
+
+    stb_avif_free_internal(tmp);
+}
+
+/* Inverse DCT II (type III DCT) */
+static void stb_av1_idct(int *coeffs, int n)
+{
+    int i, k;
+    int *tmp;
+    double pi = 3.14159265358979323846;
+
+    tmp = (int *)stb_avif_malloc((size_t)n * sizeof(int));
+    if (!tmp) return;
+
+    for (k = 0; k < n; k++) {
+        double sum = 0.0;
+        double sqrt2_n = sqrt(2.0 / (double)n);
+        double sqrt_n = 1.0 / sqrt((double)n);
+        for (i = 0; i < n; i++) {
+            double angle = pi * (double)(2 * k + 1) * (double)i / (double)(2 * n);
+            double norm = (i == 0) ? sqrt_n : sqrt2_n;
+            sum += (double)coeffs[i] * norm * cos(angle);
+        }
+        tmp[k] = (int)(sum + 0.5);
+    }
+
+    for (i = 0; i < n; i++)
+        coeffs[i] = tmp[i];
+
+    stb_avif_free_internal(tmp);
+}
+
+/* ADST (asymmetric discrete sine transform) type IV.
+   Used in AV1 for intra prediction residuals. */
+static void stb_av1_adst(int *coeffs, int n)
+{
+    int i, k;
+    int *tmp;
+    double pi = 3.14159265358979323846;
+
+    tmp = (int *)stb_avif_malloc((size_t)n * sizeof(int));
+    if (!tmp) return;
+
+    for (k = 0; k < n; k++) {
+        double sum = 0.0;
+        for (i = 0; i < n; i++) {
+            double angle = pi * (double)(2 * i + 1) * (double)(2 * k + 1) / (double)(4 * n);
+            sum += (double)coeffs[i] * sin(angle);
+        }
+        tmp[k] = (int)(sum * (2.0 / sqrt((double)(2 * n))) + 0.5);
+    }
+
+    for (i = 0; i < n; i++)
+        coeffs[i] = tmp[i];
+
+    stb_avif_free_internal(tmp);
+}
+
+/* Inverse ADST */
+static void stb_av1_iadst(int *coeffs, int n)
+{
+    int i, k;
+    int *tmp;
+    double pi = 3.14159265358979323846;
+
+    tmp = (int *)stb_avif_malloc((size_t)n * sizeof(int));
+    if (!tmp) return;
+
+    for (k = 0; k < n; k++) {
+        double sum = 0.0;
+        double norm = 2.0 / sqrt((double)(2 * n));
+        for (i = 0; i < n; i++) {
+            double angle = pi * (double)(2 * k + 1) * (double)(2 * i + 1) / (double)(4 * n);
+            sum += (double)coeffs[i] * norm * sin(angle);
+        }
+        tmp[k] = (int)(sum + 0.5);
+    }
+
+    for (i = 0; i < n; i++)
+        coeffs[i] = tmp[i];
+
+    stb_avif_free_internal(tmp);
+}
+
+/* Identity transform (no-op) */
+static void stb_av1_identity(int *coeffs, int n)
+{
+    /* Identity does nothing */
+    (void)coeffs;
+    (void)n;
+}
+
+/* Apply inverse transform in 2D (separable).
+   tx_type: 0=DCT_DCT, 1=ADST_DCT, 2=DCT_ADST, 3=ADST_ADST,
+            4=FLIPADST_DCT, 5=DCT_FLIPADST, 6=FLIPADST_FLIPADST,
+            7=ADST_FLIPADST, 8=FLIPADST_ADST, 16=IDENTITY_IDENTITY */
+static void stb_av1_inv_transform_2d(int *block, int w, int h, int tx_type)
+{
+    int i, j;
+    int *temp;
+    int *col;
+    int is_dct_row, is_dct_col;
+    int is_adst_row, is_adst_col;
+    int is_flipadst_row, is_flipadst_col;
+
+    /* For simplicity, handle common types: DCT_DCT, ADST_DCT, DCT_ADST, ADST_ADST */
+    is_dct_row = (tx_type == 0 || tx_type == 1);
+    is_dct_col = (tx_type == 0 || tx_type == 2);
+    is_adst_row = (tx_type == 2 || tx_type == 3 || tx_type == 7 || tx_type == 8);
+    is_adst_col = (tx_type == 1 || tx_type == 3 || tx_type == 4 || tx_type == 6);
+    is_flipadst_row = (tx_type == 4 || tx_type == 6 || tx_type == 8);
+    is_flipadst_col = (tx_type == 5 || tx_type == 6 || tx_type == 7);
+    (void)is_flipadst_row;
+    (void)is_flipadst_col;
+
+    /* Allocate temp arrays */
+    temp = (int *)stb_avif_malloc((size_t)(w * h) * sizeof(int));
+    col = (int *)stb_avif_malloc((size_t)(h) * sizeof(int));
+
+    if (!temp || !col) {
+        if (temp) stb_avif_free_internal(temp);
+        if (col) stb_avif_free_internal(col);
+        return;
+    }
+
+    /* Process rows */
+    for (i = 0; i < h; i++) {
+        int row[64];
+        for (j = 0; j < w; j++)
+            row[j] = block[i * w + j];
+
+        if (is_dct_row) {
+            stb_av1_idct(row, w);
+        } else if (is_adst_row) {
+            stb_av1_iadst(row, w);
+        } else {
+            stb_av1_identity(row, w);
+        }
+
+        for (j = 0; j < w; j++)
+            temp[i * w + j] = row[j];
+    }
+
+    /* Process columns */
+    for (j = 0; j < w; j++) {
+        for (i = 0; i < h; i++)
+            col[i] = temp[i * w + j];
+
+        if (is_dct_col) {
+            stb_av1_idct(col, h);
+        } else if (is_adst_col) {
+            stb_av1_iadst(col, h);
+        } else {
+            stb_av1_identity(col, h);
+        }
+
+        for (i = 0; i < h; i++)
+            block[i * w + j] = col[i];
+    }
+
+    stb_avif_free_internal(temp);
+    stb_avif_free_internal(col);
+}
+
+/* -------------------------------------------------------------------------- */
+/* INTRA PREDICTION                                                           */
+/* -------------------------------------------------------------------------- */
+
+/* Intra prediction for a block.
+   For simplicity, we handle common modes: DC, V, H, D45, D135, Paeth, Smooth.
+
+   Parameters:
+     dst     - output block
+     stride  - stride of destination
+     w, h    - block width/height
+     mode    - intra prediction mode
+     above   - pointer to row above (size w + left_needed)
+     left    - pointer to column left (size h + top_needed)
+     topleft - pixel at (-1,-1)
+     bit_depth - pixel bit depth
+*/
+static void stb_av1_intra_predict(unsigned char *dst, int stride,
+                                   int w, int h, int mode,
+                                   const unsigned char *above,
+                                   const unsigned char *left,
+                                   unsigned char topleft,
+                                   int bit_depth)
+{
+    int r, c;
+    int max_val = (1 << bit_depth) - 1;
+
+    (void)bit_depth;
+    (void)max_val;
+
+    switch (mode) {
+        case STB_AV1_DC_PRED: {
+            int sum = 0;
+            int count = 0;
+            int dc_val;
+            int above_avail = 1;
+            int left_avail = 1;
+
+            if (above_avail) {
+                for (c = 0; c < w; c++) { sum += above[c]; count++; }
+            }
+            if (left_avail) {
+                for (r = 0; r < h; r++) { sum += left[r]; count++; }
+            }
+
+            if (count == 0)
+                dc_val = 128;
+            else
+                dc_val = (sum + (count >> 1)) / count;
+
+            if (dc_val < 0) dc_val = 0;
+            if (dc_val > 255) dc_val = 255;
+
+            for (r = 0; r < h; r++)
+                for (c = 0; c < w; c++)
+                    dst[r * stride + c] = (unsigned char)dc_val;
+            break;
+        }
+
+        case STB_AV1_V_PRED: {
+            for (r = 0; r < h; r++)
+                for (c = 0; c < w; c++)
+                    dst[r * stride + c] = above[c];
+            break;
+        }
+
+        case STB_AV1_H_PRED: {
+            for (r = 0; r < h; r++)
+                for (c = 0; c < w; c++)
+                    dst[r * stride + c] = left[r];
+            break;
+        }
+
+        case STB_AV1_D45_PRED: {
+            /* 45-degree direction: top-right to bottom-left */
+            for (r = 0; r < h; r++) {
+                for (c = 0; c < w; c++) {
+                    int idx = r + c + 1;
+                    if (idx < w) {
+                        dst[r * stride + c] = above[idx];
+                    } else if (idx == w) {
+                        dst[r * stride + c] = above[w - 1];
+                    } else {
+                        dst[r * stride + c] = left[idx - w];
+                    }
+                }
+            }
+            break;
+        }
+
+        case STB_AV1_D135_PRED: {
+            /* 135-degree direction: top-left to bottom-right */
+            for (r = 0; r < h; r++) {
+                for (c = 0; c < w; c++) {
+                    int idx = c - r;
+                    if (idx > 0) {
+                        dst[r * stride + c] = above[idx - 1];
+                    } else if (idx == 0) {
+                        dst[r * stride + c] = topleft;
+                    } else {
+                        dst[r * stride + c] = left[-idx - 1];
+                    }
+                }
+            }
+            break;
+        }
+
+        case STB_AV1_D113_PRED: {
+            /* D113 (down-right, ~113 degrees) */
+            for (r = 0; r < h; r++) {
+                for (c = 0; c < w; c++) {
+                    int dr = c - (r << 1);
+                    int a0, a1, a2;
+                    if (dr >= 0) {
+                        a0 = (dr > 0) ? above[c - 1] : topleft;
+                        a1 = above[c];
+                        a2 = above[c + 1];
+                    } else {
+                        a0 = left[r - 1];
+                        a1 = left[r];
+                        a2 = left[r + 1];
+                    }
+                    dst[r * stride + c] = (unsigned char)((a0 + 2 * a1 + a2 + 2) >> 2);
+                }
+            }
+            break;
+        }
+
+        case STB_AV1_D157_PRED: {
+            /* D157 (down-left, ~157 degrees) */
+            for (r = 0; r < h; r++) {
+                for (c = 0; c < w; c++) {
+                    int dr = r - (c << 1);
+                    int a0, a1, a2;
+                    if (dr >= 0) {
+                        a0 = left[r - 1];
+                        a1 = left[r];
+                        a2 = left[r + 1];
+                    } else {
+                        a0 = (c > 0) ? above[c - 1] : topleft;
+                        a1 = above[c];
+                        a2 = above[c + 1];
+                    }
+                    dst[r * stride + c] = (unsigned char)((a0 + 2 * a1 + a2 + 2) >> 2);
+                }
+            }
+            break;
+        }
+
+        case STB_AV1_D203_PRED: {
+            /* D203 (down-right, ~203 degrees) */
+            for (r = 0; r < h; r++) {
+                for (c = 0; c < w; c++) {
+                    int dr = c + r;
+                    int a0, a1, a2;
+                    if (dr < w) {
+                        a0 = (dr > 0) ? above[dr - 1] : topleft;
+                        a1 = above[dr];
+                        a2 = above[dr + 1];
+                    } else {
+                        int idx = dr - w + 1;
+                        a0 = left[idx - 1];
+                        a1 = left[idx];
+                        a2 = left[idx + 1];
+                    }
+                    dst[r * stride + c] = (unsigned char)((a0 + 2 * a1 + a2 + 2) >> 2);
+                }
+            }
+            break;
+        }
+
+        case STB_AV1_D67_PRED: {
+            /* D67 (up-right, ~67 degrees) */
+            for (r = 0; r < h; r++) {
+                for (c = 0; c < w; c++) {
+                    int dr = r + c;
+                    int a0, a1, a2;
+                    if (dr < w) {
+                        a0 = (dr > 0) ? above[dr - 1] : topleft;
+                        a1 = above[dr];
+                        a2 = above[dr + 1];
+                    } else {
+                        int idx = dr - w + 1;
+                        a0 = left[idx - 1];
+                        a1 = left[idx];
+                        a2 = left[idx + 1];
+                    }
+                    dst[r * stride + c] = (unsigned char)((a0 + 2 * a1 + a2 + 2) >> 2);
+                }
+            }
+            break;
+        }
+
+        case STB_AV1_PAETH_PRED: {
+            /* Paeth prediction (from VP9) - finds the closest boundary pixel */
+            for (r = 0; r < h; r++) {
+                for (c = 0; c < w; c++) {
+                    int a = (c > 0) ? above[c - 1] : topleft;
+                    int b = (r > 0) ? left[r - 1] : topleft;
+                    int d = above[c];
+                    int p = a + b - d;
+                    int pa = (p - a) >= 0 ? (p - a) : -(p - a);
+                    int pb = (p - b) >= 0 ? (p - b) : -(p - b);
+                    int pc = (p - d) >= 0 ? (p - d) : -(p - d);
+                    int val;
+                    if (pa <= pb && pa <= pc)
+                        val = a;
+                    else if (pb <= pc)
+                        val = b;
+                    else
+                        val = d;
+                    dst[r * stride + c] = (unsigned char)val;
+                }
+            }
+            break;
+        }
+
+        case STB_AV1_SMOOTH_PRED: {
+            /* Smooth: weighted average of boundaries */
+            for (r = 0; r < h; r++) {
+                for (c = 0; c < w; c++) {
+                    int vert = (w - c) * left[r] + (c + 1) * above[w - 1];
+                    int hor = (h - r) * above[c] + (r + 1) * left[h - 1];
+                    int val = (vert * (h - r) + hor * (w - c)
+                               + (h * w)) / (2 * h * w);
+                    if (val < 0) val = 0;
+                    if (val > 255) val = 255;
+                    dst[r * stride + c] = (unsigned char)val;
+                }
+            }
+            break;
+        }
+
+        case STB_AV1_SMOOTH_V_PRED: {
+            /* Smooth vertical */
+            for (r = 0; r < h; r++) {
+                for (c = 0; c < w; c++) {
+                    int val = ((h - r - 1) * above[c] + (r + 1) * left[h - 1] + (h >> 1)) / h;
+                    if (val < 0) val = 0;
+                    if (val > 255) val = 255;
+                    dst[r * stride + c] = (unsigned char)val;
+                }
+            }
+            break;
+        }
+
+        case STB_AV1_SMOOTH_H_PRED: {
+            /* Smooth horizontal */
+            for (r = 0; r < h; r++) {
+                for (c = 0; c < w; c++) {
+                    int val = ((w - c - 1) * left[r] + (c + 1) * above[w - 1] + (w >> 1)) / w;
+                    if (val < 0) val = 0;
+                    if (val > 255) val = 255;
+                    dst[r * stride + c] = (unsigned char)val;
+                }
+            }
+            break;
+        }
+
+        default: {
+            /* Fallback to DC */
+            int dc_val = 128;
+            for (r = 0; r < h; r++)
+                for (c = 0; c < w; c++)
+                    dst[r * stride + c] = (unsigned char)dc_val;
+            break;
+        }
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* SIMPLIFIED COEFFICIENT DECODING                                            */
+/* -------------------------------------------------------------------------- */
+
+/* Decode a single transform coefficient.
+   In practice, AV1 uses a complex context-adaptive arithmetic coding scheme
+   for coefficients, including EOB (end-of-block), sign, and magnitude.
+   
+   For our simplified decoder, we decode tokens from the bitstream using
+   uniform probability coding, with a basic coefficient model. */
+
+enum stb_av1_tx_class {
+    TX_CLASS_2D = 0,
+    TX_CLASS_HORIZ = 1,
+    TX_CLASS_VERT = 2
+};
 
 /* Simplified coefficient decoding - reads zig-zag scanned tokens */
 static int stb_av1_decode_coeffs(struct stb_av1_bool_reader *br,
@@ -2117,7 +2609,262 @@ static void stb_av1_decode_superblock(struct stb_av1_tile_context *tc,
         }
     }
 }
+
 /* -------------------------------------------------------------------------- */
+
+/* main tile decoding routine */
+static void stb_av1_decode_frame(struct stb_av1_tile_context *tc)
+{
+    int sb_size = 64; /* superblock size: 64 or 128 depending on sequence */
+    int sb_cols, sb_rows;
+    int sr, sc;
+
+    /* Determine superblock size */
+    if (tc->frame_width > 64 || tc->frame_height > 64)
+        sb_size = 64;
+    if (tc->frame_width > 128 || tc->frame_height > 128)
+        sb_size = 128;
+
+    sb_cols = (tc->frame_width + sb_size - 1) / sb_size;
+    sb_rows = (tc->frame_height + sb_size - 1) / sb_size;
+
+    /* Init progress tracking */
+    tc->total_sb = sb_cols * sb_rows;
+    tc->done_sb = 0;
+    tc->next_report_sb = tc->total_sb / 20;  /* report every 5% */
+    if (tc->next_report_sb < 1) tc->next_report_sb = 1;
+    tc->start_time = time(NULL);
+
+    /* Decode each superblock */
+    for (sr = 0; sr < sb_rows; sr++) {
+        for (sc = 0; sc < sb_cols; sc++) {
+            stb_av1_decode_superblock(tc, sr, sc, sb_size);
+            tc->done_sb++;
+            if (tc->done_sb >= tc->next_report_sb) {
+                time_t now = time(NULL);
+                double elapsed = (double)(now - tc->start_time);
+                double pct = (double)tc->done_sb * 100.0 / (double)tc->total_sb;
+                double eta = (pct > 0.0) ? (elapsed * (100.0 - pct) / pct) : 0.0;
+                fprintf(stderr, "\r  [%3.0f%%%%] SB %d/%d, %ds elapsed, ETA %ds     ",
+                        pct, tc->done_sb, tc->total_sb, (int)elapsed, (int)eta); fflush(stderr);
+                tc->next_report_sb += tc->total_sb / 20;
+            }
+        }
+    }
+    fprintf(stderr, "\r  [100%%%%] Done (%d superblocks, %ds)          \n",
+            tc->total_sb, (int)(time(NULL) - tc->start_time));
+}
+
+/* -------------------------------------------------------------------------- */
+/* CDEF FILTER (Constrained Directional Enhancement Filter)                   */
+/* -------------------------------------------------------------------------- */
+
+static void stb_av1_cdef_filter_plane(unsigned char *plane, int stride,
+                                       int width, int height,
+                                       int pri_strength, int sec_strength,
+                                       int damping, int bit_depth)
+{
+    int y, x;
+    int dummy_sd;
+
+    (void)bit_depth;
+    (void)damping;
+    (void)sec_strength;
+    dummy_sd = damping + bit_depth - 8;
+    (void)dummy_sd;
+
+    if (pri_strength == 0 && sec_strength == 0)
+        return;
+
+    for (y = 1; y < height - 1; y++) {
+        for (x = 1; x < width - 1; x++) {
+            int c = plane[y * stride + x];
+            int sum_pri = 0;
+            int sum_sec = 0;
+            int count_pri = 0;
+            int count_sec = 0;
+            int sign;
+
+            /* Simplified CDEF: compute directional filter */
+            /* Primary taps (directional) */
+            sign = (c > 128) ? 1 : -1; /* simplified direction detection */
+            (void)sign;
+
+            /* For each direction, compute constraint filter.
+               Simplified: apply a basic low-pass filter. */
+            if (pri_strength > 0) {
+                int p0 = plane[(y-1) * stride + x];
+                int p1 = plane[(y+1) * stride + x];
+                int p2 = plane[y * stride + x-1];
+                int p3 = plane[y * stride + x+1];
+
+                /* Compute difference and constrain */
+                {
+                    int diff;
+                    int tap;
+                    diff = p0 - c;
+                    tap = diff >= 0 ? diff : -diff;
+                    if (tap < pri_strength) { sum_pri += diff; count_pri++; }
+                    diff = p1 - c;
+                    tap = diff >= 0 ? diff : -diff;
+                    if (tap < pri_strength) { sum_pri += diff; count_pri++; }
+                    diff = p2 - c;
+                    tap = diff >= 0 ? diff : -diff;
+                    if (tap < pri_strength) { sum_pri += diff; count_pri++; }
+                    diff = p3 - c;
+                    tap = diff >= 0 ? diff : -diff;
+                    if (tap < pri_strength) { sum_pri += diff; count_pri++; }
+                }
+            }
+
+            /* Apply filter */
+            if (count_pri > 0) {
+                int new_val = c + (sum_pri / count_pri);
+                if (new_val < 0) new_val = 0;
+                if (new_val > 255) new_val = 255;
+                plane[y * stride + x] = (unsigned char)new_val;
+            }
+        }
+    }
+}
+#endif
+
+/* -------------------------------------------------------------------------- */
+/* DAV1D BACKEND                                                              */
+/* -------------------------------------------------------------------------- */
+
+#ifdef STB_AVIF_USE_DAV1D
+static int stb_avif_decode_with_dav1d(const unsigned char *av1_data, size_t av1_size,
+                                       int *width, int *height,
+                                       unsigned char **y_plane, int *y_stride,
+                                       unsigned char **u_plane, int *u_stride,
+                                       unsigned char **v_plane, int *v_stride,
+                                       int *bit_depth, int *monochrome,
+                                       int *subsampling_x, int *subsampling_y)
+{
+    Dav1dContext *ctx = NULL;
+    Dav1dSettings s;
+    Dav1dData data;
+    Dav1dPicture pic = { 0 };
+    int ret;
+    int i;
+
+    dav1d_default_settings(&s);
+    s.n_threads = 1;
+    s.all_layers = 0;
+
+    ret = dav1d_open(&ctx, &s);
+    if (ret < 0) {  return 0; }
+
+    /* Wrap the AV1 data */
+    /* Manually initialize Dav1dData to avoid potential NULL check issues */
+    memset(&data, 0, sizeof(data));
+    data.data = (const uint8_t *)av1_data;
+    data.sz = av1_size;
+    ret = 0;
+
+    /* Send data to decoder */
+    ret = dav1d_send_data(ctx, &data);
+    if (ret < 0 && ret != DAV1D_ERR(EAGAIN)) {
+        
+        dav1d_data_unref(&data);
+        dav1d_close(&ctx);
+        return 0;
+    }
+    dav1d_data_unref(&data);
+
+    /* Get decoded picture */
+    ret = dav1d_get_picture(ctx, &pic);
+    if (ret < 0) {
+        fprintf(stderr, "  dav1d: get_picture failed (%d)\n", ret);
+        dav1d_close(&ctx);
+        return 0;
+    }
+
+    /* Extract picture info */
+    *width = pic.p.w;
+    *height = pic.p.h;
+    *bit_depth = pic.p.bpc;
+    *monochrome = 0;
+
+    /* Determine chroma subsampling from layout */
+    if (pic.p.layout == DAV1D_PIXEL_LAYOUT_I420) {
+        *subsampling_x = 1;
+        *subsampling_y = 1;
+    } else if (pic.p.layout == DAV1D_PIXEL_LAYOUT_I422) {
+        *subsampling_x = 1;
+        *subsampling_y = 0;
+    } else {
+        *subsampling_x = 0;
+        *subsampling_y = 0;
+    }
+
+    /* Allocate 8-bit output planes */
+    *y_stride = (*width + 31) & ~31;
+    *y_plane = (unsigned char *)malloc((size_t)(*y_stride * *height));
+    if (!*y_plane) { dav1d_picture_unref(&pic); dav1d_close(&ctx); return 0; }
+
+    *u_stride = ((*width >> *subsampling_x) + 31) & ~31;
+    *u_plane = (unsigned char *)malloc((size_t)(*u_stride * (*height >> *subsampling_y)));
+    if (!*u_plane) { free(*y_plane); dav1d_picture_unref(&pic); dav1d_close(&ctx); return 0; }
+
+    *v_stride = *u_stride;
+    *v_plane = (unsigned char *)malloc((size_t)(*v_stride * (*height >> *subsampling_y)));
+    if (!*v_plane) { free(*y_plane); free(*u_plane); dav1d_picture_unref(&pic); dav1d_close(&ctx); return 0; }
+
+    /* Copy Y plane (convert from 16-bit/10-bit to 8-bit if needed) */
+    for (i = 0; i < *height; i++) {
+        int si;
+        for (si = 0; si < *width; si++) {
+            if (pic.p.bpc > 8) {
+                uint16_t *src = (uint16_t *)((uint8_t *)pic.data[0] + i * pic.stride[0]);
+                (*y_plane)[i * *y_stride + si] = (unsigned char)(src[si] >> (pic.p.bpc - 8));
+            } else {
+                (*y_plane)[i * *y_stride + si] = ((unsigned char *)pic.data[0])[i * pic.stride[0] + si];
+            }
+        }
+    }
+
+    /* Copy U plane */
+    {
+        int uv_h = *height >> *subsampling_y;
+        int uv_w = *width >> *subsampling_x;
+        for (i = 0; i < uv_h; i++) {
+            int si;
+            for (si = 0; si < uv_w; si++) {
+                if (pic.p.bpc > 8) {
+                    uint16_t *src = (uint16_t *)((uint8_t *)pic.data[1] + i * pic.stride[1]);
+                    (*u_plane)[i * *u_stride + si] = (unsigned char)(src[si] >> (pic.p.bpc - 8));
+                } else {
+                    (*u_plane)[i * *u_stride + si] = ((unsigned char *)pic.data[1])[i * pic.stride[1] + si];
+                }
+            }
+        }
+    }
+
+    /* Copy V plane */
+    {
+        int uv_h = *height >> *subsampling_y;
+        int uv_w = *width >> *subsampling_x;
+        for (i = 0; i < uv_h; i++) {
+            int si;
+            for (si = 0; si < uv_w; si++) {
+                if (pic.p.bpc > 8) {
+                    uint16_t *src = (uint16_t *)((uint8_t *)pic.data[2] + i * pic.stride[1]);
+                    (*v_plane)[i * *v_stride + si] = (unsigned char)(src[si] >> (pic.p.bpc - 8));
+                } else {
+                    (*v_plane)[i * *v_stride + si] = ((unsigned char *)pic.data[2])[i * pic.stride[1] + si];
+                }
+            }
+        }
+    }
+
+    dav1d_picture_unref(&pic);
+    dav1d_close(&ctx);
+    return 1;
+}
+#endif /* STB_AVIF_USE_DAV1D */
+
 #ifndef STB_AVIF_USE_DAV1D
 /* -------------------------------------------------------------------------- */
 /* SCALAR AV1 DECODER WITH RECON HOOKS  (C89)                                   */
@@ -2609,28 +3356,48 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
         memset(rc->pred + i * w + cw, 0,
                (size_t)((w - cw) * sizeof(stbv_u16)));
     }
+    {
+        static int _seed_hit = 0;
+        stbv_u16 _p[32];
+#ifdef STB_DBG_TRACE
+        if ((px==0||px==32) && py==0 && w>=8 && !_seed_hit) {
+            int _q; _seed_hit = 1;
+            for(_q=0;_q<32;_q++) _p[_q]=rc->pred[_q];
+            fprintf(stderr, "SEEDPRE px=%d py=%d tx=%d w=%d eob=%d: ", px, py, tx, w, eob);
+            for(_q=0;_q<20;_q++) fprintf(stderr, " %d", _p[_q]);
+            fprintf(stderr, "\n");
+        }
+#endif
     stbv_av1_inv_txfm_add16(rc->pred, w, cf, eob, tx, txtp, rc->bit_depth);
 #ifdef STB_DBG_TRACE
-    if ((px==0||px==32) && py==0 && w>=8) {
-        int _q;
-        stbv_u16 _p[32];
-        for(_q=0;_q<32;_q++)
-            _p[_q]=rc->pred[_q];
-        fprintf(stderr, "SEEDPRE ");
-        for(_q=0;_q<12;_q++)
-            fprintf(stderr, " %d", _p[_q]);
-        fprintf(stderr, "\nSEEDRES ");
-        for(_q=0;_q<12;_q++)
-            fprintf(stderr, " %d", (int)rc->pred[_q]-(int)_p[_q]);
-        fprintf(stderr, "\n");
-    }
+        if ((px==0||px==32) && py==0 && w>=8 && _seed_hit) {
+            int _q; _seed_hit = 0;
+            fprintf(stderr, "SEEDPOST ");
+            for(_q=0;_q<20;_q++) fprintf(stderr, " %d", (int)rc->pred[_q]);
+            fprintf(stderr, "\nSEEDRES ");
+            for(_q=0;_q<20;_q++) fprintf(stderr, " %d", (int)rc->pred[_q]-(int)_p[_q]);
+            fprintf(stderr, "\n");
+        }
 #endif
+    }
 #ifdef STB_DBG_TRACE
     if (px==672 && py==1184) {
         int _k;
         fprintf(stderr, "ITXOUT ");
         for(_k=0; _k<8; _k++)
             fprintf(stderr, " %d", rc->pred[_k]);
+        fprintf(stderr, "\n");
+    }
+    if (px>=704 && px<768 && py>=1152 && py<1168 && cf && eob>=0) {
+        int _k;
+        fprintf(stderr, "OURCF px=%d py=%d tx=%d w=%d eob=%d txtp=%d: ", px, py, tx, w, eob, txtp);
+        for(_k=0; _k<(w<32?w:32); _k++) fprintf(stderr, " %d", cf[_k]);
+        fprintf(stderr, "\n");
+    }
+    if (px==0 && (py==256||py==512||py==768||py==1024||py==1152) && cf && eob>=0) {
+        int _k;
+        fprintf(stderr, "ROWCF px=%d py=%d tx=%d w=%d eob=%d txtp=%d: ", px, py, tx, w, eob, txtp);
+        for(_k=0; _k<12; _k++) fprintf(stderr, " %d", cf[_k]);
         fprintf(stderr, "\n");
     }
 #endif
@@ -2827,8 +3594,6 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
 #endif
 #ifdef STB_DBG_TRACE
     stbv_av1_dbg_z2_go = 0;
-#endif
-#ifdef STB_DBG_TRACE
     stbv_av1_dbg_z3 = 1;
 #endif
 #ifdef STB_DBG_TRACE
@@ -3860,258 +4625,6 @@ oom16:
 }
 
 #endif /* !STB_AVIF_USE_DAV1D */
-
-/* main tile decoding routine */
-static void stb_av1_decode_frame(struct stb_av1_tile_context *tc)
-{
-    int sb_size = 64; /* superblock size: 64 or 128 depending on sequence */
-    int sb_cols, sb_rows;
-    int sr, sc;
-
-    /* Determine superblock size */
-    if (tc->frame_width > 64 || tc->frame_height > 64)
-        sb_size = 64;
-    if (tc->frame_width > 128 || tc->frame_height > 128)
-        sb_size = 128;
-
-    sb_cols = (tc->frame_width + sb_size - 1) / sb_size;
-    sb_rows = (tc->frame_height + sb_size - 1) / sb_size;
-
-    /* Init progress tracking */
-    tc->total_sb = sb_cols * sb_rows;
-    tc->done_sb = 0;
-    tc->next_report_sb = tc->total_sb / 20;  /* report every 5% */
-    if (tc->next_report_sb < 1) tc->next_report_sb = 1;
-    tc->start_time = time(NULL);
-
-    /* Decode each superblock */
-    for (sr = 0; sr < sb_rows; sr++) {
-        for (sc = 0; sc < sb_cols; sc++) {
-            stb_av1_decode_superblock(tc, sr, sc, sb_size);
-            tc->done_sb++;
-            if (tc->done_sb >= tc->next_report_sb) {
-                time_t now = time(NULL);
-                double elapsed = (double)(now - tc->start_time);
-                double pct = (double)tc->done_sb * 100.0 / (double)tc->total_sb;
-                double eta = (pct > 0.0) ? (elapsed * (100.0 - pct) / pct) : 0.0;
-                fprintf(stderr, "\r  [%3.0f%%%%] SB %d/%d, %ds elapsed, ETA %ds     ",
-                        pct, tc->done_sb, tc->total_sb, (int)elapsed, (int)eta); fflush(stderr);
-                tc->next_report_sb += tc->total_sb / 20;
-            }
-        }
-    }
-    fprintf(stderr, "\r  [100%%%%] Done (%d superblocks, %ds)          \n",
-            tc->total_sb, (int)(time(NULL) - tc->start_time));
-}
-
-/* -------------------------------------------------------------------------- */
-/* CDEF FILTER (Constrained Directional Enhancement Filter)                   */
-/* -------------------------------------------------------------------------- */
-
-static void stb_av1_cdef_filter_plane(unsigned char *plane, int stride,
-                                       int width, int height,
-                                       int pri_strength, int sec_strength,
-                                       int damping, int bit_depth)
-{
-    int y, x;
-    int dummy_sd;
-
-    (void)bit_depth;
-    (void)damping;
-    (void)sec_strength;
-    dummy_sd = damping + bit_depth - 8;
-    (void)dummy_sd;
-
-    if (pri_strength == 0 && sec_strength == 0)
-        return;
-
-    for (y = 1; y < height - 1; y++) {
-        for (x = 1; x < width - 1; x++) {
-            int c = plane[y * stride + x];
-            int sum_pri = 0;
-            int sum_sec = 0;
-            int count_pri = 0;
-            int count_sec = 0;
-            int sign;
-
-            /* Simplified CDEF: compute directional filter */
-            /* Primary taps (directional) */
-            sign = (c > 128) ? 1 : -1; /* simplified direction detection */
-            (void)sign;
-
-            /* For each direction, compute constraint filter.
-               Simplified: apply a basic low-pass filter. */
-            if (pri_strength > 0) {
-                int p0 = plane[(y-1) * stride + x];
-                int p1 = plane[(y+1) * stride + x];
-                int p2 = plane[y * stride + x-1];
-                int p3 = plane[y * stride + x+1];
-
-                /* Compute difference and constrain */
-                {
-                    int diff;
-                    int tap;
-                    diff = p0 - c;
-                    tap = diff >= 0 ? diff : -diff;
-                    if (tap < pri_strength) { sum_pri += diff; count_pri++; }
-                    diff = p1 - c;
-                    tap = diff >= 0 ? diff : -diff;
-                    if (tap < pri_strength) { sum_pri += diff; count_pri++; }
-                    diff = p2 - c;
-                    tap = diff >= 0 ? diff : -diff;
-                    if (tap < pri_strength) { sum_pri += diff; count_pri++; }
-                    diff = p3 - c;
-                    tap = diff >= 0 ? diff : -diff;
-                    if (tap < pri_strength) { sum_pri += diff; count_pri++; }
-                }
-            }
-
-            /* Apply filter */
-            if (count_pri > 0) {
-                int new_val = c + (sum_pri / count_pri);
-                if (new_val < 0) new_val = 0;
-                if (new_val > 255) new_val = 255;
-                plane[y * stride + x] = (unsigned char)new_val;
-            }
-        }
-    }
-}
-
-/* -------------------------------------------------------------------------- */
-/* DAV1D BACKEND                                                              */
-/* -------------------------------------------------------------------------- */
-
-#ifdef STB_AVIF_USE_DAV1D
-static int stb_avif_decode_with_dav1d(const unsigned char *av1_data, size_t av1_size,
-                                       int *width, int *height,
-                                       unsigned char **y_plane, int *y_stride,
-                                       unsigned char **u_plane, int *u_stride,
-                                       unsigned char **v_plane, int *v_stride,
-                                       int *bit_depth, int *monochrome,
-                                       int *subsampling_x, int *subsampling_y)
-{
-    Dav1dContext *ctx = NULL;
-    Dav1dSettings s;
-    Dav1dData data;
-    Dav1dPicture pic = { 0 };
-    int ret;
-    int i;
-
-    dav1d_default_settings(&s);
-    s.n_threads = 1;
-    s.all_layers = 0;
-
-    ret = dav1d_open(&ctx, &s);
-    if (ret < 0) {  return 0; }
-
-    /* Wrap the AV1 data */
-    /* Manually initialize Dav1dData to avoid potential NULL check issues */
-    memset(&data, 0, sizeof(data));
-    data.data = (const uint8_t *)av1_data;
-    data.sz = av1_size;
-    ret = 0;
-
-    /* Send data to decoder */
-    ret = dav1d_send_data(ctx, &data);
-    if (ret < 0 && ret != DAV1D_ERR(EAGAIN)) {
-        
-        dav1d_data_unref(&data);
-        dav1d_close(&ctx);
-        return 0;
-    }
-    dav1d_data_unref(&data);
-
-    /* Get decoded picture */
-    ret = dav1d_get_picture(ctx, &pic);
-    if (ret < 0) {
-        fprintf(stderr, "  dav1d: get_picture failed (%d)\n", ret);
-        dav1d_close(&ctx);
-        return 0;
-    }
-
-    /* Extract picture info */
-    *width = pic.p.w;
-    *height = pic.p.h;
-    *bit_depth = pic.p.bpc;
-    *monochrome = 0;
-
-    /* Determine chroma subsampling from layout */
-    if (pic.p.layout == DAV1D_PIXEL_LAYOUT_I420) {
-        *subsampling_x = 1;
-        *subsampling_y = 1;
-    } else if (pic.p.layout == DAV1D_PIXEL_LAYOUT_I422) {
-        *subsampling_x = 1;
-        *subsampling_y = 0;
-    } else {
-        *subsampling_x = 0;
-        *subsampling_y = 0;
-    }
-
-    /* Allocate 8-bit output planes */
-    *y_stride = (*width + 31) & ~31;
-    *y_plane = (unsigned char *)malloc((size_t)(*y_stride * *height));
-    if (!*y_plane) { dav1d_picture_unref(&pic); dav1d_close(&ctx); return 0; }
-
-    *u_stride = ((*width >> *subsampling_x) + 31) & ~31;
-    *u_plane = (unsigned char *)malloc((size_t)(*u_stride * (*height >> *subsampling_y)));
-    if (!*u_plane) { free(*y_plane); dav1d_picture_unref(&pic); dav1d_close(&ctx); return 0; }
-
-    *v_stride = *u_stride;
-    *v_plane = (unsigned char *)malloc((size_t)(*v_stride * (*height >> *subsampling_y)));
-    if (!*v_plane) { free(*y_plane); free(*u_plane); dav1d_picture_unref(&pic); dav1d_close(&ctx); return 0; }
-
-    /* Copy Y plane (convert from 16-bit/10-bit to 8-bit if needed) */
-    for (i = 0; i < *height; i++) {
-        int si;
-        for (si = 0; si < *width; si++) {
-            if (pic.p.bpc > 8) {
-                uint16_t *src = (uint16_t *)((uint8_t *)pic.data[0] + i * pic.stride[0]);
-                (*y_plane)[i * *y_stride + si] = (unsigned char)(src[si] >> (pic.p.bpc - 8));
-            } else {
-                (*y_plane)[i * *y_stride + si] = ((unsigned char *)pic.data[0])[i * pic.stride[0] + si];
-            }
-        }
-    }
-
-    /* Copy U plane */
-    {
-        int uv_h = *height >> *subsampling_y;
-        int uv_w = *width >> *subsampling_x;
-        for (i = 0; i < uv_h; i++) {
-            int si;
-            for (si = 0; si < uv_w; si++) {
-                if (pic.p.bpc > 8) {
-                    uint16_t *src = (uint16_t *)((uint8_t *)pic.data[1] + i * pic.stride[1]);
-                    (*u_plane)[i * *u_stride + si] = (unsigned char)(src[si] >> (pic.p.bpc - 8));
-                } else {
-                    (*u_plane)[i * *u_stride + si] = ((unsigned char *)pic.data[1])[i * pic.stride[1] + si];
-                }
-            }
-        }
-    }
-
-    /* Copy V plane */
-    {
-        int uv_h = *height >> *subsampling_y;
-        int uv_w = *width >> *subsampling_x;
-        for (i = 0; i < uv_h; i++) {
-            int si;
-            for (si = 0; si < uv_w; si++) {
-                if (pic.p.bpc > 8) {
-                    uint16_t *src = (uint16_t *)((uint8_t *)pic.data[2] + i * pic.stride[1]);
-                    (*v_plane)[i * *v_stride + si] = (unsigned char)(src[si] >> (pic.p.bpc - 8));
-                } else {
-                    (*v_plane)[i * *v_stride + si] = ((unsigned char *)pic.data[2])[i * pic.stride[1] + si];
-                }
-            }
-        }
-    }
-
-    dav1d_picture_unref(&pic);
-    dav1d_close(&ctx);
-    return 1;
-}
-#endif /* STB_AVIF_USE_DAV1D */
 
 /* -------------------------------------------------------------------------- */
 /* MAIN API IMPLEMENTATION                                                    */
