@@ -1952,6 +1952,7 @@ struct stb_avif_scalar_recon {
     int cfl_ac_w, cfl_ac_h;
     int cfl_ac_bx, cfl_ac_by;
     int cfl_ac_ok;
+    int cur_pl;
     int cur_ltw4, cur_lth4; /* block's max luma tx size (b->tx dims) */
     /* Deblocking: per-4x4-unit block identity + covering-transform
      * log2-width maps (frame-sized, filled during recon). */
@@ -2421,7 +2422,26 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
             fprintf(stderr, "\n");
         }
 #endif
+#ifdef STB_DBG_TRACE
+    if (stride == rc->stride_u) {
+        int _q;
+        fprintf(stderr, "OUCB pl=%d px=%d py=%d tx=%d w=%d h=%d eob=%d:",
+                rc->cur_pl, px, py, tx, w, h, eob);
+        for (_q = 0; _q < w && _q < 16; _q++)
+            fprintf(stderr, " %d", (int)rc->pred[_q]);
+        fprintf(stderr, "\n");
+    }
+#endif
     stbv_av1_inv_txfm_add16(rc->pred, w, cf, eob, tx, txtp, rc->bit_depth);
+#ifdef STB_DBG_TRACE
+    if (stride == rc->stride_u && rc->cur_pl == 0) {
+        int _q;
+        fprintf(stderr, "OUCBPOST px=%d py=%d tx=%d:", px, py, tx);
+        for (_q = 0; _q < w && _q < 12; _q++)
+            fprintf(stderr, " %d", (int)rc->pred[_q]);
+        fprintf(stderr, "\n");
+    }
+#endif
 #ifdef STB_DBG_TRACE
         if (stride == rc->stride_y) {
             int _q;
@@ -2872,12 +2892,6 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
 
 static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf)
 {
-#ifdef STB_DBG_TRACE
-    if (x4 == 0 && y4 == 0)
-        fprintf(stderr, "C0TXB pl=%d txtp=%d eob=%d cf0=%d cf1=%d\n",
-                pl, txtp, eob, cf ? (int)cf[0] : -9999,
-                cf ? (int)cf[1] : -9999);
-#endif
     struct stb_avif_scalar_recon *rc;
     stbv_u16 *plane;
     int stride, pw, ph;
@@ -2885,6 +2899,7 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
     int txh4 = stbv_av1_tx_dims[tx].h;
     (void)eob;
     rc = (struct stb_avif_scalar_recon *)ud;
+    rc->cur_pl = pl;
     if (!rc || !rc->plane_u || !rc->plane_v) return;
     plane = pl == 0 ? rc->plane_u : rc->plane_v;
     stride = pl == 0 ? rc->stride_u : rc->stride_v;
@@ -3068,11 +3083,14 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
         } else {
             const int fw4 = (rc->frame_w + 7) >> 3 << 1;
             const int fh4 = (rc->frame_h + 7) >> 3 << 1;
+            /* dav1d CFL gathers over the UNCLIPPED block dims (cbw4 =
+             * b_dim-derived); clipping to the 8-aligned frame here shrank
+             * right-edge blocks, corrupted the DC-subtraction and blew the
+             * AC magnitudes up (saturated green fog). */
             int cw4u = rc->cur_bw4, ch4u = rc->cur_bh4;
             int cbw4, cbh4, W, H, i, j;
             const stbv_u16 mx = (stbv_u16)((1 << rc->bit_depth) - 1);
-            if (cw4u > fw4 - rc->cur_bx4) cw4u = fw4 - rc->cur_bx4;
-            if (ch4u > fh4 - rc->cur_by4) ch4u = fh4 - rc->cur_by4;
+            (void)fw4; (void)fh4;
             cbw4 = (cw4u + ss_h) >> ss_h;
             cbh4 = (ch4u + ss_v) >> ss_v;
             W = cbw4 << 2;
@@ -3088,10 +3106,11 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
                 long acc;
                 if (!rc->cfl_ac_ok || rc->cfl_ac_bx != rc->cur_bx4 ||
                     rc->cfl_ac_by != rc->cur_by4) {
-                    /* w_pad/h_pad: luma-tx-aligned valid extent (dav1d
-                     * furthest_r/furthest_b); padded cols replicate. */
-                    int twu = rc->cur_ltw4 ? rc->cur_ltw4 : 1;
-                    int thu = rc->cur_lth4 ? rc->cur_lth4 : 1;
+                    /* w_pad/h_pad from the UV transform dims (dav1d
+                     * furthest_r/furthest_b use b->uvtx's t_dim);
+                     * padded cols replicate. */
+                    int twu = stbv_av1_tx_dims[tx].w;
+                    int thu = stbv_av1_tx_dims[tx].h;
                     int furthest_r = ((cw4u << ss_h) + twu - 1) & ~(twu - 1);
                     int furthest_b = ((ch4u << ss_v) + thu - 1) & ~(thu - 1);
                     int w_pad = cbw4 - (furthest_r >> ss_h);
@@ -3133,7 +3152,7 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
                     rc->cfl_ac_w = W;
                     rc->cfl_ac_h = H;
 #ifdef STB_DBG_TRACE
-                    if (rc->cur_bx4==0 && rc->cur_by4==0) {
+                    if ((rc->cur_bx4==0 && rc->cur_by4==0) || (rc->cur_bx4==160 && rc->cur_by4==0) || (rc->cur_bx4==176 && rc->cur_by4==0)) {
                         int _i; fprintf(stderr, "CFLAC "); for(_i=0; _i<8 && _i<W*H; _i++) fprintf(stderr, " %d", rc->cfl_ac[_i]); fprintf(stderr, " acc=%ld log2=%d\n", acc, log2sz);
                     }
 #endif
@@ -3159,7 +3178,7 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
                         }
                 }
 #ifdef STB_DBG_TRACE
-                if (rc->cur_bx4==0 && rc->cur_by4==0 && pl==1) {
+                if ((rc->cur_bx4==0 && rc->cur_by4==0 || rc->cur_bx4==160 && rc->cur_by4==0) && pl==1) {
                     int _k; fprintf(stderr, "CFLPRED pl=%d ", pl); for(_k=0; _k<8; _k++) fprintf(stderr, " %d", rc->pred[_k]); fprintf(stderr, "\n");
                 }
 #endif
@@ -3692,6 +3711,26 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                     tc->plane_v[hh * tc->stride_v + x0] =
                         (stbv_u8)(vv > 255u ? 255u : vv);
                 }
+#ifdef STB_DBG_TRACE
+            if (getenv("UVPYDUMP")) {
+                FILE *fu = fopen("our_plane_u.raw", "wb");
+                FILE *fv = fopen("our_plane_v.raw", "wb");
+                if (fu) {
+                    int dyy;
+                    for (dyy = 0; dyy < h; dyy++)
+                        fwrite(tc->plane_u + (size_t)dyy * tc->stride_u, 1,
+                               (size_t)w, fu);
+                    fclose(fu);
+                }
+                if (fv) {
+                    int dyy;
+                    for (dyy = 0; dyy < h; dyy++)
+                        fwrite(tc->plane_v + (size_t)dyy * tc->stride_v, 1,
+                               (size_t)w, fv);
+                    fclose(fv);
+                }
+            }
+#endif
         }
     }
 #ifdef STB_DBG_TRACE
