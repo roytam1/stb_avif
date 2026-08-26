@@ -2038,10 +2038,24 @@ static int stb_avif_recon_txb_edge_flags(struct stb_avif_scalar_recon *rc,
     sb_has_bl = qxl ? 0 :
                 ((qyl + qh < bh4) ? 1 :
                  (blk & STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM ? 1 : 0));
+#ifdef STB_DBG_TRACE
+    if (luma && bx4 == 128 && by4 == 288 && (tx4 == 128 || tx4 == 144) &&
+        (ty4 == 288 || ty4 == 304))
+        fprintf(stderr, "FLDBG tx=%d,%d blk=%d xl=%d yl=%d qxl=%d qyl=%d "
+                        "subw=%d subh=%d str=%d sbl=%d bw4=%d bh4=%d\n",
+                tx4, ty4, blk, xl, yl, qxl, qyl, sub_w4, sub_h4,
+                sb_has_tr, sb_has_bl, bw4, bh4);
+#endif
 
-    if (!((yl > qyl || !sb_has_tr) && (xl + tw4 >= qxl + sub_w4)))
+    /* dav1d recon_b_intra: sub_w4/sub_h4 are quadrant-relative extents
+     * (already include qxl/qyl), so the comparisons must NOT add them
+     * again.  Double-adding made every lower/left-quadrant txb think the
+     * bottom-left / top-right neighbour was available when it was not,
+     * and Z3 then blended unwritten zero pixels into the prediction
+     * (the dark-triangle / green-fog artifacts). */
+    if (!((yl > qyl || !sb_has_tr) && (xl + tw4 >= sub_w4)))
         fl |= STBV_AV1_EDGE_I444_TOP_HAS_RIGHT;
-    if (!(xl > qxl || (!sb_has_bl && yl + th4 >= qyl + sub_h4)))
+    if (!(xl > qxl || (!sb_has_bl && yl + th4 >= sub_h4)))
         fl |= STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM;
     return fl;
 }
@@ -2397,26 +2411,32 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
                (size_t)((w - cw) * sizeof(stbv_u16)));
     }
     {
-        static int _seed_hit = 0;
-        stbv_u16 _p[32];
 #ifdef STB_DBG_TRACE
-        if ((px==0||px==32) && py==0 && w>=8 && !_seed_hit) {
-            int _q; _seed_hit = 1;
-            for(_q=0;_q<32;_q++) _p[_q]=rc->pred[_q];
-            fprintf(stderr, "SEEDPRE px=%d py=%d tx=%d w=%d eob=%d: ", px, py, tx, w, eob);
-            for(_q=0;_q<20;_q++) fprintf(stderr, " %d", _p[_q]);
+        if (stride == rc->stride_y) {
+            int _q;
+            fprintf(stderr, "OURB px=%d py=%d tx=%d w=%d h=%d eob=%d txtp=%d:",
+                    px, py, tx, w, h, eob, txtp);
+            for (_q = 0; _q < w && _q < 64; _q++)
+                fprintf(stderr, " %d", (int)rc->pred[_q]);
             fprintf(stderr, "\n");
         }
 #endif
     stbv_av1_inv_txfm_add16(rc->pred, w, cf, eob, tx, txtp, rc->bit_depth);
 #ifdef STB_DBG_TRACE
-        if ((px==0||px==32) && py==0 && w>=8 && _seed_hit) {
-            int _q; _seed_hit = 0;
-            fprintf(stderr, "SEEDPOST ");
-            for(_q=0;_q<20;_q++) fprintf(stderr, " %d", (int)rc->pred[_q]);
-            fprintf(stderr, "\nSEEDRES ");
-            for(_q=0;_q<20;_q++) fprintf(stderr, " %d", (int)rc->pred[_q]-(int)_p[_q]);
+        if (stride == rc->stride_y) {
+            int _q;
+            fprintf(stderr, "OURBPOST px=%d py=%d tx=%d:",
+                    px, py, tx);
+            for (_q = 0; _q < w && _q < 64; _q++)
+                fprintf(stderr, " %d", (int)rc->pred[_q]);
             fprintf(stderr, "\n");
+            if (h > 1) {
+                fprintf(stderr, "OURBLAST px=%d py=%d tx=%d:", px, py, tx);
+                for (_q = 0; _q < w && _q < 64; _q++)
+                    fprintf(stderr, " %d",
+                            (int)rc->pred[(h - 1) * w + _q]);
+                fprintf(stderr, "\n");
+            }
         }
 #endif
     }
@@ -2595,16 +2615,28 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
     const int filt_idx = (mode == STBV_AV1_INTRA_FILTER) ? rc->y_angle : 0;
     int bd = rc->bit_depth;
     int impl;
+    /* dav1d recon_b_intra hands prepare_intra_edges a snapshot of the row
+     * above at every superblock top boundary and that path reads it
+     * UNCLIPPED across the padded width; all other blocks read dst[-stride]
+     * clipped to the 8-aligned frame width with edge replication.  We are
+     * single-threaded and the plane row above is exactly what dav1d would
+     * have snapshotted, so gate the same way and pass the row directly. */
+    const stbv_u16 *sb_edge =
+        (y4 > 0 && !(y4 & (rc->sb_step4 - 1))) ?
+            rc->plane_y + (size_t)((y4 << 2) - 1) * rc->stride_y : NULL;
 
     if (mode == STBV_AV1_INTRA_FILTER)
         mode = STBV_AV1_IPRED_FILTER;
     if (x4 >= fw4 || y4 >= fh4) return;
     /* Write the FULL tx extent into the padded plane: later blocks'
      * intra edges read these pixels (dav1d recon_b_intra does the same).
-     * Clipping here left zero rows below the frame -> DC/directional
-     * bias for every bottom-edge block (the green fog). */
-    cw = ((rc->frame_w + 7) & ~7) - (x4 << 2); if (cw > w) cw = w;
-    ch = ((rc->frame_h + 7) & ~7) - (y4 << 2); if (ch > h) ch = h;
+     * Clip against BUFFER capacity (stride/allocated rows), never against
+     * the 8-aligned frame size: clipping here left unwritten columns past
+     * right-edge txbs, and the zeroed loads poisoned every subsequent
+     * prediction that gathered its top edge across them (the dark
+     * triangle / green fog). */
+    cw = rc->stride_y - (x4 << 2); if (cw > w) cw = w;
+    ch = (rc->frame_h + 64) - (y4 << 2); if (ch > h) ch = h;
     if (cw <= 0 || ch <= 0) return;
     impl = stbv_av1_prepare_intra_edges_16(x4, x4 > 0, y4, y4 > 0,
                                           fw4, fh4,
@@ -2616,11 +2648,44 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
                                               stbv_av1_tx_dims[tx].h),
                                           rc->plane_y + (y4 << 2) * rc->stride_y +
                                           (x4 << 2),
-                                          rc->stride_y, NULL,
+                                          rc->stride_y, sb_edge,
                                           mode, &angle,
                                           stbv_av1_tx_dims[tx].w,
                                           stbv_av1_tx_dims[tx].h,
                                           rc->intra_edge_filter, edge, bd);
+#ifdef STB_DBG_TRACE
+        {
+            static const int chk2[2][2] = { {128,304},{128,288} };
+            int _ci;
+            for (_ci = 0; _ci < 2; _ci++)
+                if (x4 == chk2[_ci][0] && y4 == chk2[_ci][1]) {
+                    int _k;
+                    fprintf(stderr, "OEDGE2 x=%d y=%d tx=%d mode=%d impl=%d "
+                            "angle=%d fl=%d blk=%d cb=%d,%d,%d,%d:",
+                            x4, y4, tx, rc->y_mode, impl, angle,
+                            stb_avif_recon_txb_edge_flags(
+                                rc, 1, rc->cur_bx4, rc->cur_by4,
+                                rc->cur_bw4, rc->cur_bh4,
+                                x4, y4,
+                                stbv_av1_tx_dims[tx].w,
+                                stbv_av1_tx_dims[tx].h),
+                            stb_avif_recon_block_edge_flags_run(
+                                rc, 1, rc->cur_bx4, rc->cur_by4,
+                                rc->cur_bw4, rc->cur_bh4,
+                                stbv_av1_tx_dims[tx].w,
+                                stbv_av1_tx_dims[tx].h),
+                            rc->cur_bx4, rc->cur_by4,
+                            rc->cur_bw4, rc->cur_bh4);
+                    fprintf(stderr, " bl:");
+                    for (_k = -128; _k < -63; _k++)
+                        fprintf(stderr, " %d", (int)edge[_k]);
+                    fprintf(stderr, " left:");
+                    for (_k = -64; _k <= 0; _k++)
+                        fprintf(stderr, " %d", (int)edge[_k]);
+                    fprintf(stderr, "\n");
+                }
+        }
+#endif
 #ifdef STB_DBG_TRACE
         if ((x4<<2)<=511 && (x4<<2)+w>511 && (y4<<2)<=17 && (y4<<2)+h>17) {
             int _k;
@@ -2634,7 +2699,7 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
 #endif
 #ifdef STB_DBG_TRACE
     stbv_av1_dbg_z2_go = 0;
-    stbv_av1_dbg_z3 = 1;
+    stbv_av1_dbg_z3 = 0;
 #endif
 #ifdef STB_DBG_TRACE
     if ((x4 == 16 || x4 == 0 || x4 == 8) && y4 == 376) {
@@ -2698,7 +2763,10 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
 #endif
 #ifdef STB_DBG_TRACE
     fprintf(stderr, "YTX %d %d %d\n", x4, y4, tx);
-    if ((x4 == 54 && y4 == 8) || (x4 == 24 && y4 == 0) || (x4 == 25 && y4 == 0) || (x4 == 148 && y4 == 0) || (x4 == 146 && y4 == 0)) {
+    if ((x4 == 54 && y4 == 8) || (x4 == 24 && y4 == 0) || (x4 == 25 && y4 == 0) || (x4 == 148 && y4 == 0) || (x4 == 146 && y4 == 0) ||
+        (x4 == 16 && y4 == 0) || (x4 == 20 && y4 == 0) || (x4 == 20 && y4 == 8) ||
+        (x4 == 144 && y4 == 288) || (x4 == 160 && y4 == 288) || (x4 == 160 && y4 == 304) ||
+        (x4 == 144 && y4 == 304)) {
         static int fire_cnt = 0;
         int my_fire = ++fire_cnt;
         int q7;
@@ -2852,7 +2920,7 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
 #endif
     if (!rc->block_skip && !rc->pal_uv && eob >= 0)
         stb_avif_recon_add_res(rc, plane, stride,
-                               x4 << 2, y4 << 2, pw, ph,
+                               x4 << 2, y4 << 2, stride, ph + 32,
                                tx, txtp, eob, cf);
 #ifdef STB_DBG_TRACE
     {
@@ -2942,9 +3010,10 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
     if (cx4 >= cfw4 || cy4 >= cfh4) return;
     w = stbv_av1_tx_dims[tx].w << 2;
     h = stbv_av1_tx_dims[tx].h << 2;
-    /* Full padded extent (see predict_txb_luma note). */
-    cw = (((rc->frame_w + 7) & ~7) >> rc->ss_hor) - (cx4 << 2);
-    ch = (((rc->frame_h + 7) & ~7) >> rc->ss_ver) - (cy4 << 2);
+    /* Full padded extent (see predict_txb_luma note): clip against buffer
+     * capacity, not the 8-aligned visible size. */
+    cw = stride - (cx4 << 2);
+    ch = ph + 32 - (cy4 << 2);
     if (cw > w) cw = w;
     if (ch > h) ch = h;
     if (cw <= 0 || ch <= 0) return;
@@ -3527,6 +3596,18 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         int w, h, hh, y0, x0;
         w = tc->frame_width;
         h = tc->frame_height;
+#ifdef STB_DBG_TRACE
+        if (getenv("PYDUMP")) {
+            FILE *pf = fopen("our_plane.raw", "wb");
+            if (pf) {
+                int dyy;
+                for (dyy = 0; dyy < h; dyy++)
+                    fwrite(py16 + (size_t)dyy * tc->stride_y, 2,
+                           (size_t)w, pf);
+                fclose(pf);
+            }
+        }
+#endif
         for (y0 = 0; y0 < h; y0++)
             for (x0 = 0; x0 < w; x0++) {
                 unsigned v = (unsigned)py16[y0 * tc->stride_y + x0];

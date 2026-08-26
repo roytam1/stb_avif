@@ -129,18 +129,48 @@ static int stbv_av1_inv_txfm_core(stbv_i32 *coeff, const int eob,
     if (!first_fn) first_fn = stbv_av1_tx1d_fns[t_dim->lw][0];
     if (!second_fn) second_fn = stbv_av1_tx1d_fns[t_dim->lh][0];
 
-    c = tmp;
-    for (y = 0; y < sh; y++, c += w) {
-        if (is_rect2) {
-            for (x = 0; x < sw; x++)
-                c[x] = (coeff[y + x * sh] * 181 + 128) >> 8;
+    /* dav1d last_nonzero_col_from_eob: coefficient rows beyond this txb's
+     * last decoded scan position hold stale scratch data, so only rows up
+     * to the maximum touched column may be read; the rest must be zeroed.
+     * Skipping this turned every deep 64x64 txb into reconstruction
+     * garbage once the stack scratch stopped being zero-filled. */
+    {
+        int lnc = 0;
+        if (txtps[1] == 3U && txtps[0] != 3U) {
+            lnc = sh - 1 < eob ? sh - 1 : eob;
+        } else if (txtps[0] == 3U && txtps[1] != 3U) {
+            lnc = eob >> (t_dim->lw + 2);
+            if (lnc > sh - 1) lnc = sh - 1;
         } else {
-            for (x = 0; x < sw; x++)
-                c[x] = coeff[y + x * sh];
+            const stbv_u16 *sc;
+            switch (tx) {
+            case STBV_AV1_TX_4X4:   sc = stbv_av1_scan_4x4;   break;
+            case STBV_AV1_TX_8X8:   sc = stbv_av1_scan_8x8;   break;
+            case STBV_AV1_TX_16X16: sc = stbv_av1_scan_16x16; break;
+            case STBV_AV1_TX_32X32: sc = stbv_av1_scan_32x32; break;
+            case STBV_AV1_TX_64X64: sc = stbv_av1_scan_32x32; break;
+            default:                sc = stbv_av1_scan_rect[tx]; break;
+            }
+            for (i = 0; i <= eob; i++) {
+                const unsigned rcx = (unsigned)sc[i] & (unsigned)(sh - 1);
+                if ((int)rcx > lnc) lnc = (int)rcx;
+            }
         }
-        for (x = sw; x < w; x++)
-            c[x] = 0;
-        first_fn(c, 1, row_clip_min, row_clip_max);
+        c = tmp;
+        for (y = 0; y <= lnc; y++, c += w) {
+            if (is_rect2) {
+                for (x = 0; x < sw; x++)
+                    c[x] = (coeff[y + x * sh] * 181 + 128) >> 8;
+            } else {
+                for (x = 0; x < sw; x++)
+                    c[x] = coeff[y + x * sh];
+            }
+            for (x = sw; x < w; x++)
+                c[x] = 0;
+            first_fn(c, 1, row_clip_min, row_clip_max);
+        }
+        if (lnc + 1 < sh)
+            memset(c, 0, (size_t)(sh - lnc - 1) * w * sizeof(stbv_i32));
     }
 #ifdef STB_DBG_TRACE
     if (w==32 && bd==10 && coeff[0]==5439 && eob==178) {
