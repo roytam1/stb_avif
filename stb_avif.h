@@ -2018,10 +2018,11 @@ static int stb_avif_recon_txb_edge_flags(struct stb_avif_scalar_recon *rc,
     int xl, yl, qxl, qyl, sub_w4, sub_h4;
     int sb_has_tr, sb_has_bl, fl = 0;
     /* txb callbacks carry block coordinates in luma 4x4 units even for
-     * chroma. Convert the block exactly once before querying the plane map. */
+     * chroma. Convert to chroma: floor division for origin (matching dav1d's
+     * init_x >> ss_hor), ceiling division for extent. */
     if (!luma) {
-        bx4 = (bx4 + ss_hor) >> ss_hor;
-        by4 = (by4 + ss_ver) >> ss_ver;
+        bx4 = bx4 >> ss_hor;
+        by4 = by4 >> ss_ver;
         bw4 = (bw4 + ss_hor) >> ss_hor;
         bh4 = (bh4 + ss_ver) >> ss_ver;
     }
@@ -2041,12 +2042,13 @@ static int stb_avif_recon_txb_edge_flags(struct stb_avif_scalar_recon *rc,
                 ((qyl + qh < bh4) ? 1 :
                  (blk & STBV_AV1_EDGE_I444_LEFT_HAS_BOTTOM ? 1 : 0));
 #ifdef STB_DBG_TRACE
-    if (luma && bx4 == 128 && by4 == 288 && (tx4 == 128 || tx4 == 144) &&
-        (ty4 == 288 || ty4 == 304))
-        fprintf(stderr, "FLDBG tx=%d,%d blk=%d xl=%d yl=%d qxl=%d qyl=%d "
-                        "subw=%d subh=%d str=%d sbl=%d bw4=%d bh4=%d\n",
-                tx4, ty4, blk, xl, yl, qxl, qyl, sub_w4, sub_h4,
-                sb_has_tr, sb_has_bl, bw4, bh4);
+    if (!luma && tx4 == 15 && ty4 == 6)
+        fprintf(stderr, "FLDBG-C blk=%d xl=%d yl=%d qxl=%d qyl=%d "
+                        "subw=%d subh=%d sbltr=%d sblbl=%d bw4=%d bh4=%d "
+                        "bx4=%d by4=%d tx4=%d ty4=%d\n",
+                blk, xl, yl, qxl, qyl, sub_w4, sub_h4,
+                sb_has_tr, sb_has_bl, bw4, bh4,
+                bx4, by4, tx4, ty4);
 #endif
 
     /* dav1d recon_b_intra: sub_w4/sub_h4 are quadrant-relative extents
@@ -3033,7 +3035,14 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
     ch = ph + 32 - (cy4 << 2);
     if (cw > w) cw = w;
     if (ch > h) ch = h;
-    if (cw <= 0 || ch <= 0) return;
+    if (cw <= 0 || ch <= 0) {
+#ifdef STB_DBG_TRACE
+        if (cx4 == 15 && cy4 == 6)
+            fprintf(stderr, "CEDGEB-SKIP pl=%d cx=%d cy=%d cw=%d ch=%d w=%d h=%d\n",
+                    pl, cx4, cy4, cw, ch, w, h);
+#endif
+        return;
+    }
     cimpl = stbv_av1_prepare_intra_edges_16(cx4, cx4 > 0, cy4, cy4 > 0,
                                            cfw4, cfh4,
                                            stb_avif_recon_txb_edge_flags(
@@ -3065,18 +3074,24 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
     }
 #endif
 #ifdef STB_DBG_TRACE
-    fprintf(stderr, "CEDGEB pl=%d cx=%d cy=%d impl=%d ang=%d"
-            " au=%d lu=%d"
-            " t:%d %d %d %d %d %d %d %d l:%d %d %d %d %d %d %d %d\n",
-            pl, cx4, cy4, cimpl,
-            cangle | stb_avif_recon_edge_flags(rc, 0, rc->cur_bx4 >> rc->ss_hor,
-                    rc->cur_by4 >> rc->ss_ver),
-            rc->above_uvmode ? (int)rc->above_uvmode[cx4] : -1,
-            rc->left_uvmode ? (int)rc->left_uvmode[cy4] : -1,
-            (int)edge[1], (int)edge[2], (int)edge[3], (int)edge[4],
-            (int)edge[5], (int)edge[6], (int)edge[7], (int)edge[8],
-            (int)edge[-1], (int)edge[-2], (int)edge[-3], (int)edge[-4],
-            (int)edge[-5], (int)edge[-6], (int)edge[-7], (int)edge[-8]);
+    if (cx4 == 15 && cy4 == 6) {
+        int q;
+        fprintf(stderr, "CEDGEB pl=%d cx=%d cy=%d cm=%d impl=%d ang=%d fl=%d"
+                " cw=%d ch=%d w=%d h=%d"
+                " t:%d %d %d %d %d %d %d %d l:%d %d %d %d %d %d %d %d\n",
+                pl, cx4, cy4, cm, cimpl, cangle,
+                stb_avif_recon_txb_edge_flags(
+                    rc, 0, rc->cur_bx4, rc->cur_by4,
+                    rc->cur_bw4, rc->cur_bh4,
+                    x4, y4,
+                    stbv_av1_tx_dims[tx].w,
+                    stbv_av1_tx_dims[tx].h),
+                cw, ch, w, h,
+                (int)edge[1], (int)edge[2], (int)edge[3], (int)edge[4],
+                (int)edge[5], (int)edge[6], (int)edge[7], (int)edge[8],
+                (int)edge[-1], (int)edge[-2], (int)edge[-3], (int)edge[-4],
+                (int)edge[-5], (int)edge[-6], (int)edge[-7], (int)edge[-8]);
+    }
 #endif
     stbv_av1_ipred_run_16(cimpl, rc->pred, w, edge, w, h,
                           cangle | stb_avif_recon_edge_flags(rc, 0, rc->cur_bx4 >> rc->ss_hor,
