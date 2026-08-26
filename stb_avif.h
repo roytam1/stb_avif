@@ -1930,6 +1930,7 @@ struct stb_avif_scalar_recon {
     int cur_bh4;
     int y_mode;
     int y_angle;
+    int uv_angle;
     int uv_mode;
     int block_skip;
     int cfl_alpha_u;
@@ -2266,7 +2267,7 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
     }
 }
 
-static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode, int cfl_alpha_u, int cfl_alpha_v)
+static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode, int uv_angle, int cfl_alpha_u, int cfl_alpha_v)
 {
 #ifdef STB_DBG_TRACE
     if (bx4 == 176 && by4 == 288)
@@ -2304,6 +2305,7 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
     rc->y_mode = y_mode;
     rc->y_angle = y_angle;
     rc->uv_mode = uv_mode;
+    rc->uv_angle = uv_angle;
     rc->cfl_alpha_u = cfl_alpha_u;
     rc->cfl_alpha_v = cfl_alpha_v;
     rc->block_skip = skip;
@@ -3016,7 +3018,7 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
     const int lfh4 = (rc->frame_h + 7) >> 3 << 1;
     const int cfw4 = (lfw4 + rc->ss_hor) >> rc->ss_hor;
     const int cfh4 = (lfh4 + rc->ss_ver) >> rc->ss_ver;
-    int cx4 = x4, cy4 = y4, cm, cangle = 0, cimpl;
+    int cx4 = x4, cy4 = y4, cm, cangle = rc->uv_angle, cimpl;
     int w, h, cw, ch, i, j;
     if (!rc->plane_u || !rc->plane_v || !rc->has_chroma) return;
     plane = pl == 0 ? rc->plane_u : rc->plane_v;
@@ -3062,8 +3064,23 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
         fprintf(stderr, "\n");
     }
 #endif
+#ifdef STB_DBG_TRACE
+    fprintf(stderr, "CEDGEB pl=%d cx=%d cy=%d impl=%d ang=%d"
+            " au=%d lu=%d"
+            " t:%d %d %d %d %d %d %d %d l:%d %d %d %d %d %d %d %d\n",
+            pl, cx4, cy4, cimpl,
+            cangle | stb_avif_recon_edge_flags(rc, 0, rc->cur_bx4 >> rc->ss_hor,
+                    rc->cur_by4 >> rc->ss_ver),
+            rc->above_uvmode ? (int)rc->above_uvmode[cx4] : -1,
+            rc->left_uvmode ? (int)rc->left_uvmode[cy4] : -1,
+            (int)edge[1], (int)edge[2], (int)edge[3], (int)edge[4],
+            (int)edge[5], (int)edge[6], (int)edge[7], (int)edge[8],
+            (int)edge[-1], (int)edge[-2], (int)edge[-3], (int)edge[-4],
+            (int)edge[-5], (int)edge[-6], (int)edge[-7], (int)edge[-8]);
+#endif
     stbv_av1_ipred_run_16(cimpl, rc->pred, w, edge, w, h,
-                          cangle | stb_avif_recon_edge_flags(rc, 0, rc->cur_bx4, rc->cur_by4),
+                          cangle | stb_avif_recon_edge_flags(rc, 0, rc->cur_bx4 >> rc->ss_hor,
+                    rc->cur_by4 >> rc->ss_ver),
                           0, (cfw4 - cx4) << 2, (cfh4 - cy4) << 2, rc->bit_depth);
     /* Chroma-from-luma, ported from dav1d recon_b_intra + cfl_ac_c +
      * cfl_pred: ONE block-wide AC array (built from the fully

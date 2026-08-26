@@ -28,7 +28,7 @@
 typedef struct stbv_av1_leaf_recon {
     void *ud;
     stbv_i32 *cf;
-    void (*block_info)(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode, int cfl_alpha_u, int cfl_alpha_v);
+    void (*block_info)(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode, int uv_angle, int cfl_alpha_u, int cfl_alpha_v);
     void (*luma_txb)(void *ud, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf);
     void (*chroma_txb)(void *ud, int pl, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf);
     void (*luma_pal)(void *ud, const stbv_u8 *idx, int sz, int bw4, int bh4, const stbv_u16 *pal);
@@ -325,6 +325,12 @@ static void stbv_av1_leaf_state_reset_row(stbv_av1_leaf_state *s)
     if (s->intra.left_mode)
         memset(s->intra.left_mode, STBV_AV1_INTRA_DC,
                (size_t)s->intra.left_count);
+    /* dav1d reset_context() also clears uvmode to DC_PRED each superblock
+     * row; leaving stale SMOOTH modes here made sm_uv_flag fire on rows
+     * where dav1d saw a clean left edge (diffuse chroma fog). */
+    if (s->intra.left_uvmode)
+        memset(s->intra.left_uvmode, STBV_AV1_INTRA_DC,
+               (size_t)s->intra.left_uv_count);
     if (s->left_pal_sz) memset(s->left_pal_sz, 0, s->left_pal_sz_n);
     if (s->left_pal_uv) memset(s->left_pal_uv, 0, s->left_pal_uv_n);
     if (s->left_pal[0])
@@ -406,8 +412,9 @@ skip = stb_av1_msac_bool_adapt(
 #ifdef STB_DBG_TRACE
     if (!_quiet && stb_dbg_blknum <= 200000)
         fprintf(stderr, "TCFSKIP pl=%d tx=%d x=%d y=%d sctx=%d "
-                        "pre=%u post=%u sym=%u\n",
-                chroma, tx, x4, y4, sctx, stb_dbg_pre, msac->rng, skip);
+                        "pre=%u post=%u dif=%016llx cnt=%d sym=%u\n",
+                chroma, tx, x4, y4, sctx, stb_dbg_pre, msac->rng,
+                (unsigned long long)msac->dif, msac->cnt, skip);
 #endif
     if (!skip) {
         max = stbv_av1_tx_dims[tx].max;
@@ -574,6 +581,28 @@ skip = stb_av1_msac_bool_adapt(
                                     sctx, dc_sign_ctx, cf,
                                     &res_ctx);
 #ifdef STB_DBG_TRACE
+            if (!is_chroma && stb_dbg_blknum <= 200000) {
+                const stbv_u16 *sc;
+                int _lim, _k;
+                fprintf(stderr, "CFZ x=%d y=%d tx=%d eob=%d NZL", x4, y4, tx, eob);
+                switch (tx) {
+                case STBV_AV1_TX_4X4:   sc = stbv_av1_scan_4x4;   break;
+                case STBV_AV1_TX_8X8:   sc = stbv_av1_scan_8x8;   break;
+                case STBV_AV1_TX_16X16: sc = stbv_av1_scan_16x16; break;
+                case STBV_AV1_TX_32X32: sc = stbv_av1_scan_32x32; break;
+                case STBV_AV1_TX_64X64: sc = stbv_av1_scan_32x32; break;
+                default:                sc = stbv_av1_scan_rect[tx]; break;
+                }
+                _lim = stbv_av1_tx_dims[tx].w * stbv_av1_tx_dims[tx].h * 16;
+                if (_lim > 1024) _lim = 1024; /* largest scan table (32x32) */
+                if (eob >= 0)
+                    for (_k = 0; _k <= eob && _k < _lim; _k++)
+                        if (cf[sc[_k]])
+                            fprintf(stderr, " %d:%d", (int)sc[_k], (int)cf[sc[_k]]);
+                fprintf(stderr, "\n");
+            }
+#endif
+#ifdef STB_DBG_TRACE
             if (getenv("ROWDUMP") && ((y4==0 && !is_chroma) || (x4==168&&y4==296))) {
                 int _q;
                 fprintf(stderr, "RNGPOST x=%d y=%d rng=%u eob=%d cf:", x4, y4, msac->rng, eob);
@@ -582,8 +611,9 @@ skip = stb_av1_msac_bool_adapt(
             }
         if (!_quiet && stb_dbg_blknum <= 200000)
             fprintf(stderr, "TCFCF pl=%d tx=%d x=%d y=%d pre=%u "
-                            "post=%u eob=%d\n",
-                    chroma, tx, x4, y4, dbg_pre, msac->rng, eob);
+                            "post=%u dif=%016llx cnt=%d eob=%d\n",
+                    chroma, tx, x4, y4, dbg_pre, msac->rng,
+                    (unsigned long long)msac->dif, msac->cnt, eob);
 #endif
         }
         if (eob < 0)
@@ -1062,6 +1092,7 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
                             state->pal_sz_y, state->pal_sz_uv,
                             (int)block_skip,
                             intra.y_mode, intra.y_angle, intra.uv_mode,
+                            intra.uv_angle,
                             intra.cfl_alpha_u, intra.cfl_alpha_v);
 
     /* Palette pixel application must run AFTER block_info (the callbacks
