@@ -239,6 +239,7 @@ typedef struct stbv_av1_leaf_state {
     stbv_u16 cache[16];
     stbv_u16 used_cache[8];
     stbv_u8 pal_tmp[64 * 64];
+    stbv_u8 pal_tmp_y[64 * 64];
     stbv_u8 pal_order[64][8];
     stbv_u8 pal_ctxs[64];
     int pal_sz_y;
@@ -1238,7 +1239,7 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
      * is called after the filter-intra bool in decode.c). */
     if (state->pal_sz_y) {
         if (stbv_av1_palette_indices(msac, cdf, 0, state->pal_sz_y,
-                                     bw4, bh4, state->pal_tmp,
+                                     bw4, bh4, state->pal_tmp_y,
                                      state->pal_order, state->pal_ctxs))
             return -7;
     }
@@ -1267,7 +1268,7 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
      * coefficient loop; txb prediction is suppressed for palette blocks
      * so nothing overwrites these pixels. */
     if (state->pal_sz_y && c.recon && c.recon->luma_pal)
-        c.recon->luma_pal(c.recon->ud, state->pal_tmp, state->pal_sz_y,
+        c.recon->luma_pal(c.recon->ud, state->pal_tmp_y, state->pal_sz_y,
                           bw4, bh4, state->pal_y);
     if (state->pal_sz_uv && c.recon && c.recon->chroma_pal) {
         c.recon->chroma_pal(c.recon->ud, 0, state->pal_tmp, state->pal_sz_uv, cbw4, cbh4, state->pal_u);

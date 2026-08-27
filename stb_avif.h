@@ -2505,6 +2505,27 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
 static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc, int x4, int y4, int tx);
 static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc, int pl, int x4, int y4, int tx);
 
+
+static void stb_avif_extend_right_edge_u16(stbv_u16 *plane, int stride,
+                                           int frame_w, int frame_h,
+                                           int x4, int y4, int tx)
+{
+    int x0 = x4 << 2;
+    int y0 = y4 << 2;
+    int tw = stbv_av1_tx_dims[tx].w << 2;
+    int th = stbv_av1_tx_dims[tx].h << 2;
+    int aw = (frame_w + 7) & ~7;
+    int yy, xx;
+    if (!plane || x0 + tw < frame_w || x0 >= aw || y0 >= frame_h)
+        return;
+    if (y0 + th > frame_h) th = frame_h - y0;
+    for (yy = 0; yy < th; yy++) {
+        stbv_u16 v = plane[(size_t)(y0 + yy) * stride + frame_w - 1];
+        for (xx = frame_w; xx < aw; xx++)
+            plane[(size_t)(y0 + yy) * stride + xx] = v;
+    }
+}
+
 static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf)
 {
 #ifdef STB_DBG_TRACE
@@ -2564,6 +2585,8 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
                 }
         }
     }
+    stb_avif_extend_right_edge_u16(rc->plane_y, rc->stride_y,
+                                   rc->frame_w, rc->frame_h, x4, y4, tx);
 #ifdef STB_DBG_TRACE
     if ((x4 == 146 || x4 == 147 || x4 == 148) && y4 <= 3) {
         int r8;
@@ -2984,6 +3007,10 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
         stb_avif_recon_add_res(rc, plane, stride,
                                x4 << 2, y4 << 2, stride, ph + 32,
                                tx, txtp, eob, cf);
+    if (pl == 0)
+        stb_avif_extend_right_edge_u16(rc->plane_u, rc->stride_u, pw, ph, x4, y4, tx);
+    else
+        stb_avif_extend_right_edge_u16(rc->plane_v, rc->stride_v, pw, ph, x4, y4, tx);
 #ifdef STB_DBG_TRACE
     {
         int tw = stbv_av1_tx_dims[tx].w << 2;
