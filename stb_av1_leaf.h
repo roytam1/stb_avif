@@ -464,6 +464,17 @@ skip = stb_av1_msac_bool_adapt(
                                        tx, txtp, 0, c->recon->cf);
             }
         }
+#ifdef STB_DBG_TRACE
+        if (stb_dbg_blknum <= 200000) {
+            static FILE *_cfp = NULL;
+            if (!_cfp) _cfp = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_coef_dump.txt", "a");
+            if (_cfp) {
+                fprintf(_cfp, "CF pl=%d bx4=%d by4=%d tx=%d eob=-1 post=%u cf=\n",
+                        chroma, x4, y4, tx, (unsigned)msac->rng);
+                fflush(_cfp);
+            }
+        }
+#endif
         return 0;
     }
 
@@ -581,6 +592,24 @@ skip = stb_av1_msac_bool_adapt(
                                     sctx, dc_sign_ctx, cf,
                                     &res_ctx);
 #ifdef STB_DBG_TRACE
+            if (stb_dbg_blknum <= 200000) {
+                static FILE *_cfp = NULL;
+                if (!_cfp) _cfp = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_coef_dump.txt", "a");
+                if (_cfp) {
+                    int _n = stbv_av1_tx_dims[tx].w;
+                    int _m = stbv_av1_tx_dims[tx].h;
+                    int _i, _cnt = _n * _m;
+                    if (_cnt > 16) _cnt = 16;
+                    fprintf(_cfp, "CF pl=%d bx4=%d by4=%d tx=%d eob=%d post=%u cf=",
+                            chroma, x4, y4, tx, eob, (unsigned)msac->rng);
+                    for (_i = 0; _i < _cnt; _i++)
+                        fprintf(_cfp, " %d", (int)cf[_i]);
+                    fprintf(_cfp, "\n");
+                    fflush(_cfp);
+                }
+            }
+#endif
+#ifdef STB_DBG_TRACE
             if (!is_chroma && stb_dbg_blknum <= 200000) {
                 const stbv_u16 *sc;
                 int _lim, _k;
@@ -620,6 +649,30 @@ skip = stb_av1_msac_bool_adapt(
             return -2;
         if (out)
             out->eob = eob;
+#ifdef STB_DBG_TRACE
+        {
+            static FILE *cfbf = NULL;
+            if (!cfbf) cfbf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/trace_blocks.txt", "a");
+            if (cfbf && !is_chroma && y4 < 32) {
+                const stbv_u16 *sc2;
+                int _n2, _i2;
+                switch (tx) {
+                case STBV_AV1_TX_4X4:   sc2 = stbv_av1_scan_4x4;   _n2 = 16;  break;
+                case STBV_AV1_TX_8X8:   sc2 = stbv_av1_scan_8x8;   _n2 = 64;  break;
+                case STBV_AV1_TX_16X16: sc2 = stbv_av1_scan_16x16; _n2 = 256; break;
+                case STBV_AV1_TX_32X32: sc2 = stbv_av1_scan_32x32; _n2 = 1024; break;
+                case STBV_AV1_TX_64X64: sc2 = stbv_av1_scan_32x32; _n2 = 1024; break;
+                default:                sc2 = stbv_av1_scan_rect[tx]; _n2 = stbv_av1_tx_dims[tx].w * stbv_av1_tx_dims[tx].h * 16; break;
+                }
+                fprintf(cfbf, "TXB x=%d y=%d tx=%d txtp=%d eob=%d cf:", x4, y4, tx, txtp, eob);
+                for (_i2 = 0; _i2 < _n2 && _i2 <= eob && _i2 < 256; _i2++)
+                    if (cf[sc2[_i2]])
+                        fprintf(cfbf, " [%d]=%d", _i2, (int)cf[sc2[_i2]]);
+                fprintf(cfbf, "\n");
+                fflush(cfbf);
+            }
+        }
+#endif
         if (c->recon && c->recon->cf) {
             /* coefficient count is (4w)*(4h): dims are in 4x4 units */
             int n = stbv_av1_tx_dims[tx].w * stbv_av1_tx_dims[tx].h * 16;
@@ -761,6 +814,15 @@ static int stbv_av1_palette_read_plane(struct stb_av1_msac *msac,
     if (pal_sz_out) *pal_sz_out = pal_sz;
 #ifdef STB_DBG_TRACE
     if (stb_dbg_blknum <= 200000) {
+        static FILE *_pallog = NULL;
+        if (!_pallog) _pallog = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/pal_log.txt", "w");
+        if (_pallog) {
+            fprintf(_pallog, "PALCOL pl=%d x=%d y=%d sz=%d:", pl, bx4, by4, pal_sz);
+            for (i = 0; i < pal_sz; i++)
+                fprintf(_pallog, " %d", (int)pal_out[i]);
+            fprintf(_pallog, "\n");
+            fflush(_pallog);
+        }
         fprintf(stderr, "PALCOL pl=%d x=%d y=%d sz=%d:", pl, bx4, by4, pal_sz);
         for (i = 0; i < pal_sz; i++)
             fprintf(stderr, " %d", (int)pal_out[i]);
@@ -925,7 +987,21 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     int y_mode_nofilt, i;
     unsigned block_skip;
     unsigned int n;
-
+#ifdef STB_DBG_TRACE
+    {
+        static FILE *rngf = NULL;
+        if (!rngf) rngf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/rng_dump_ours.txt", "w");
+        if (rngf && by4 < 128) {
+            int lmode_e = (state->intra.left_mode && (unsigned)by4 < state->intra.left_count)
+                ? state->intra.left_mode[by4] : -1;
+            int amode_e = (state->intra.above_mode && (unsigned)bx4 < state->intra.above_count)
+                ? state->intra.above_mode[bx4] : -1;
+            fprintf(rngf, "ENTRY bx4=%d by4=%d bs=%d rng=%u lmode=%d amode=%d\n",
+                    bx4, by4, bs, msac->rng, lmode_e, amode_e);
+            fflush(rngf);
+        }
+    }
+#endif
 #ifdef STB_DBG_TRACE
     stb_dbg_blkx = bx4;
     stb_dbg_blky = by4;
@@ -1051,6 +1127,22 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
     if (frame && frame->allow_intrabc)
         return -6;
 
+#ifdef STB_DBG_TRACE
+    {
+        static FILE *mf = NULL;
+        if (!mf) mf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/ours_precdef.txt", "w");
+        if (mf && by4 < 128) {
+            int _lm = (state->intra.left_mode && (unsigned)by4 < state->intra.left_count)
+                ? state->intra.left_mode[by4] : -1;
+            int _am = (state->intra.above_mode && (unsigned)bx4 < state->intra.above_count)
+                ? state->intra.above_mode[bx4] : -1;
+            fprintf(mf, "PRECDEF bx4=%d by4=%d bs=%d rng=%u skip=%u lmode=%d amode=%d\n",
+                    bx4, by4, bs, (unsigned)msac->rng, block_skip, _lm, _am);
+            fflush(mf);
+        }
+    }
+#endif
+
     cfl_allowed = lossless ? (cbw4 == 1 && cbh4 == 1) :
         !!(STBV_AV1_CFL_ALLOWED_MASK & (1U << bs));
     if (stb_av1_intra_state_decode_leaf(msac, cdf, &state->intra,
@@ -1126,6 +1218,22 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
         }
     }
 
+#ifdef STB_DBG_TRACE
+    {
+        static FILE *imf = NULL;
+        if (!imf) imf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_intermediate.txt", "a");
+        if (imf && stb_dbg_blknum < 100000) {
+            int _lm = (state->intra.left_mode && (unsigned)by4 < state->intra.left_count)
+                ? state->intra.left_mode[by4] : -1;
+            int _am = (state->intra.above_mode && (unsigned)bx4 < state->intra.above_count)
+                ? state->intra.above_mode[bx4] : -1;
+            fprintf(imf, "FILTPOST blknum=%d bx4=%d by4=%d rng=%u ymode=%d lmode=%d amode=%d\n",
+                    stb_dbg_blknum, bx4, by4, msac->rng, intra.y_mode, _lm, _am);
+            fflush(imf);
+        }
+    }
+#endif
+
     /* Palette index maps come after filter-intra (dav1d read_pal_indices
      * is called after the filter-intra bool in decode.c). */
     if (state->pal_sz_y) {
@@ -1195,6 +1303,21 @@ if (frame && frame->txfm_mode == 1 &&
                                                        state->tx.left_n));
 #ifdef STB_DBG_TRACE
     stb_dbg_tx_dec = tx0;
+#endif
+#ifdef STB_DBG_TRACE
+    {
+        static FILE *imf = NULL;
+        if (!imf) imf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_intermediate.txt", "a");
+        if (imf && stb_dbg_blknum < 100000) {
+            int _lm = (state->intra.left_mode && (unsigned)by4 < state->intra.left_count)
+                ? state->intra.left_mode[by4] : -1;
+            int _am = (state->intra.above_mode && (unsigned)bx4 < state->intra.above_count)
+                ? state->intra.above_mode[bx4] : -1;
+            fprintf(imf, "TXPOST blknum=%d bx4=%d by4=%d rng=%u tx=%d lmode=%d amode=%d\n",
+                    stb_dbg_blknum, bx4, by4, msac->rng, tx0, _lm, _am);
+            fflush(imf);
+        }
+    }
 #endif
     /* NOTE: no size-based clamp here — dav1d derives b->tx purely from
      * max_txfm_size_for_bs[bs] and the sub-chain; the tx-size symbol
@@ -1458,6 +1581,27 @@ if (frame && frame->txfm_mode == 1 &&
     if (stb_dbg_blknum <= 200000 && bx4 >= 44 && bx4 <= 84 && by4 < 16)
         fprintf(stderr, "BEND x=%d y=%d bs=%d rng=%u\n",
                 bx4, by4, bs, (unsigned)msac->rng);
+#endif
+#ifdef STB_DBG_TRACE
+    {
+        static FILE *blkf = NULL;
+        if (!blkf) blkf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/trace_blocks.txt", "w");
+        if (blkf && by4 < 128) {
+            int lmode = (state->intra.left_mode && (unsigned)by4 < state->intra.left_count)
+                ? state->intra.left_mode[by4] : -1;
+            int amode = (state->intra.above_mode && (unsigned)bx4 < state->intra.above_count)
+                ? state->intra.above_mode[bx4] : -1;
+            fprintf(blkf, "BLK bx4=%d by4=%d bs=%d bw4=%d bh4=%d "
+                    "skip=%d ymode=%d yang=%d uv=%d uvang=%d tx=%d "
+                    "palY=%d palUV=%d rng=%u lmode=%d amode=%d\n",
+                    bx4, by4, bs, bw4, bh4,
+                    (int)block_skip, intra.y_mode, intra.y_angle,
+                    intra.uv_mode, intra.uv_angle, tx0,
+                    state->pal_sz_y, state->pal_sz_uv,
+                    (unsigned)msac->rng, lmode, amode);
+            fflush(blkf);
+        }
+    }
 #endif
     return 0;
 }

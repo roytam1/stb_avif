@@ -80,9 +80,32 @@ static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
     lc = stbv_av1_intra_mode_ctx[left_mode];
     ycdf = cdf->kfym + (ac * 5 + lc) * 16;
 #ifdef STB_DBG_TRACE
+    {
+        static FILE *ymf = NULL;
+        if (!ymf) ymf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_cdf_dump.txt", "w");
+        if (ymf && stb_dbg_blknum < 100000) {
+            fprintf(ymf, "YMODE_PRE blknum=%d bx4=%d by4=%d ac=%d lc=%d rng=%u cdf0=%u cdf1=%u cdf2=%u cdf11=%u cdf12=%u\n",
+                    stb_dbg_blknum, stb_dbg_blkx, stb_dbg_blky, ac, lc, msac->rng,
+                    ycdf[0], ycdf[1], ycdf[2], ycdf[11], ycdf[12]);
+            fflush(ymf);
+        }
+    }
+#endif
+#ifdef STB_DBG_TRACE
     if (stb_dbg_blknum < 100000) STB_DBG_PRE(msac);
 #endif
     sym = stb_av1_msac_symbol(msac, ycdf, 12);
+#ifdef STB_DBG_TRACE
+    {
+        static FILE *imf = NULL;
+        if (!imf) imf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_intermediate.txt", "w");
+        if (imf && stb_dbg_blknum < 100000) {
+            fprintf(imf, "YMODE_POST blknum=%d bx4=%d by4=%d rng=%u sym=%u ac=%d lc=%d lmode=%d amode=%d\n",
+                    stb_dbg_blknum, stb_dbg_blkx, stb_dbg_blky, msac->rng, sym, ac, lc, left_mode, above_mode);
+            fflush(imf);
+        }
+    }
+#endif
 #ifdef STB_DBG_TRACE
     if (stb_dbg_blknum < 100000)
         fprintf(stderr, "TYMODE x=%d y=%d pre=%u post=%u ac=%d lc=%d sym=%u\n",
@@ -134,6 +157,18 @@ static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
 #endif
     if (sym > (unsigned)(cfl_allowed ? 13 : 12)) return -3;
     b->uv_mode = (int)sym;
+#ifdef STB_DBG_TRACE
+    {
+        static FILE *imf = NULL;
+        if (!imf) imf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_intermediate.txt", "a");
+        if (imf && stb_dbg_blknum < 100000) {
+            fprintf(imf, "UVMODE_POST blknum=%d bx4=%d by4=%d rng=%u uv=%d cfl=%d lmode=%d amode=%d\n",
+                    stb_dbg_blknum, stb_dbg_blkx, stb_dbg_blky, msac->rng,
+                    b->uv_mode, cfl_allowed, left_mode, above_mode);
+            fflush(imf);
+        }
+    }
+#endif
 
     if (b->uv_mode == STBV_AV1_INTRA_CFL) {
         sym = stb_av1_msac_symbol(msac, cdf->cfl_sign, 7);

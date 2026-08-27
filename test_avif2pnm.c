@@ -191,6 +191,7 @@ int main(int argc, char *argv[])
         /* Build output path: replace .avif with .ppm */
         base = src;
         slash = strrchr(src, '/');
+        { const char *bs = strrchr(src, '\\'); if (bs && (!slash || bs > slash)) slash = bs; }
         if (slash) base = slash + 1;
 
         strcpy(dst, "output_ppm/");

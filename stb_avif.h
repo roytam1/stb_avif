@@ -2316,10 +2316,15 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
     rc->pal_uv = pal_sz_uv;
 #ifdef STB_DBG_TRACE
     {
-        static int bi_n = 0;
-        if (bi_n < 20000)
-            fprintf(stderr, "BINFO n=%d x=%d y=%d bs=%d skip=%d ym=%d paly=%d paluv=%d uvm=%d\n",
-                    bi_n++, bx4, by4, bs, skip, y_mode, pal_sz_y, pal_sz_uv, uv_mode);
+        static FILE *fmode = NULL;
+        if (!fmode) {
+            fmode = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/mode_dump.txt", "w");
+        }
+        if (fmode) {
+            fprintf(fmode, "x=%d y=%d bs=%d skip=%d ym=%d uvm=%d palY=%d\n",
+                    bx4, by4, bs, skip, y_mode, uv_mode, pal_sz_y);
+            fflush(fmode);
+        }
     }
 #endif
     /* dav1d predicts PER TRANSFORM so every txb sees freshly reconstructed
@@ -2415,7 +2420,6 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
         memset(rc->pred + i * w + cw, 0,
                (size_t)((w - cw) * sizeof(stbv_u16)));
     }
-    {
 #ifdef STB_DBG_TRACE
         if (stride == rc->stride_y) {
             int _q;
@@ -2463,7 +2467,6 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
             }
         }
 #endif
-    }
 #ifdef STB_DBG_TRACE
     if (px==672 && py==1184) {
         int _k;
@@ -2743,6 +2746,46 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
     stbv_av1_ipred_run_16(impl, rc->pred, w, edge, w, h,
                           angle | stb_avif_recon_edge_flags(rc, 1, rc->cur_bx4, rc->cur_by4),
                           filt_idx, rc->frame_w - (x4 << 2), rc->frame_h - (y4 << 2), bd);
+#ifdef STB_DBG_TRACE
+    {
+        static int trace_cnt = 0;
+        int do_trace = 0;
+        if ((x4 == 0 && y4 == 0) || (x4 == 0 && y4 == 1) || (x4 == 0 && y4 == 2) ||
+            (x4 >= 60 && x4 <= 63 && y4 >= 0 && y4 <= 3) ||
+            (x4 == 0 && y4 == 120) ||
+            (x4 == 0 && y4 == 200) || (x4 == 0 && y4 == 400))
+            do_trace = 1;
+        if (do_trace && trace_cnt < 200) {
+            static FILE *ftr = NULL;
+            int q;
+            if (!ftr) ftr = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/trace_block.txt", "w");
+            if (ftr) {
+                fprintf(ftr, "BLK x4=%d y4=%d tx=%d mode=%d angle=%d impl=%d fl=%d bw=%d bh=%d bd=%d\n",
+                        x4, y4, tx, mode, angle, impl,
+                        stb_avif_recon_edge_flags(rc, 1, rc->cur_bx4, rc->cur_by4),
+                        rc->cur_bw4, rc->cur_bh4, bd);
+                fprintf(ftr, "EDGE_TOP:");
+                for (q = 0; q < (w < 16 ? w : 16); q++)
+                    fprintf(ftr, " %d", (int)edge[q]);
+                fprintf(ftr, "\nEDGE_LEFT:");
+                for (q = 1; q <= (h < 16 ? h : 16); q++)
+                    fprintf(ftr, " %d", (int)edge[-q]);
+                fprintf(ftr, "\nPRED0:");
+                for (q = 0; q < (w < 16 ? w : 16); q++)
+                    fprintf(ftr, " %d", (int)rc->pred[q]);
+                fprintf(ftr, "\nPRED_R1:");
+                for (q = 0; q < (w < 16 ? w : 16); q++)
+                    fprintf(ftr, " %d", (int)rc->pred[w + q]);
+                fprintf(ftr, "\nPLANE_PRE:");
+                for (q = 0; q < (w < 8 ? w : 8); q++)
+                    fprintf(ftr, " %d", (int)rc->plane_y[(y4 << 2) * rc->stride_y + (x4 << 2) + q]);
+                fprintf(ftr, "\n");
+                fflush(ftr);
+                trace_cnt++;
+            }
+        }
+    }
+#endif
 #ifdef STB_DBG_TRACE
     if ((x4 == 16 || x4 == 0 || x4 == 8) && y4 == 376) {
         int q;
@@ -3293,6 +3336,25 @@ static void stb_avif_recon_luma_pal(void *ud, const stbv_u8 *idx, int sz, int bw
     if (!rc) return;
     x = rc->cur_bx4 << 2;
     y = rc->cur_by4 << 2;
+#ifdef STB_DBG_TRACE
+    {
+        static FILE *_pallog2 = NULL;
+        if (!_pallog2) _pallog2 = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/pal_apply.txt", "w");
+        if (_pallog2 && rc->cur_bx4 == 0 && rc->cur_by4 == 120) {
+            fprintf(_pallog2, "PAL_APPLY bx=%d by=%d bw=%d bh=%d sz=%d:", rc->cur_bx4, rc->cur_by4, bw4, bh4, sz);
+            for (i = 0; i < sz; i++) fprintf(_pallog2, " %d", (int)pal[i]);
+            fprintf(_pallog2, "\nIDX:");
+            w = bw4 << 2;
+            for (i = 0; i < (bh4 << 2) && i < 32; i++) {
+                fprintf(_pallog2, "\n  r%d:", i);
+                for (j = 0; j < (bw4 << 2) && j < 32; j++)
+                    fprintf(_pallog2, " %d", (int)idx[i * w + j]);
+            }
+            fprintf(_pallog2, "\n");
+            fflush(_pallog2);
+        }
+    }
+#endif
     w = bw4 << 2;
     h = bh4 << 2;
     cw = rc->frame_w - x; if (cw > w) cw = w;
@@ -3905,14 +3967,37 @@ unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
 
     result = NULL;
 
+    /* Validate input */
+    STB_AVIF_CHECK(data != NULL && len >= 16, "Invalid input data");
+
+    /* Detect IVF container (starts with "DKIF") */
+    if (data[0] == 'D' && data[1] == 'K' && data[2] == 'I' && data[3] == 'F') {
+        unsigned hdr_len;
+        unsigned frame_size;
+        int ivf_w, ivf_h;
+        if (len < 32) goto error_exit;
+        hdr_len = (unsigned)data[6] | ((unsigned)data[7] << 8);
+        ivf_w = (int)((unsigned)data[12] | ((unsigned)data[13] << 8));
+        ivf_h = (int)((unsigned)data[14] | ((unsigned)data[15] << 8));
+        if ((int)hdr_len > len || ivf_w <= 0 || ivf_h <= 0) goto error_exit;
+        info.width = ivf_w;
+        info.height = ivf_h;
+        /* Read first frame header (12 bytes after IVF header) */
+        if ((int)(hdr_len + 12) > len) goto error_exit;
+        frame_size = (unsigned)data[hdr_len] | ((unsigned)data[hdr_len+1] << 8) |
+                     ((unsigned)data[hdr_len+2] << 16) | ((unsigned)data[hdr_len+3] << 24);
+        if ((int)(hdr_len + 12 + (int)frame_size) > len || frame_size == 0) goto error_exit;
+        info.av1_data = data + hdr_len + 12;
+        info.av1_size = frame_size;
+        info.input = data;
+        info.input_len = len;
+        goto ivf_decoded;
+    }
+
     /* Setup error handling */
     if (setjmp(stb_avif_jmp)) {
         goto error_exit;
     }
-
-
-    /* Validate input */
-    STB_AVIF_CHECK(data != NULL && len >= 16, "Invalid input data");
 
     stb_avif_reader_init(&r, data, (size_t)len);
 
@@ -3945,6 +4030,7 @@ unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
     STB_AVIF_CHECK(info.av1_data != NULL && info.av1_size > 0,
                    "No AV1 compressed data found");
 
+ivf_decoded:
     /* Set up sequence header defaults */
     sh.bit_depth = info.bit_depth;
     sh.monochrome = info.monochrome;
@@ -4307,6 +4393,31 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
             stb_avif_error_msg = "scalar AV1 decode failed";
             goto error_exit;
         }
+#ifdef STB_DBG_TRACE
+        {
+            FILE *fp = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/primary_y.raw", "wb");
+            FILE *fu = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/primary_u.raw", "wb");
+            FILE *fv = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/primary_v.raw", "wb");
+            FILE *fl = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/plndump_log.txt", "a");
+            int uv_rows = (tc.frame_height + 1) >> 1;
+            if (fp) { fwrite(tc.plane_y, 1, (size_t)tc.stride_y * tc.frame_height, fp); fclose(fp); }
+            if (fu) { fwrite(tc.plane_u, 1, (size_t)tc.stride_u * uv_rows, fu); fclose(fu); }
+            if (fv) { fwrite(tc.plane_v, 1, (size_t)tc.stride_v * uv_rows, fv); fclose(fv); }
+            if (fl) {
+            fprintf(fl, "PRIMARY stride_y=%d stride_u=%d stride_v=%d frame=%dx%d bd=%d ft=%d show=%d y_bytes=%zu u_bytes=%zu v_bytes=%zu\n",
+                    tc.stride_y, tc.stride_u, tc.stride_v, tc.frame_width, tc.frame_height, tc.bit_depth,
+                    (int)fh.frame_type, (int)fh.show_frame,
+                    (size_t)tc.stride_y * tc.frame_height,
+                    (size_t)tc.stride_u * uv_rows,
+                    (size_t)tc.stride_v * uv_rows);
+                if (tc.plane_y) fprintf(fl, " y[0]=%d [1]=%d [row1]=%d\n",
+                        (int)tc.plane_y[0], (int)tc.plane_y[1], (int)tc.plane_y[tc.stride_y]);
+                if (tc.plane_u) fprintf(fl, " u[0]=%d [1]=%d\n", (int)tc.plane_u[0], (int)tc.plane_u[1]);
+                if (tc.plane_v) fprintf(fl, " v[0]=%d [1]=%d\n", (int)tc.plane_v[0], (int)tc.plane_v[1]);
+                fclose(fl);
+            }
+        }
+#endif
     }
 #endif
 

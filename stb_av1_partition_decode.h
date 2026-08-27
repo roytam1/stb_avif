@@ -9,7 +9,7 @@
 #include <stdio.h>
 /* Plain #ifdef blocks instead of variadic macros (MSVC6/C89); the 64-bit
  * MSAC state prints as two 32-bit halves to stay off '%ll' formats. */
-#define STBV_AV1_PART_TRACE 1
+/* #define STBV_AV1_PART_TRACE */ 1
 #endif
 
 #ifndef STB_AV1_PARTITION_H
