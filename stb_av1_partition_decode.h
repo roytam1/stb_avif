@@ -101,6 +101,8 @@ struct stbv_av1_partition_decoder {
     stbv_u8 *left;
     int above_n;
     int left_n;
+    int ctx_x4;
+    int ctx_y4;
     stbv_av1_partition_leaf_fn leaf;
     void *opaque;
 };
@@ -133,8 +135,8 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         return stbv_av1_partition_decode_sb(d, bl + 1, bx, by);
     }
 
-    bx8 = bx >> 1;
-    by8 = by >> 1;
+    bx8 = (bx - d->ctx_x4) >> 1;
+    by8 = (by - d->ctx_y4) >> 1;
     if (bx8 < 0 || bx8 >= d->above_n || by8 < 0 || by8 >= d->left_n)
         return -1;
     ctx = ((d->above[bx8] >> (4 - bl)) & 1) |
@@ -348,6 +350,8 @@ static void stbv_av1_partition_decoder_init(stbv_av1_partition_decoder *d,
     d->left = left;
     d->above_n = above_n;
     d->left_n = left_n;
+    d->ctx_x4 = 0;
+    d->ctx_y4 = 0;
     d->leaf = leaf;
     d->opaque = opaque;
 }

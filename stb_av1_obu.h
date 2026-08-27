@@ -42,6 +42,8 @@ struct stb_av1_obu {
     size_t size;
 };
 
+#define STB_AV1_MAX_TILES (STB_AV1_MAX_TILE_COLS * STB_AV1_MAX_TILE_ROWS)
+
 struct stb_av1_internal_stream {
     struct stb_av1_seqhdr seq;
     struct stb_av1_framehdr frame;
@@ -52,6 +54,9 @@ struct stb_av1_internal_stream {
     size_t tile_size;
     unsigned int tile_start;
     unsigned int tile_end;
+    struct stb_av1_tile_span tiles[STB_AV1_MAX_TILES];
+    unsigned char tile_seen[STB_AV1_MAX_TILES];
+    unsigned int tile_count;
 };
 
 /* Read one OBU from an already byte-aligned stream. */
@@ -141,7 +146,8 @@ static int stb_av1_parse_obu_payload_frame(struct stb_av1_internal_stream *st,
                                            int combined)
 {
     struct stb_av1_getbits gb;
-    struct stb_av1_tile_span tile;
+    struct stb_av1_tile_span tile[STB_AV1_MAX_TILES];
+    unsigned int ntile, i;
     int res;
 
     if (!st->have_seq)
@@ -162,13 +168,16 @@ static int stb_av1_parse_obu_payload_frame(struct stb_av1_internal_stream *st,
     /* A FRAME OBU contains frame-header bits followed immediately by the
        tile-group header.  parse_tile_group() consumes that header and leaves
        the reader at the first MSAC byte. */
-    if (stb_av1_parse_tile_group(&st->frame, &gb, &tile) < 0)
+    if (stb_av1_parse_tile_group(&st->frame, &gb, tile, STB_AV1_MAX_TILES,
+                                 &ntile, &st->tile_start, &st->tile_end) < 0)
         return -1;
-
-    st->tile_data = tile.data;
-    st->tile_size = tile.size;
-    st->tile_start = tile.start;
-    st->tile_end = tile.end;
+    for (i = 0; i < ntile; i++) {
+        unsigned int ti = tile[i].start;
+        if (st->tile_seen[ti]) return -1;
+        st->tile_seen[ti] = 1; st->tiles[ti] = tile[i]; st->tile_count++;
+    }
+    st->tile_data = st->tiles[0].data;
+    st->tile_size = st->tiles[0].size;
     return 0;
 }
 
@@ -222,17 +231,24 @@ static int stb_av1_parse_internal_stream(struct stb_av1_internal_stream *st,
 
         case STB_AV1_OBU_TILE_GROUP: {
             struct stb_av1_getbits gb;
-            struct stb_av1_tile_span tile;
+            struct stb_av1_tile_span tile[STB_AV1_MAX_TILES];
+            unsigned int ntile, ti;
             if (!st->have_frame)
                 return -1;
             stb_av1_getbits_init(&gb, obu.data, obu.size);
-            if (stb_av1_parse_tile_group(&st->frame, &gb, &tile) < 0)
+            if (stb_av1_parse_tile_group(&st->frame, &gb, tile, STB_AV1_MAX_TILES,
+                                         &ntile, &st->tile_start, &st->tile_end) < 0)
                 return -1;
-            st->tile_data = tile.data;
-            st->tile_size = tile.size;
-            st->tile_start = tile.start;
-            st->tile_end = tile.end;
-            return 0;
+            for (ti = 0; ti < ntile; ti++) {
+                unsigned int idx = tile[ti].start;
+                if (st->tile_seen[idx]) return -1;
+                st->tile_seen[idx] = 1; st->tiles[idx] = tile[ti]; st->tile_count++;
+            }
+            if (st->tile_count == st->frame.tiling.cols * st->frame.tiling.rows) {
+                st->tile_data = st->tiles[0].data;
+                st->tile_size = st->tiles[0].size;
+                return 0;
+            }
         }
 
         default:
@@ -240,7 +256,7 @@ static int stb_av1_parse_internal_stream(struct stb_av1_internal_stream *st,
         }
     }
 
-    return st->have_seq && st->have_frame && st->tile_data ? 0 : -1;
+    return st->have_seq && st->have_frame && st->tile_count ? 0 : -1;
 }
 
 #endif

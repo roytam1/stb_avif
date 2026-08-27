@@ -1964,6 +1964,7 @@ struct stb_avif_scalar_recon {
     stbv_u8 *lf_done;       /* per-4x4-unit reconstruction bitmap (luma) */
     int lf_mapw4, lf_maph4;
     ptrdiff_t lf_b4stride;
+    int tile_x4, tile_y4, tile_w4, tile_h4;
 };
 
 /* Decoding-order key for availability checks: superblock row, then SB
@@ -2088,6 +2089,12 @@ static int stb_avif_recon_block_edge_flags_run(struct stb_avif_scalar_recon *rc,
     const int fw4 = luma ? (fw4a >> 2) : ((fw4a >> 2) + ss_hor) >> ss_hor;
     const int fh4 = luma ? (fh4a >> 2) : ((fh4a >> 2) + ss_ver) >> ss_ver;
     stbv_u32 *cmap = luma ? 0 : rc->lf_blkid_c;
+    int tile_x0 = luma ? rc->tile_x4 : (rc->tile_x4 >> ss_hor);
+    int tile_y0 = luma ? rc->tile_y4 : (rc->tile_y4 >> ss_ver);
+    int tile_x1 = luma ? (rc->tile_x4 + rc->tile_w4) :
+        ((rc->tile_x4 + rc->tile_w4 + ss_hor) >> ss_hor);
+    int tile_y1 = luma ? (rc->tile_y4 + rc->tile_h4) :
+        ((rc->tile_y4 + rc->tile_h4 + ss_ver) >> ss_ver);
     int fl = 0;
 
     /* Coordinates are in the plane being predicted. Chroma coverage is
@@ -2096,7 +2103,7 @@ static int stb_avif_recon_block_edge_flags_run(struct stb_avif_scalar_recon *rc,
     if (x4 < 0 || y4 < 0 || x4 >= fw4 || y4 >= fh4)
         return 0;
 
-    if (y4 > 0 && x4 + tr_run < fw4) {
+    if (y4 > tile_y0 && x4 + tr_run < fw4 && x4 + tr_run < tile_x1) {
         int qx = x4 + w4;
         int qy = y4 - 1;
         if (luma) {
@@ -2113,7 +2120,7 @@ static int stb_avif_recon_block_edge_flags_run(struct stb_avif_scalar_recon *rc,
                 fl |= STBV_AV1_EDGE_I444_TOP_HAS_RIGHT;
         }
     }
-    if (x4 > 0 && y4 + bl_run < fh4) {
+    if (x4 > tile_x0 && y4 + bl_run < fh4 && y4 + bl_run < tile_y1) {
         int qx = x4 - 1;
         int qy = y4 + h4;
         if (luma) {
@@ -3678,6 +3685,9 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     recon.ss_ver = (stream.seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0;
     recon.frame_w = tc->frame_width;
     recon.frame_h = tc->frame_height;
+    recon.tile_x4 = 0; recon.tile_y4 = 0;
+    recon.tile_w4 = (int)((stream.frame.width[0] + 3U) >> 2);
+    recon.tile_h4 = (int)((stream.frame.height + 3U) >> 2);
     recon.intra_edge_filter = stream.seq.intra_edge_filter ? 1 : 0;
     recon.sb_step4 = stream.seq.sb128 ? 32 : 16;
     recon.above_mode = above_mode;
@@ -3698,10 +3708,34 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     memset(&td, 0, sizeof(td));
     td.seq = &stream.seq;
     td.frame = &stream.frame;
-    r = stb_av1_decode_tile(&td, &stream.seq, &stream.frame,
-                            stream.tile_data, stream.tile_size,
-                            stb_avif_leaf_cb, &state,
-                            stb_avif_row_reset_cb);
+    r = 0;
+    {
+        unsigned int ti;
+        unsigned int ntiles = stream.frame.tiling.cols * stream.frame.tiling.rows;
+        unsigned int sb_log2 = 6U + stream.seq.sb128;
+        unsigned int sb_size = 1U << sb_log2;
+        for (ti = 0; ti < ntiles; ti++) {
+            unsigned int tr, tcx;
+            if (!stream.tile_seen[ti]) { r = -1; break; }
+            tr = ti / stream.frame.tiling.cols;
+            tcx = ti - tr * stream.frame.tiling.cols;
+            recon.tile_x4 = (int)(stream.frame.tiling.col_start_sb[tcx] * (sb_size >> 2));
+            recon.tile_y4 = (int)(stream.frame.tiling.row_start_sb[tr] * (sb_size >> 2));
+            recon.tile_w4 = (int)((stream.frame.tiling.col_start_sb[tcx + 1] -
+                                   stream.frame.tiling.col_start_sb[tcx]) * (sb_size >> 2));
+            recon.tile_h4 = (int)((stream.frame.tiling.row_start_sb[tr + 1] -
+                                   stream.frame.tiling.row_start_sb[tr]) * (sb_size >> 2));
+            stbv_av1_leaf_state_init(&state, &arrays);
+            /* Recon callbacks point at g_scalar_recon, so publish the
+             * current tile's bounds before decoding its first leaf. */
+            g_scalar_recon = recon;
+            r = stb_av1_decode_tile_at(&td, &stream.seq, &stream.frame,
+                                       stream.tiles[ti].data, stream.tiles[ti].size,
+                                       tcx, tr, stb_avif_leaf_cb, &state,
+                                       stb_avif_row_reset_cb);
+            if (r) break;
+        }
+    }
 
 #ifdef STB_AVIF_DEBLOCK
     if (!r) {
