@@ -2248,7 +2248,7 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
         cw = ((rc->frame_w + ss_hor) >> ss_hor) - x; if (cw > w) cw = w;
         ch = ((rc->frame_h + ss_ver) >> ss_ver) - y; if (ch > h) ch = h;
         if (cw <= 0 || ch <= 0) return;
-        cimpl = stbv_av1_prepare_intra_edges_16(cx4, cx4 > 0, cy4, cy4 > 0,
+    cimpl = stbv_av1_prepare_intra_edges_16(cx4, cx4 > 0, cy4, cy4 > 0,
                                                cfw4, cfh4,
                                                stb_avif_recon_block_edge_flags(rc, 0, cx4, cy4, cbw4, cbh4),
                                                rc->plane_u + y * rc->stride_u + x,
@@ -2988,7 +2988,7 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
                 const stbv_u16 *row = plane + ((y4 << 2) + r3) * stride +
                                       (x4 << 2);
                 for (c3 = 0; c3 < 8; c3++)
-                    fprintf(stderr, "%02x ", row[c3] & 0xff);
+                    fprintf(stderr, "%04d ", row[c3]);
                 fprintf(stderr, "\n");
             }
         }
@@ -3043,6 +3043,29 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
 #endif
         return;
     }
+#ifdef STB_DBG_TRACE
+    if (!pl && cx4 == 68 && cy4 == 0) {
+        int q;
+        fprintf(stderr, "CEDGEP pl=%d cx=%d cy=%d plane_ptr=%p stride=%d\n",
+                pl, cx4, cy4, (void*)plane, stride);
+        fprintf(stderr, "  left_col:");
+        for (q = 0; q < h && q < 16; q++)
+            fprintf(stderr, " %d", plane[q * stride + (cx4 << 2) - 1]);
+        fprintf(stderr, "\n");
+    }
+    if (!pl && cx4 == 64 && cy4 == 2) {
+        int q;
+        fprintf(stderr, "CEDGEP2 pl=%d cx=%d cy=%d stride=%d\n",
+                pl, cx4, cy4, stride);
+        fprintf(stderr, "  left_col:");
+        for (q = 0; q < h && q < 16; q++)
+            fprintf(stderr, " %d", plane[((cy4 << 2) + q) * stride + (cx4 << 2) - 1]);
+        fprintf(stderr, "\n  top_row:");
+        for (q = 0; q < w && q < 16; q++)
+            fprintf(stderr, " %d", plane[((cy4 << 2) - 1) * stride + (cx4 << 2) + q]);
+        fprintf(stderr, "\n  topleft=%d\n", plane[((cy4 << 2) - 1) * stride + (cx4 << 2) - 1]);
+    }
+#endif
     cimpl = stbv_av1_prepare_intra_edges_16(cx4, cx4 > 0, cy4, cy4 > 0,
                                            cfw4, cfh4,
                                            stb_avif_recon_txb_edge_flags(
@@ -3059,17 +3082,36 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
                                            rc->intra_edge_filter,
                                            edge, rc->bit_depth);
 #ifdef STB_DBG_TRACE
-    if (!pl && cx4 == 180 && cy4 >= 160) {
+    if (!pl && cx4 == 68 && cy4 == 0) {
         int q;
-        fprintf(stderr, "CHEDGE cx=%d cy=%d cm=%d impl=%d ang=%d fl=%d"
-                " cfw4=%d cfh4=%d top:", cx4, cy4, cm, cimpl, cangle,
+        fprintf(stderr, "CEDGEC pl=%d cx=%d cy=%d cm=%d impl=%d ang=%d fl=%d"
+                " cw=%d ch=%d cfw4=%d cfh4=%d eflags=%d\n",
+                pl, cx4, cy4, cm, cimpl, cangle,
                 stb_avif_recon_txb_edge_flags(rc, 0, rc->cur_bx4,
                     rc->cur_by4, rc->cur_bw4, rc->cur_bh4, x4, y4,
                     stbv_av1_tx_dims[tx].w, stbv_av1_tx_dims[tx].h),
-                cfw4, cfh4);
-        for (q = 0; q < 8; q++) fprintf(stderr, " %d", edge[q]);
-        fprintf(stderr, " left:");
-        for (q = 1; q <= 8; q++) fprintf(stderr, " %d", edge[-q]);
+                cw, ch, cfw4, cfh4);
+        fprintf(stderr, "  corner=%d top:", edge[0]);
+        for (q = 1; q <= w && q <= 16; q++) fprintf(stderr, " %d", edge[q]);
+        fprintf(stderr, "\n  left:");
+        for (q = 1; q <= h && q <= 16; q++) fprintf(stderr, " %d", edge[-q]);
+        fprintf(stderr, "\n");
+    }
+#endif
+#ifdef STB_DBG_TRACE
+    if (!pl && cx4 == 64 && cy4 == 2) {
+        int q;
+        fprintf(stderr, "CEDGEC2 pl=%d cx=%d cy=%d cm=%d impl=%d ang=%d fl=%d"
+                " cw=%d ch=%d\n",
+                pl, cx4, cy4, cm, cimpl, cangle,
+                stb_avif_recon_txb_edge_flags(rc, 0, rc->cur_bx4,
+                    rc->cur_by4, rc->cur_bw4, rc->cur_bh4, x4, y4,
+                    stbv_av1_tx_dims[tx].w, stbv_av1_tx_dims[tx].h),
+                cw, ch);
+        fprintf(stderr, "  corner=%d top:", edge[0]);
+        for (q = 1; q <= w && q <= 16; q++) fprintf(stderr, " %d", edge[q]);
+        fprintf(stderr, "\n  left:");
+        for (q = 1; q <= h && q <= 16; q++) fprintf(stderr, " %d", edge[-q]);
         fprintf(stderr, "\n");
     }
 #endif
@@ -3184,8 +3226,8 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
                     rc->cfl_ac_w = W;
                     rc->cfl_ac_h = H;
 #ifdef STB_DBG_TRACE
-                    if ((rc->cur_bx4==0 && rc->cur_by4==0) || (rc->cur_bx4==160 && rc->cur_by4==0) || (rc->cur_bx4==176 && rc->cur_by4==0)) {
-                        int _i; fprintf(stderr, "CFLAC "); for(_i=0; _i<8 && _i<W*H; _i++) fprintf(stderr, " %d", rc->cfl_ac[_i]); fprintf(stderr, " acc=%ld log2=%d\n", acc, log2sz);
+                    if ((rc->cur_bx4==0 && rc->cur_by4==0) || (rc->cur_bx4==160 && rc->cur_by4==0) || (rc->cur_bx4==176 && rc->cur_by4==0) || (rc->cur_bx4==64 && rc->cur_by4==0 && pl==0)) {
+                        int _i; fprintf(stderr, "CFLAC bx=%d by=%d pl=%d W=%d H=%d sh_l=%d ", rc->cur_bx4, rc->cur_by4, pl, W, H, sh_l); for(_i=0; _i<16 && _i<W*H; _i++) fprintf(stderr, " %d", rc->cfl_ac[_i]); fprintf(stderr, " acc=%ld log2=%d\n", acc, log2sz);
                     }
 #endif
                     rc->cfl_ac_bx = rc->cur_bx4;
@@ -3227,12 +3269,13 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
         if (dbg_ch2 < 600 && !rc->pal_uv) {
             int r3, c3;
             fprintf(stderr, "CHPRED pl=%d x=%d y=%d cm=%d w=%d h=%d "
-                    "uvm=%d au=%d av=%d skip=%d\n",
+                    "uvm=%d au=%d av=%d skip=%d bd=%d\n",
                     pl, cx4, cy4, cm, w, h, rc->uv_mode,
-                    rc->cfl_alpha_u, rc->cfl_alpha_v, rc->block_skip);
+                    rc->cfl_alpha_u, rc->cfl_alpha_v, rc->block_skip,
+                    rc->bit_depth);
             for (r3 = 0; r3 < ch && r3 < 8; r3++) {
                 for (c3 = 0; c3 < cw && c3 < 8; c3++)
-                    fprintf(stderr, "%04x ", rc->pred[r3 * w + c3] & 0xff);
+                    fprintf(stderr, "%04d ", rc->pred[r3 * w + c3]);
                 fprintf(stderr, "\n");
             }
         }
@@ -3270,15 +3313,15 @@ static void stb_avif_recon_chroma_pal(void *ud, int pl, const stbv_u8 *idx, int 
     int stride;
     rc = (struct stb_avif_scalar_recon *)ud;
     if (!rc) return;
-    x = (rc->cur_bx4 >> 1) << 2;
-    y = (rc->cur_by4 >> 1) << 2;
+    x = (rc->cur_bx4 << 2) >> rc->ss_hor;
+    y = (rc->cur_by4 << 2) >> rc->ss_ver;
     w = cbw4 << 2;
     h = cbh4 << 2;
     plane = pl == 0 ? rc->plane_u : rc->plane_v;
     stride = pl == 0 ? rc->stride_u : rc->stride_v;
     if (!plane) return;
-    cw = ((rc->frame_w + 1) / 2) - x; if (cw > w) cw = w;
-    ch = ((rc->frame_h + 1) / 2) - y; if (ch > h) ch = h;
+    cw = (((rc->frame_w + rc->ss_hor) >> rc->ss_hor)) - x; if (cw > w) cw = w;
+    ch = (((rc->frame_h + rc->ss_ver) >> rc->ss_ver)) - y; if (ch > h) ch = h;
     for (i = 0; i < ch; i++)
         for (j = 0; j < cw; j++) {
             int id = idx[i * w + j];
@@ -4426,6 +4469,10 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
                     u_val = (int)info.plane_u[row * info.stride_u + col];
                     v_val = (int)info.plane_v[row * info.stride_v + col];
                 }
+
+                /* NOTE: planes are already scaled to 8-bit in the
+                 * u16→u8 conversion above (lines ~3662-3745).
+                 * Do NOT apply a second bit-depth shift here. */
 
                 /* Range expansion for limited range (color_range=0) */
                 if (sh.color_range == 0) {

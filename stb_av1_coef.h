@@ -624,6 +624,7 @@ dbg_pre = msac->rng;
 #endif
         if (tok == 2U)
             dc_tok = (int)stbv_av1_coef_hi_tok(msac, hi_cdf);
+        eob = 1; /* DC coefficient is present */
     }
 
     /* The final rc is the first non-zero coefficient in scan order.  dav1d's

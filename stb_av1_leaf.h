@@ -759,6 +759,14 @@ static int stbv_av1_palette_read_plane(struct stb_av1_msac *msac,
     }
 
     if (pal_sz_out) *pal_sz_out = pal_sz;
+#ifdef STB_DBG_TRACE
+    if (stb_dbg_blknum <= 200000) {
+        fprintf(stderr, "PALCOL pl=%d x=%d y=%d sz=%d:", pl, bx4, by4, pal_sz);
+        for (i = 0; i < pal_sz; i++)
+            fprintf(stderr, " %d", (int)pal_out[i]);
+        fprintf(stderr, "\n");
+    }
+#endif
     return 0;
 }
 
@@ -783,6 +791,14 @@ static void stbv_av1_palette_read_uv_v(struct stb_av1_msac *msac, int bpc,
         for (i = 0; i < pal_sz; i++)
             pal_v[i] = stb_av1_msac_bools(msac, (unsigned)bpc);
     }
+#ifdef STB_DBG_TRACE
+    if (stb_dbg_blknum <= 200000) {
+        fprintf(stderr, "PALCV sz=%d:", pal_sz);
+        for (i = 0; i < pal_sz; i++)
+            fprintf(stderr, " %d", (int)pal_v[i]);
+        fprintf(stderr, "\n");
+    }
+#endif
 }
 
 /* Per-cell palette order/context for one wave-front diagonal (dav1d
@@ -874,6 +890,19 @@ static int stbv_av1_palette_indices(struct stb_av1_msac *msac,
             pal_tmp[(i - j) * stride + j] = order[m][color_idx];
         }
     }
+#ifdef STB_DBG_TRACE
+    if (stb_dbg_blknum <= 200000) {
+        int r, c;
+        fprintf(stderr, "PALIDX pl=%d x=%d y=%d w=%d h=%d sz=%d:", pl,
+                stb_dbg_blkx, stb_dbg_blky, wpx, hpx, pal_sz);
+        for (r = 0; r < hpx && r < 8; r++) {
+            fprintf(stderr, "\n  ");
+            for (c = 0; c < wpx && c < 8; c++)
+                fprintf(stderr, "%d ", (int)pal_tmp[r * stride + c]);
+        }
+        fprintf(stderr, "\n");
+    }
+#endif
     return 0;
 }
 
@@ -984,6 +1013,12 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
         int sbx = bx4 & ~(sb_step - 1);
         int sby = by4 & ~(sb_step - 1);
         int idx;
+#ifdef STB_DBG_TRACE
+        if (bx4 == 0 && by4 == 0)
+            fprintf(stderr, "CDEFHDR cdef=%d n_bits=%d damping=%d\n",
+                    frame->cdef.n_bits ? 1 : 0, frame->cdef.n_bits,
+                    frame->cdef.damping);
+#endif
         if (state->cdef_sb_x != sbx || state->cdef_sb_y != sby) {
             state->cdef_sb_x = sbx;
             state->cdef_sb_y = sby;
@@ -993,6 +1028,11 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
         idx = seq && seq->sb128 ? ((bx4 & 16) >> 4) + ((by4 & 16) >> 3) : 0;
         if (!block_skip && state->cdef_idx[idx] == -1) {
             int v;
+#ifdef STB_DBG_TRACE
+            if (stb_dbg_blknum <= 200000)
+                fprintf(stderr, "CDEFDECODE x=%d y=%d idx=%d rng_before=%u n_bits=%u\n",
+                        bx4, by4, idx, (unsigned)msac->rng, frame->cdef.n_bits);
+#endif
             v = stb_av1_msac_bools(msac, frame->cdef.n_bits);
             state->cdef_idx[idx] = v;
             if (bw4 > 16) state->cdef_idx[idx + 1] = v;
@@ -1061,9 +1101,28 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
         !state->pal_sz_y &&
         stbv_av1_block_dimensions[bs][2] <= 3 &&
         stbv_av1_block_dimensions[bs][3] <= 3) {
+#ifdef STB_DBG_TRACE
+        STB_DBG_PRE(msac);
+#endif
         if (stb_av1_msac_bool_adapt(msac, cdf->use_filter_intra + bs * 2)) {
+#ifdef STB_DBG_TRACE
+            if (stb_dbg_blknum <= 200000)
+                fprintf(stderr, "TFILTINF x=%d y=%d pre=%u post=%u bs=%d sym=1 angle_pre=%u\n",
+                        bx4, by4, stb_dbg_pre, msac->rng, bs, (unsigned)msac->rng);
+#endif
             intra.y_mode = STBV_AV1_INTRA_FILTER;
             intra.y_angle = (int)stb_av1_msac_symbol(msac, cdf->filter_intra, 4);
+#ifdef STB_DBG_TRACE
+            if (stb_dbg_blknum <= 200000)
+                fprintf(stderr, "TFILTINF_POST x=%d y=%d post=%u angle=%d\n",
+                        bx4, by4, (unsigned)msac->rng, intra.y_angle);
+#endif
+        } else {
+#ifdef STB_DBG_TRACE
+            if (stb_dbg_blknum <= 200000)
+                fprintf(stderr, "TFILTINF x=%d y=%d pre=%u post=%u bs=%d sym=0\n",
+                        bx4, by4, stb_dbg_pre, msac->rng, bs);
+#endif
         }
     }
 
@@ -1276,6 +1335,48 @@ if (frame && frame->txfm_mode == 1 &&
                 out->eob = 0;
                 out->skip_ctx = 0;
             }
+            /* Skip blocks have no coefficients, but intra prediction must
+             * still be written (dav1d recon_b_intra: prediction always runs,
+             * skip suppresses only the residual).  Without this, skip-block
+             * chroma planes remain zero (calloc), producing green output. */
+            if (c.recon) {
+                int txw4 = stbv_av1_tx_dims[tx0].w;
+                int txh4 = stbv_av1_tx_dims[tx0].h;
+                int uv_txw4 = stbv_av1_tx_dims[uv_tx].w;
+                int uv_txh4 = stbv_av1_tx_dims[uv_tx].h;
+                int qy4, qx4, qh4, qw4, sch4, scw4;
+                int txtp_skip = lossless ? STBV_AV1_TX_WHT_WHT
+                                         : STBV_AV1_TX_DCT_DCT;
+                for (qy4 = by4; qy4 < by4 + bh4; qy4 += 16) {
+                    qh4 = by4 + bh4 - qy4;
+                    if (qh4 > 16) qh4 = 16;
+                    sch4 = (qh4 + ss_ver) >> ss_ver;
+                    for (qx4 = bx4; qx4 < bx4 + bw4; qx4 += 16) {
+                        int y4, x4, cy4, cx4;
+                        qw4 = bx4 + bw4 - qx4;
+                        if (qw4 > 16) qw4 = 16;
+                        scw4 = (qw4 + ss_hor) >> ss_hor;
+                        if (c.recon->luma_txb) {
+                            for (y4 = qy4; y4 < qy4 + qh4; y4 += txh4)
+                                for (x4 = qx4; x4 < qx4 + qw4; x4 += txw4)
+                                    c.recon->luma_txb(c.recon->ud, x4, y4,
+                                        tx0, txtp_skip, -1, NULL);
+                        }
+                        if (has_chroma && c.recon->chroma_txb) {
+                            int cbx4 = qx4 >> ss_hor;
+                            int cby4 = qy4 >> ss_ver;
+                            for (pl = 0; pl < 2; pl++)
+                                for (cy4 = cby4; cy4 < cby4 + sch4;
+                                     cy4 += uv_txh4)
+                                    for (cx4 = cbx4; cx4 < cbx4 + scw4;
+                                         cx4 += uv_txw4)
+                                        c.recon->chroma_txb(c.recon->ud,
+                                            pl, cx4, cy4, uv_tx, txtp_skip,
+                                            -1, NULL);
+                        }
+                    }
+                }
+            }
         }
 
         /* Tx neighbour map: dav1d sets it to the block tx dimensions over the
@@ -1353,6 +1454,11 @@ if (frame && frame->txfm_mode == 1 &&
             memcpy(state->left_pal[1] + (by4 + i) * 8, state->pal_u,
                    8 * sizeof(stbv_u16));
     }
+#ifdef STB_DBG_TRACE
+    if (stb_dbg_blknum <= 200000 && bx4 >= 44 && bx4 <= 84 && by4 < 16)
+        fprintf(stderr, "BEND x=%d y=%d bs=%d rng=%u\n",
+                bx4, by4, bs, (unsigned)msac->rng);
+#endif
     return 0;
 }
 
