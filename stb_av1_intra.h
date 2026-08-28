@@ -30,12 +30,8 @@
 #define STBV_AV1_INTRA_CFL        13
 #define STBV_AV1_INTRA_FILTER     14
 
-/* dav1d_filter_mode_to_y_mode: underlying directional mode of a filtered
- * intra prediction mode. */
-static const unsigned char stbv_av1_filter_mode_to_y_mode[5] = {
-    STBV_AV1_INTRA_DC, STBV_AV1_INTRA_VERT, STBV_AV1_INTRA_HOR,
-    STBV_AV1_INTRA_DC, STBV_AV1_INTRA_DC
-};
+/* Note: dav1d_filter_mode_to_y_mode is defined in stb_av1_leaf.h as
+ * stb_filter_mode_to_y_mode (the version actually used during decode). */
 
 /* dav1d_cfl_allowed_mask: cfl is allowed for blocks no larger than 32x32
  * (bits for BS_32x32 .. BS_4x4, dav1d tables.h). */
