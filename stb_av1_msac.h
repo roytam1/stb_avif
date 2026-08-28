@@ -189,31 +189,19 @@ static unsigned int stbv_av1_inv_recenter(unsigned int r, unsigned int v)
         return r - ((v + 1) >> 1);
 }
 
-static int stb_av1_msac_subexp(struct stb_av1_msac *s, int ref, int n, unsigned int k)
+static int stb_av1_msac_subexp(struct stb_av1_msac *s, int ref,
+                                int n, unsigned int k)
 {
-    unsigned int a = 0, b, v;
-
-    if (n <= 0)
-        return 0;
-
-    for (;;) {
-        b = a + (1U << k);
-        if ((unsigned int)n <= b) {
-            v = stb_av1_msac_uniform(s, (unsigned int)n - a) + a;
-            break;
-        }
-        if (!stb_av1_msac_bool_equi(s)) {
-            v = stb_av1_msac_bools(s, k) + a;
-            break;
-        }
-        a = b;
-        k++;
+    unsigned int a = 0, v;
+    if (stb_av1_msac_bool_equi(s)) {
+        if (stb_av1_msac_bool_equi(s))
+            k += stb_av1_msac_bool_equi(s) + 1;
+        a = 1U << k;
     }
-
+    v = stb_av1_msac_bools(s, k) + a;
     return (unsigned int)ref * 2 <= (unsigned int)n
         ? (int)stbv_av1_inv_recenter((unsigned int)ref, v)
-        : n - 1 - (int)stbv_av1_inv_recenter(
-              (unsigned int)(n - 1 - ref), v);
+        : n - 1 - (int)stbv_av1_inv_recenter((unsigned int)(n - 1 - ref), v);
 }
 
 static void stb_av1_msac_init(struct stb_av1_msac *s,
