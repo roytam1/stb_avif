@@ -222,6 +222,13 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
                 restore_planes |= 4U;
             lr_unit_size_log2[0] = frame->restoration.unit_size[0];
             lr_unit_size_log2[1] = frame->restoration.unit_size[1];
+#ifdef STB_DBG_TRACE
+            fprintf(stderr, "LR_INIT restore_planes=%u type[%u,%u,%u] unit_sz_log2=[%u,%u]\n",
+                    restore_planes,
+                    frame->restoration.type[0], frame->restoration.type[1],
+                    frame->restoration.type[2],
+                    lr_unit_size_log2[0], lr_unit_size_log2[1]);
+#endif
         }
         for (p = 0; p < 3; p++) {
             lr_ref[p].filter_v[0] = 3; lr_ref[p].filter_v[1] = -7; lr_ref[p].filter_v[2] = 15;
@@ -259,6 +266,11 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
                     stb_av1_read_restoration_info(&td->msac, &td->cdf,
                                                   &lr_ref[p], p,
                                                   frame->restoration.type[p]);
+#ifdef STB_DBG_TRACE
+                    if (bx == 0 && by == 0)
+                        fprintf(stderr, "LR_READ p=%d r=%u c=%d\n",
+                                p, td->msac.rng, td->msac.cnt);
+#endif
                 }
             }
 

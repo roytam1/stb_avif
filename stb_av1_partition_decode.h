@@ -5,12 +5,7 @@
 #ifndef STB_AV1_PARTITION_DECODE_H
 #define STB_AV1_PARTITION_DECODE_H
 
-#ifdef STB_AV1_PARTITION_DEBUG
 #include <stdio.h>
-/* Plain #ifdef blocks instead of variadic macros (MSVC6/C89); the 64-bit
- * MSAC state prints as two 32-bit halves to stay off '%ll' formats. */
-/* #define STBV_AV1_PART_TRACE */ 1
-#endif
 
 #ifndef STB_AV1_PARTITION_H
 #error "include stb_av1_partition.h first"
@@ -144,10 +139,21 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
     pc = stbv_av1_partition_cdf(d->cdf->partition, bl, ctx);
 
     if (have_h_split && have_v_split) {
-        bp = (int)stb_av1_msac_symbol(d->msac, pc,
-                                      stbv_av1_partition_type_count[bl]);
 #ifdef STBV_AV1_PART_TRACE
-        fprintf(stderr, "P y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%08x%08x c=%d c0=%d c8=%d\n",
+        {
+            int _nc = stbv_av1_partition_type_count[bl];
+            fprintf(stderr, "PRE-PART y=%d x=%d bl=%d ctx=%d r=%u d=%08x%08x c=%d n=%d cdf:",
+                    by, bx, bl, ctx, d->msac->rng,
+                    (unsigned)(d->msac->dif >> 32), (unsigned)d->msac->dif,
+                    d->msac->cnt, _nc);
+            { int _i; for (_i = 0; _i < _nc; _i++) fprintf(stderr, " %d", pc[_i]); }
+            fprintf(stderr, "\n");
+        }
+#endif
+        bp = (int)stb_av1_msac_symbol(d->msac, pc,
+                                       stbv_av1_partition_type_count[bl]);
+#ifdef STBV_AV1_PART_TRACE
+        fprintf(stderr, "POST-PART y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%08x%08x c=%d c0=%d c8=%d\n",
                 by, bx, bl, ctx, bp, d->msac->rng,
                 (unsigned)(d->msac->dif >> 32), (unsigned)d->msac->dif,
                 d->msac->cnt, pc[0], pc[8]);

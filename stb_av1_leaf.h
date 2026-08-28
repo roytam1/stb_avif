@@ -451,11 +451,14 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
 skip = stb_av1_msac_bool_adapt(
     msac, cdf->coef + stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2);
 #ifdef STB_DBG_TRACE
-    if (!_quiet && stb_dbg_blknum <= 200000)
-        fprintf(stderr, "TCFSKIP pl=%d tx=%d x=%d y=%d sctx=%d "
-                        "pre=%u post=%u dif=%016llx cnt=%d sym=%u\n",
-                chroma, tx, x4, y4, sctx, stb_dbg_pre, msac->rng,
-                (unsigned long long)msac->dif, msac->cnt, skip);
+    if (stb_dbg_blknum <= 200000) {
+        if (!_cfp_coef) _cfp_coef = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_coef_dump.txt", "w");
+        if (_cfp_coef) {
+            fprintf(_cfp_coef, "CSK pl=%d tx=%d x=%d y=%d sctx=%d pre=%u post=%u skip=%u\n",
+                    chroma, tx, x4, y4, sctx, stb_dbg_pre, msac->rng, skip);
+            fflush(_cfp_coef);
+        }
+    }
 #endif
     if (!skip) {
         max = stbv_av1_tx_dims[tx].max;
