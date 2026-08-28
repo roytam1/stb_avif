@@ -17,10 +17,10 @@
 #endif
 
 /* Restoration types (AV1 spec Table 6.16) */
-#define STBV_AV1_RESTORATION_NONE     0
-#define STBV_AV1_RESTORATION_WIENER   1
-#define STBV_AV1_RESTORATION_SGRPROJ  2
-#define STBV_AV1_RESTORATION_SWITCHABLE 3
+#define STBV_AV1_RESTORATION_NONE       0
+#define STBV_AV1_RESTORATION_SWITCHABLE 1
+#define STBV_AV1_RESTORATION_WIENER     2
+#define STBV_AV1_RESTORATION_SGRPROJ    3
 
 static const unsigned short stbv_av1_sgr_params[16][2] = {
     { 140, 3236 }, { 112, 2158 }, {  93, 1618 }, {  80, 1438 },
@@ -48,9 +48,21 @@ static void stb_av1_read_restoration_info(struct stb_av1_msac *msac,
         int filter = (int)stb_av1_msac_symbol(msac, cdf->restore_switchable, 2);
         lr_type = filter + (filter != 0); /* NONE=0, WIENER=1, SGRPROJ=2 */
     } else {
-        int has_filter = (int)stb_av1_msac_bool_adapt(msac,
-            frame_type == STBV_AV1_RESTORATION_WIENER ?
-            cdf->restore_wiener : cdf->restore_sgrproj);
+        stbv_u16 *cdf_ptr = frame_type == STBV_AV1_RESTORATION_WIENER ?
+            cdf->restore_wiener : cdf->restore_sgrproj;
+        int has_filter;
+#ifdef STBV_AV1_PART_TRACE
+        if (plane == 0)
+            fprintf(stderr, "LR_BOOL_DECIDE p=%d ft=%d cdf0=%u cdf1=%u rng=%u cnt=%d d=%016llx\n",
+                    plane, (int)frame_type, (unsigned)cdf_ptr[0], (unsigned)cdf_ptr[1],
+                    msac->rng, msac->cnt, (unsigned long long)msac->dif);
+#endif
+        has_filter = (int)stb_av1_msac_bool_adapt(msac, cdf_ptr);
+#ifdef STBV_AV1_PART_TRACE
+        if (plane == 0)
+            fprintf(stderr, "LR_BOOL_RESULT p=%d has_filter=%d rng=%u cnt=%d\n",
+                    plane, has_filter, msac->rng, msac->cnt);
+#endif
         lr_type = has_filter ? (int)frame_type : STBV_AV1_RESTORATION_NONE;
     }
 
@@ -222,7 +234,7 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
                 restore_planes |= 4U;
             lr_unit_size_log2[0] = frame->restoration.unit_size[0];
             lr_unit_size_log2[1] = frame->restoration.unit_size[1];
-#ifdef STB_DBG_TRACE
+#ifdef STBV_AV1_PART_TRACE
             fprintf(stderr, "LR_INIT restore_planes=%u type[%u,%u,%u] unit_sz_log2=[%u,%u]\n",
                     restore_planes,
                     frame->restoration.type[0], frame->restoration.type[1],
@@ -263,10 +275,17 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
                     if (y && y + half_unit > h_px) continue;
                     if (x & mask) continue;
                     if (x && x + half_unit > w_px) continue;
+#ifdef STBV_AV1_PART_TRACE
+                    if (bx == 0 && by == 0)
+                        fprintf(stderr, "LR_BEFORE p=%d frame_type=%d r=%u c=%d d=%016llx\n",
+                                p, (int)frame->restoration.type[p],
+                                td->msac.rng, td->msac.cnt,
+                                (unsigned long long)td->msac.dif);
+#endif
                     stb_av1_read_restoration_info(&td->msac, &td->cdf,
-                                                  &lr_ref[p], p,
-                                                  frame->restoration.type[p]);
-#ifdef STB_DBG_TRACE
+                                                   &lr_ref[p], p,
+                                                   frame->restoration.type[p]);
+#ifdef STBV_AV1_PART_TRACE
                     if (bx == 0 && by == 0)
                         fprintf(stderr, "LR_READ p=%d r=%u c=%d\n",
                                 p, td->msac.rng, td->msac.cnt);
