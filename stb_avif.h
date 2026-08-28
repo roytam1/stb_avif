@@ -405,6 +405,18 @@ struct stb_avif_avif_info {
     int av1c_size;
     int av1c_seen;
 
+    /* ipma / multi-av1C support */
+    int av1c_prop_idx[4];         /* 1-based property indices of av1C in ipco */
+    int av1c_prop_count;          /* number of av1C properties found */
+    unsigned char av1c_all_data[4][32]; /* raw av1C data for each property */
+    int av1c_all_size[4];         /* size of each av1C */
+    int primary_av1c_prop_idx;    /* resolved 1-based index for primary item */
+    /* ipma: up to 16 items, each with up to 8 property associations */
+    int ipma_item_count;
+    int ipma_item_ids[16];
+    int ipma_prop_count[16];
+    int ipma_prop_idx[16][8];     /* 1-based property indices per item */
+
     /* Compressed AV1 data */
     const unsigned char *av1_data;
     size_t av1_size;
@@ -791,18 +803,28 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                         stb_avif_read_box_header(r, &prop);
 
                         if (prop.type == STB_AVIF_BOX_AV1C) {
-                            /* FIXME: with alpha aux items there are TWO
-                             * av1C properties; the primary (color) item's
-                             * config must be selected via ipma+pitm. For
-                             * now keep the FIRST av1C seen: encoders list
-                             * the color item's properties before the
-                             * alpha aux item's. */
-                            if (!info->bit_depth || !info->av1c_seen) {
-                                stb_avif_parse_av1c(r, info, (size_t)prop.data_size);
-                                info->av1c_seen = 1;
-                            } else {
-                                r->pos = prop.data_start + prop.data_size;
+                            /* Record 1-based property index for ipma lookup.
+                             * Store raw av1C data; we'll select the right one
+                             * after ipma is parsed. */
+                            int idx = info->av1c_prop_count;
+                            if (idx < 4) {
+                                info->av1c_prop_idx[idx] = idx + 1;
+                                /* Parse av1C into temporary storage */
+                                {
+                                    size_t saved_pos = r->pos;
+                                    stb_avif_parse_av1c(r, info, (size_t)prop.data_size);
+                                    /* Copy the just-parsed av1C data to all_data[idx] */
+                                    if (info->av1c_size <= 32) {
+                                        int bi;
+                                        for (bi = 0; bi < info->av1c_size; bi++)
+                                            info->av1c_all_data[idx][bi] = info->av1c_data[bi];
+                                        info->av1c_all_size[idx] = info->av1c_size;
+                                    }
+                                    (void)saved_pos;
+                                }
                             }
+                            info->av1c_prop_count++;
+                            info->av1c_seen = 1;
                         }
                         else if (prop.type == STB_AVIF_BOX_ISPE) {
                             /* Image spatial extents */
@@ -826,8 +848,79 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                         r->pos = (size_t)(prop_start + prop.size);
                     }
                 }
+                else if (iprp_sub.type == STB_AVIF_BOX_IPMA) {
+                    /* Item Property Association box: maps item IDs to property indices.
+                     * Format: version(1) + flags(3) + entry_count(4)
+                     *   each entry: item_ID(16|32) + association_count(8)
+                     *     per assoc: property_index(16, 1-based, high bit = essential) */
+                    struct stb_avif_box ipma_box = iprp_sub;
+                    stb_avif_enter_box(r, &ipma_box);
+                    {
+                        int ipma_version = stb_avif_read_byte(r);
+                        stb_avif_read_byte(r); stb_avif_read_byte(r); stb_avif_read_byte(r);
+                        {
+                            stbv_u32 entry_count = stb_avif_read_be32(r);
+                            stbv_u32 ei;
+                            info->ipma_item_count = 0;
+                            for (ei = 0; ei < entry_count && ei < 16; ei++) {
+                                int item_id, acnt, ai;
+                                if (ipma_version == 0)
+                                    item_id = (int)stb_avif_read_be16(r);
+                                else
+                                    item_id = (int)stb_avif_read_be32(r);
+                                acnt = (int)stb_avif_read_byte(r);
+                                info->ipma_item_ids[info->ipma_item_count] = item_id;
+                                info->ipma_prop_count[info->ipma_item_count] = 0;
+                                for (ai = 0; ai < acnt && ai < 8; ai++) {
+                                    int prop_idx = (int)stb_avif_read_be16(r);
+                                    /* bit 15 = essential flag; property_index is bits 14..0 */
+                                    prop_idx &= 0x7fff;
+                                    if (info->ipma_prop_count[info->ipma_item_count] < 8)
+                                        info->ipma_prop_idx[info->ipma_item_count][info->ipma_prop_count[info->ipma_item_count]++] = prop_idx;
+                                }
+                                info->ipma_item_count++;
+                            }
+                        }
+                    }
+                }
 
                 r->pos = (size_t)(iprp_sub_start + iprp_sub.size);
+            }
+        }
+
+        /* Resolve the correct av1C for the primary item using ipma.
+         * ipma maps item_ID -> property indices (1-based) into ipco.
+         * Find the primary item's av1C property index, then select it. */
+        if (info->primary_item_id > 0 && info->av1c_prop_count > 1) {
+            int pi, ai2;
+            for (pi = 0; pi < info->ipma_item_count; pi++) {
+                if (info->ipma_item_ids[pi] == info->primary_item_id) {
+                    for (ai2 = 0; ai2 < info->ipma_prop_count[pi]; ai2++) {
+                        int pidx = info->ipma_prop_idx[pi][ai2];
+                        int k;
+                        for (k = 0; k < info->av1c_prop_count; k++) {
+                            if (info->av1c_prop_idx[k] == pidx) {
+                                /* Found the primary item's av1C. Copy raw data
+                                 * and re-parse to set all info fields correctly. */
+                                int bi;
+                                info->av1c_size = info->av1c_all_size[k];
+                                for (bi = 0; bi < info->av1c_size; bi++)
+                                    info->av1c_data[bi] = info->av1c_all_data[k][bi];
+                                info->primary_av1c_prop_idx = pidx;
+                                /* Re-parse from stored data to set bit_depth etc. */
+                                {
+                                    struct stb_avif_reader tmp_r;
+                                    stb_avif_reader_init(&tmp_r, info->av1c_all_data[k],
+                                                         (size_t)info->av1c_all_size[k]);
+                                    stb_avif_parse_av1c(&tmp_r, info, (size_t)info->av1c_all_size[k]);
+                                }
+                                break;
+                            }
+                        }
+                        if (info->primary_av1c_prop_idx) break;
+                    }
+                    break;
+                }
             }
         }
 
