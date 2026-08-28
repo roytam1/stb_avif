@@ -133,6 +133,9 @@ int main(int argc, char *argv[])
     /* Default file list */
     const char *files[] = {
 "example_avif/app-icon.avif",
+"example_avif/avif-yuv444p.avif",
+"example_avif/avif-yuv444p10le.avif",
+"example_avif/avif-yuv444p12le.avif",
 "example_avif/fox.profile0.10bpc.yuv420.avif",
 "example_avif/fox.profile0.8bpc.yuv420.avif",
 "example_avif/fox.profile1.8bpc.yuv444.avif",
