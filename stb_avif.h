@@ -408,8 +408,12 @@ struct stb_avif_avif_info {
     /* ipma / multi-av1C support */
     int av1c_prop_idx[4];         /* 1-based property indices of av1C in ipco */
     int av1c_prop_count;          /* number of av1C properties found */
-    unsigned char av1c_all_data[4][32]; /* raw av1C data for each property */
-    int av1c_all_size[4];         /* size of each av1C */
+    unsigned char av1c_all_data[4][32]; /* raw av1C OBU payload for each property */
+    int av1c_all_size[4];         /* size of each av1C OBU payload */
+    int av1c_all_bd[4];           /* bit_depth per av1C */
+    int av1c_all_ssx[4];          /* chroma_subsampling_x per av1C */
+    int av1c_all_ssy[4];          /* chroma_subsampling_y per av1C */
+    int av1c_all_mono[4];         /* monochrome per av1C */
     int primary_av1c_prop_idx;    /* resolved 1-based index for primary item */
     /* ipma: up to 16 items, each with up to 8 property associations */
     int ipma_item_count;
@@ -820,6 +824,11 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                                             info->av1c_all_data[idx][bi] = info->av1c_data[bi];
                                         info->av1c_all_size[idx] = info->av1c_size;
                                     }
+                                    /* Cache parsed properties for this av1C */
+                                    info->av1c_all_bd[idx] = info->bit_depth;
+                                    info->av1c_all_ssx[idx] = info->chroma_subsampling_x;
+                                    info->av1c_all_ssy[idx] = info->chroma_subsampling_y;
+                                    info->av1c_all_mono[idx] = info->monochrome;
                                     (void)saved_pos;
                                 }
                             }
@@ -900,20 +909,17 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                         int k;
                         for (k = 0; k < info->av1c_prop_count; k++) {
                             if (info->av1c_prop_idx[k] == pidx) {
-                                /* Found the primary item's av1C. Copy raw data
-                                 * and re-parse to set all info fields correctly. */
+                                /* Found the primary item's av1C. Copy cached
+                                 * properties directly instead of re-parsing. */
                                 int bi;
                                 info->av1c_size = info->av1c_all_size[k];
                                 for (bi = 0; bi < info->av1c_size; bi++)
                                     info->av1c_data[bi] = info->av1c_all_data[k][bi];
                                 info->primary_av1c_prop_idx = pidx;
-                                /* Re-parse from stored data to set bit_depth etc. */
-                                {
-                                    struct stb_avif_reader tmp_r;
-                                    stb_avif_reader_init(&tmp_r, info->av1c_all_data[k],
-                                                         (size_t)info->av1c_all_size[k]);
-                                    stb_avif_parse_av1c(&tmp_r, info, (size_t)info->av1c_all_size[k]);
-                                }
+                                info->bit_depth = info->av1c_all_bd[k];
+                                info->chroma_subsampling_x = info->av1c_all_ssx[k];
+                                info->chroma_subsampling_y = info->av1c_all_ssy[k];
+                                info->monochrome = info->av1c_all_mono[k];
                                 break;
                             }
                         }
@@ -3571,8 +3577,6 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
 
     memset(&stream, 0, sizeof(stream));
     r = stb_av1_parse_internal_stream(&stream, av1_data, av1_size);
-    fprintf(stderr, "DECODE_FRAME: parse_stream r=%d have_seq=%d have_frame=%d tile_data=%p tile_size=%zu\n",
-            r, stream.have_seq, stream.have_frame, (void*)stream.tile_data, stream.tile_size);
 #ifdef STB_DBG_TRACE
     fprintf(stderr, "LF y0=%d y1=%d u=%d v=%d dltlf=%d\n",
         (int)stream.frame.loopfilter.level_y[0], (int)stream.frame.loopfilter.level_y[1],
@@ -3586,8 +3590,6 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
 #endif
     if (r < 0 || !stream.have_seq || !stream.have_frame)
         return -1;
-    fprintf(stderr, "DECODE_FRAME: frame_w0=%d frame_h=%d tc_w=%d tc_h=%d\n",
-            stream.frame.width[0], stream.frame.height, tc->frame_width, tc->frame_height);
     if ((int)stream.frame.width[0] != tc->frame_width ||
         (int)stream.frame.height != tc->frame_height)
         return -2;
