@@ -140,6 +140,7 @@ const char *stb_avif_failure_reason(void);
 #include "stb_av1_ipred.h"
 #include "stb_av1_leaf.h"
 #include "stb_av1_deblock.h"
+#include "stb_av1_cdef.h"
 #endif
 
 
@@ -3564,6 +3565,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     stbv_u32 *lf_blkid_map = 0, *lf_blkid_map_c = 0;
     stbv_u8 *lf_txlw_map = 0, *lf_txlw_map_c = 0;
     stbv_u8 *lf_done_map = 0;
+    int *cdef_idx_grid = 0;
+    int cdef_grid_stride = 0;
     int bw8al, bh8al;
     stbv_u8 *above_cre0 = 0, *above_cre1 = 0, *left_cre0 = 0, *left_cre1 = 0;
     stbv_u8 *above_skip = 0, *left_skip = 0, *above_pal_sz = 0;
@@ -3735,6 +3738,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     arrays.above_seg_id = above_seg_id; arrays.above_seg_id_n = frame_w4;
     arrays.left_seg_id = left_seg_id; arrays.left_seg_id_n = frame_h4;
     stbv_av1_leaf_state_init(&state, &arrays);
+    state.cdef_idx_grid = NULL;
+    state.cdef_grid_stride = 0;
     stb_av1_intra_state_set_uv(&state.intra, above_uvmode,
                                stream.seq.ss_hor ? ((frame_w4 + 1) >> 1)
                                                   : frame_w4,
@@ -3769,6 +3774,26 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
             !lf_blkid_map_c || !lf_txlw_map_c || !lf_done_map) { r = -5; goto oom16; }
         memset(lf_blkid_map_c, 0xFF, (size_t)mw * mh * sizeof(stbv_u32));
     }
+    /* CDEF index grid: one entry per 64x64 block. */
+    if (stream.seq.cdef) {
+        cdef_grid_stride = (frame_w4 + 15) / 16;
+        {
+            int cdef_grid_rows = (frame_h4 + 15) / 16;
+            cdef_idx_grid = (int*)stb_avif_calloc(
+                (size_t)cdef_grid_stride * cdef_grid_rows, sizeof(int));
+            if (!cdef_idx_grid) { r = -5; goto oom16; }
+            /* Initialize to -1 (no CDEF / skip). */
+            {
+                int gi;
+                int cdef_grid_total = cdef_grid_stride * cdef_grid_rows;
+                for (gi = 0; gi < cdef_grid_total; gi++)
+                    cdef_idx_grid[gi] = -1;
+            }
+        }
+    }
+    /* Wire the CDEF grid into the leaf state (after allocation). */
+    state.cdef_idx_grid = cdef_idx_grid;
+    state.cdef_grid_stride = cdef_grid_stride;
     memset(&recon, 0, sizeof(recon));
     recon.lf_blkid = lf_blkid_map;
     recon.lf_txlw = lf_txlw_map;
@@ -3885,6 +3910,28 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         }
     }
 #endif
+
+    /* CDEF filtering (after deblocking, before loop restoration). */
+    if (!r && stream.seq.cdef && cdef_idx_grid) {
+        const struct stb_av1_framehdr *fh = &stream.frame;
+        int y_pri_arr[8], y_sec_arr[8], uv_pri_arr[8], uv_sec_arr[8];
+        int ci;
+        for (ci = 0; ci < (1 << fh->cdef.n_bits); ci++) {
+            y_pri_arr[ci] = (int)(fh->cdef.y_strength[ci] >> 2);
+            y_sec_arr[ci] = (int)(fh->cdef.y_strength[ci] & 3);
+            uv_pri_arr[ci] = (int)(fh->cdef.uv_strength[ci] >> 2);
+            uv_sec_arr[ci] = (int)(fh->cdef.uv_strength[ci] & 3);
+        }
+        stb_av1_cdef_frame(py16, pu16, pv16,
+                           tc->stride_y, tc->stride_u, tc->stride_v,
+                           tc->frame_width, tc->frame_height,
+                           recon.ss_hor, recon.ss_ver,
+                           recon.bit_depth,
+                           cdef_idx_grid, cdef_grid_stride,
+                           y_pri_arr, y_sec_arr,
+                           uv_pri_arr, uv_sec_arr,
+                           (int)fh->cdef.damping);
+    }
 
     /* Convert internal u16 planes to the caller's 8-bit planes. */
 #ifdef STB_DBG_TRACE
@@ -4092,6 +4139,10 @@ oom16:
     stb_avif_free_internal(left_uvmode); stb_avif_free_internal(left_pal_uv);
     stb_avif_free_internal(above_pal0); stb_avif_free_internal(above_pal1);
     stb_avif_free_internal(left_pal0); stb_avif_free_internal(left_pal1);
+    stb_avif_free_internal(cdef_idx_grid);
+    stb_avif_free_internal(lf_blkid_map); stb_avif_free_internal(lf_blkid_map_c);
+    stb_avif_free_internal(lf_txlw_map); stb_avif_free_internal(lf_txlw_map_c);
+    stb_avif_free_internal(lf_done_map);
     (void)r;
     return 0;
 }

@@ -274,6 +274,9 @@ typedef struct stbv_av1_leaf_state {
     stbv_u8 *left_seg_id;
     unsigned int above_seg_id_n;
     unsigned int left_seg_id_n;
+    /* CDEF index output grid (per-64x64 block) */
+    int *cdef_idx_grid;
+    int cdef_grid_stride;
 } stbv_av1_leaf_state;
 
 static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
@@ -1195,16 +1198,33 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
         idx = seq && seq->sb128 ? ((bx4 & 16) >> 4) + ((by4 & 16) >> 3) : 0;
         if (!block_skip && state->cdef_idx[idx] == -1) {
             int v;
-#ifdef STB_DBG_TRACE
-            if (stb_dbg_blknum <= 200000)
-                fprintf(stderr, "CDEFDECODE x=%d y=%d idx=%d rng_before=%u n_bits=%u\n",
-                        bx4, by4, idx, (unsigned)msac->rng, frame->cdef.n_bits);
-#endif
             v = stb_av1_msac_bools(msac, frame->cdef.n_bits);
             state->cdef_idx[idx] = v;
             if (bw4 > 16) state->cdef_idx[idx + 1] = v;
             if (bh4 > 16) state->cdef_idx[idx + 2] = v;
             if (bw4 == 32 && bh4 == 32) state->cdef_idx[idx + 3] = v;
+            /* Write to cdef_idx output grid for post-decode CDEF filtering. */
+            if (state->cdef_idx_grid && state->cdef_grid_stride > 0) {
+                int gx = sbx / 16 + (idx & 1);
+                int gy = sby / 16 + (idx >> 1);
+                if (gx >= 0 && gx < state->cdef_grid_stride &&
+                    gy >= 0)
+                    state->cdef_idx_grid[gy * state->cdef_grid_stride + gx] = v;
+            }
+        }
+        /* Also write cdef_idx for skipped blocks - use 0 as default. */
+        if (block_skip && state->cdef_idx[idx] == -1) {
+            state->cdef_idx[idx] = 0;
+            if (bw4 > 16) state->cdef_idx[idx + 1] = 0;
+            if (bh4 > 16) state->cdef_idx[idx + 2] = 0;
+            if (bw4 == 32 && bh4 == 32) state->cdef_idx[idx + 3] = 0;
+            if (state->cdef_idx_grid && state->cdef_grid_stride > 0) {
+                int gx = sbx / 16 + (idx & 1);
+                int gy = sby / 16 + (idx >> 1);
+                if (gx >= 0 && gx < state->cdef_grid_stride &&
+                    gy >= 0)
+                    state->cdef_idx_grid[gy * state->cdef_grid_stride + gx] = 0;
+            }
         }
     }
 
