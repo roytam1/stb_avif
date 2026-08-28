@@ -17,6 +17,26 @@
 #ifndef STB_AV1_STATE_H
 #error "include stb_av1_state.h first"
 #endif
+
+/* neg_deinterleave: decode segment ID diff (dav1d decode.c) */
+static int stb_neg_deinterleave(int diff, int ref, int max)
+{
+    if (!ref) return diff;
+    if (ref >= (max - 1)) return max - diff - 1;
+    if (2 * ref < max) {
+        if (diff <= 2 * ref) {
+            if (diff & 1) return ref + ((diff + 1) >> 1);
+            else return ref - (diff >> 1);
+        }
+        return diff;
+    } else {
+        if (diff <= 2 * (max - ref - 1)) {
+            if (diff & 1) return ref + ((diff + 1) >> 1);
+            else return ref - (diff >> 1);
+        }
+        return max - (diff + 1);
+    }
+}
 #ifndef STB_AV1_COEF_H
 #error "include stb_av1_coef.h first"
 #endif
@@ -207,6 +227,11 @@ typedef struct stbv_av1_leaf_state_arrays {
     unsigned int above_pal_n;
     stbv_u16 *left_pal[2];
     unsigned int left_pal_n;
+    /* segment id context */
+    stbv_u8 *above_seg_id;
+    unsigned int above_seg_id_n;
+    stbv_u8 *left_seg_id;
+    unsigned int left_seg_id_n;
 } stbv_av1_leaf_state_arrays;
 
 typedef struct stbv_av1_leaf_state {
@@ -244,6 +269,11 @@ typedef struct stbv_av1_leaf_state {
     stbv_u8 pal_ctxs[64];
     int pal_sz_y;
     int pal_sz_uv;
+    /* segment id context */
+    stbv_u8 *above_seg_id;
+    stbv_u8 *left_seg_id;
+    unsigned int above_seg_id_n;
+    unsigned int left_seg_id_n;
 } stbv_av1_leaf_state;
 
 static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
@@ -292,6 +322,10 @@ static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
     s->left_pal[1] = a->left_pal[1];
     s->above_pal_n = a->above_pal_n;
     s->left_pal_n = a->left_pal_n;
+    s->above_seg_id = a->above_seg_id;
+    s->left_seg_id = a->left_seg_id;
+    s->above_seg_id_n = a->above_seg_id_n;
+    s->left_seg_id_n = a->left_seg_id_n;
     if (a->above_pal_sz) memset(a->above_pal_sz, 0, a->above_pal_sz_n);
     if (a->left_pal_sz) memset(a->left_pal_sz, 0, a->left_pal_sz_n);
     if (a->above_pal_uv) memset(a->above_pal_uv, 0, a->above_pal_uv_n);
@@ -309,6 +343,7 @@ static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
     s->cdef_idx[2] = s->cdef_idx[3] = -1;
     if (a->above_skip) memset(a->above_skip, 0, a->above_skip_n);
     if (a->left_skip) memset(a->left_skip, 0, a->left_skip_n);
+    if (a->above_seg_id) memset(a->above_seg_id, 0, a->above_seg_id_n);
 }
 
 /* dav1d reset_context() resets only the LEFT contexts at the start of each
@@ -323,6 +358,7 @@ static void stbv_av1_leaf_state_reset_row(stbv_av1_leaf_state *s)
     for (pl = 0; pl < 2; pl++)
         if (s->cres[pl].left) memset(s->cres[pl].left, 0x40, s->cres[pl].left_n);
     if (s->left_skip) memset(s->left_skip, 0, s->left_skip_n);
+    if (s->left_seg_id) memset(s->left_seg_id, 0, s->left_seg_id_n);
     if (s->intra.left_mode)
         memset(s->intra.left_mode, STBV_AV1_INTRA_DC,
                (size_t)s->intra.left_count);
@@ -986,7 +1022,8 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     int cbw4_unc, cbh4_unc;
     int lossless, qidx;
     int y_mode_nofilt, i;
-    unsigned block_skip;
+    int seg_id = 0, seg_pred = 0;
+    unsigned block_skip = 0;
     unsigned int n;
 #ifdef STB_DBG_TRACE
     {
@@ -1025,7 +1062,7 @@ c.recon = recon;
     ss_ver = layout == STB_AV1_LAYOUT_I420;
     sb_step = (seq && seq->sb128) ? 32 : 16;
     lossless = frame ? (int)frame->segmentation.lossless[0] : 0;
-    qidx = frame ? (int)frame->segmentation.qidx[0] : 0;
+    qidx = frame ? (int)frame->segmentation.qidx[seg_id] : 0;
     /* dav1d gates chroma presence on the UNCLIPPED block dims, then clips
      * the coefficient grids to the padded frame area ((w+7)&~7)>>2. */
     has_chroma = layout != STB_AV1_LAYOUT_I400 &&
@@ -1055,10 +1092,56 @@ c.recon = recon;
     cbw4 = (bw4 + ss_hor) >> ss_hor;
     cbh4 = (bh4 + ss_ver) >> ss_ver;
 
-    /* Segment ids are not implemented; no coded bitstream in the sample set
-     * uses them (steam: segmentation disabled). */
-    if (frame && frame->segmentation.enabled && frame->segmentation.update_map)
-        return -5;
+    /* Segment ID decoding (dav1d decode_b segment_id section). */
+    seg_id = 0;
+    seg_pred = 0;
+    if (frame && frame->segmentation.enabled && frame->segmentation.update_map) {
+        int have_top = (state->above_seg_id && (unsigned)bx4 < state->above_seg_id_n);
+        int have_left = (state->left_seg_id && (unsigned)by4 < state->left_seg_id_n);
+        if (frame->segmentation.preskip) {
+            /* preskip: decode segment_id before skip */
+            if (!frame->segmentation.temporal) {
+                /* Spatial prediction: get predicted seg_id from neighbours */
+                int seg_ctx = 0;
+                unsigned pred_seg_id = 0;
+                if (have_left && have_top) {
+                    int l = state->left_seg_id[by4];
+                    int a = state->above_seg_id[bx4];
+                    int al = (bx4 > 0 && by4 > 0) ? state->above_seg_id[bx4 - 1] : a;
+                    if (l == a && al == l) seg_ctx = 2;
+                    else if (l == a || al == l || a == al) seg_ctx = 1;
+                    else seg_ctx = 0;
+                    pred_seg_id = (unsigned)(a == al ? a : l);
+                } else {
+                    pred_seg_id = have_left ? (unsigned)state->left_seg_id[by4] :
+                                  have_top ? (unsigned)state->above_seg_id[bx4] : 0;
+                }
+                if (block_skip) {
+                    seg_id = (int)pred_seg_id;
+                } else {
+                    unsigned diff = (unsigned)stb_av1_msac_symbol(msac,
+                        cdf->seg_id + seg_ctx * 8, 7);
+                    int last_active = frame->segmentation.last_active_segid;
+                    seg_id = stb_neg_deinterleave((int)diff, (int)pred_seg_id,
+                                              last_active + 1);
+                    if (seg_id > last_active) seg_id = 0;
+                }
+                if (seg_id < 0 || seg_id >= 8) seg_id = 0;
+            }
+        }
+        /* Apply per-segment features: skip */
+        if (frame->segmentation.d[seg_id].skip)
+            block_skip = 1;
+        /* Store segment_id in context arrays */
+        if (state->above_seg_id && (unsigned)bx4 < state->above_seg_id_n) {
+            for (i = 0; i < bw4_unc && (unsigned)(bx4 + i) < state->above_seg_id_n; i++)
+                state->above_seg_id[bx4 + i] = (stbv_u8)seg_id;
+        }
+        if (state->left_seg_id && (unsigned)by4 < state->left_seg_id_n) {
+            for (i = 0; i < bh4_unc && (unsigned)(by4 + i) < state->left_seg_id_n; i++)
+                state->left_seg_id[by4 + i] = (stbv_u8)seg_id;
+        }
+    }
 
     /* Block-level skip, decoded before intra modes (dav1d decode_b). */
     {

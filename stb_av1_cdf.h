@@ -179,6 +179,17 @@ static const stbv_u16 stb_av1_cdf_skip[6] = {
     31671, 0, 16515, 0, 4576, 0,
 };
 
+/* dav1d default seg_id CDF: 3 contexts x 8 entries each (7 symbols + count) */
+static const stbv_u16 stb_av1_cdf_seg_id[24] = {
+    5622, 7893, 16093, 18233, 27809, 28373, 32533, 0,
+    14274, 18230, 22557, 24935, 29980, 30851, 32344, 0,
+    27527, 28487, 28723, 28890, 32397, 32647, 32679, 0,
+};
+/* dav1d default seg_pred CDF: 4 contexts x 2 entries each (1 symbol + count) */
+static const stbv_u16 stb_av1_cdf_seg_pred[8] = {
+    16384, 0, 16384, 0, 16384, 0, 16384, 0,
+};
+
 static const stbv_u16 stb_av1_cdf_cfl_sign[8] = {
     1418, 2123, 13340, 18405, 26972, 28343, 32294, 0,
 };
@@ -1564,6 +1575,8 @@ typedef struct stbv_av1_cdf {
     stbv_u16 pal_sz[112];
     stbv_u16 color_map[560];
     stbv_u16 coef[3050];
+    stbv_u16 seg_id[24]; /* 3 contexts x 8 symbols each */
+    stbv_u16 seg_pred[8];
 } stbv_av1_cdf;
 
 #define STBV_AV1_COEF_SKIP_OFF       0
@@ -1677,6 +1690,10 @@ static void stbv_av1_cdf_init(stbv_av1_cdf *c, unsigned qcat)
             c->color_map[g * 8 + i] =
                 (stbv_u16)(32768U - stb_av1_cdf_color_map[g * 8 + i]);
     }
+    memcpy(c->seg_id, stb_av1_cdf_seg_id, sizeof(c->seg_id));
+    stbv_av1_cdf_inv(c->seg_id, stb_av1_cdf_seg_id, 3, 8, 7);
+    memcpy(c->seg_pred, stb_av1_cdf_seg_pred, sizeof(c->seg_pred));
+    stbv_av1_cdf_inv(c->seg_pred, stb_av1_cdf_seg_pred, 4, 2, 1);
     if (qcat > 3) qcat = 3;
     switch (qcat) {
     case 0: stbv_av1_cdf_copy_coef(c->coef, 0); break;

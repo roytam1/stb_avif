@@ -3565,6 +3565,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     stbv_u8 *above_uvmode = 0, *left_uvmode = 0;
     stbv_u16 *above_pal0 = 0, *above_pal1 = 0, *left_pal0 = 0, *left_pal1 = 0;
     stbv_u16 *py16 = 0, *pu16 = 0, *pv16 = 0;
+    stbv_u8 *above_seg_id = 0, *left_seg_id = 0;
     int cframe_w8 = 0, cframe_h8 = 0;
     int i, j, h2, w2;
 
@@ -3677,11 +3678,13 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     above_pal1 = (stbv_u16*)stb_avif_calloc(frame_w4*8, 2);
     left_pal0 = (stbv_u16*)stb_avif_calloc(frame_h4*8, 2);
     left_pal1 = (stbv_u16*)stb_avif_calloc(frame_h4*8, 2);
+    above_seg_id = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
+    left_seg_id = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
     if (!above_mode || !left_mode || !above_tx || !left_tx || !above_res ||
         !left_res || !above_cre0 || !above_cre1 || !left_cre0 || !left_cre1 ||
         !above_skip || !left_skip || !above_pal_sz || !left_pal_sz ||
         !above_pal_uv || !left_pal_uv || !above_pal0 || !above_pal1 ||
-        !left_pal0 || !left_pal1)
+        !left_pal0 || !left_pal1 || !above_seg_id || !left_seg_id)
         return -4;
     memset(&arrays, 0, sizeof(arrays));
     arrays.above_mode = above_mode; arrays.above_mode_n = frame_w4;
@@ -3727,6 +3730,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     arrays.above_pal[0] = above_pal0; arrays.above_pal[1] = above_pal1;
     arrays.left_pal[0] = left_pal0; arrays.left_pal[1] = left_pal1;
     arrays.above_pal_n = frame_w4; arrays.left_pal_n = frame_h4;
+    arrays.above_seg_id = above_seg_id; arrays.above_seg_id_n = frame_w4;
+    arrays.left_seg_id = left_seg_id; arrays.left_seg_id_n = frame_h4;
     stbv_av1_leaf_state_init(&state, &arrays);
     stb_av1_intra_state_set_uv(&state.intra, above_uvmode,
                                stream.seq.ss_hor ? ((frame_w4 + 1) >> 1)
@@ -4069,6 +4074,7 @@ oom16:
     stb_avif_free_internal(above_cre0); stb_avif_free_internal(above_cre1);
     stb_avif_free_internal(left_cre0); stb_avif_free_internal(left_cre1);
     stb_avif_free_internal(above_skip); stb_avif_free_internal(left_skip);
+    stb_avif_free_internal(above_seg_id); stb_avif_free_internal(left_seg_id);
     stb_avif_free_internal(above_pal_sz); stb_avif_free_internal(left_pal_sz);
     stb_avif_free_internal(above_pal_uv);
     stb_avif_free_internal(above_uvmode);
