@@ -3830,6 +3830,15 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
             recon.tile_h4 = (int)((stream.frame.tiling.row_start_sb[tr + 1] -
                                    stream.frame.tiling.row_start_sb[tr]) * (sb_size >> 2));
             stbv_av1_leaf_state_init(&state, &arrays);
+            /* leaf_state_init NULLs above/left_uvmode via intra_state_init;
+             * re-establish them so chroma intra mode decode has proper
+             * above/left contexts for each tile (tiles are independent). */
+            stb_av1_intra_state_set_uv(&state.intra, above_uvmode,
+                                       stream.seq.ss_hor ? ((frame_w4 + 1) >> 1)
+                                                          : frame_w4,
+                                       left_uvmode,
+                                       stream.seq.ss_ver ? ((frame_h4 + 1) >> 1)
+                                                          : frame_h4);
             /* Recon callbacks point at g_scalar_recon, so publish the
              * current tile's bounds before decoding its first leaf. */
             g_scalar_recon = recon;
