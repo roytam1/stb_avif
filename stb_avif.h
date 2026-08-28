@@ -4564,7 +4564,7 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
             FILE *fp = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/primary_y.raw", "wb");
             FILE *fu = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/primary_u.raw", "wb");
             FILE *fv = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/primary_v.raw", "wb");
-            FILE *fl = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/plndump_log.txt", "a");
+            FILE *fl = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/plndump_log.txt", "w");
             int uv_rows = (tc.frame_height + 1) >> 1;
             if (fp) { fwrite(tc.plane_y, 1, (size_t)tc.stride_y * tc.frame_height, fp); fclose(fp); }
             if (fu) { fwrite(tc.plane_u, 1, (size_t)tc.stride_u * uv_rows, fu); fclose(fu); }

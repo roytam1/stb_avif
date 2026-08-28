@@ -420,6 +420,10 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
                                   int bw4, int bh4,
                                   stbv_av1_leaf_tx_result *out)
 {
+#ifdef STB_DBG_TRACE
+    static FILE *_cfp_coef = NULL;
+    static FILE *_cfbf = NULL;
+#endif
     const int _quiet = !getenv("ROWDUMP");
     int txw4 = stbv_av1_tx_dims[tx].w;
     int txh4 = stbv_av1_tx_dims[tx].h;
@@ -503,12 +507,11 @@ skip = stb_av1_msac_bool_adapt(
         }
 #ifdef STB_DBG_TRACE
         if (stb_dbg_blknum <= 200000) {
-            static FILE *_cfp = NULL;
-            if (!_cfp) _cfp = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_coef_dump.txt", "a");
-            if (_cfp) {
-                fprintf(_cfp, "CF pl=%d bx4=%d by4=%d tx=%d eob=-1 post=%u cf=\n",
+            if (!_cfp_coef) _cfp_coef = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_coef_dump.txt", "w");
+            if (_cfp_coef) {
+                fprintf(_cfp_coef, "CF pl=%d bx4=%d by4=%d tx=%d eob=-1 post=%u cf=\n",
                         chroma, x4, y4, tx, (unsigned)msac->rng);
-                fflush(_cfp);
+                fflush(_cfp_coef);
             }
         }
 #endif
@@ -630,19 +633,18 @@ skip = stb_av1_msac_bool_adapt(
                                     &res_ctx);
 #ifdef STB_DBG_TRACE
             if (stb_dbg_blknum <= 200000) {
-                static FILE *_cfp = NULL;
-                if (!_cfp) _cfp = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_coef_dump.txt", "a");
-                if (_cfp) {
+                if (!_cfp_coef) _cfp_coef = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_coef_dump.txt", "w");
+                if (_cfp_coef) {
                     int _n = stbv_av1_tx_dims[tx].w;
                     int _m = stbv_av1_tx_dims[tx].h;
                     int _i, _cnt = _n * _m;
                     if (_cnt > 16) _cnt = 16;
-                    fprintf(_cfp, "CF pl=%d bx4=%d by4=%d tx=%d eob=%d post=%u cf=",
+                    fprintf(_cfp_coef, "CF pl=%d bx4=%d by4=%d tx=%d eob=%d post=%u cf=",
                             chroma, x4, y4, tx, eob, (unsigned)msac->rng);
                     for (_i = 0; _i < _cnt; _i++)
-                        fprintf(_cfp, " %d", (int)cf[_i]);
-                    fprintf(_cfp, "\n");
-                    fflush(_cfp);
+                        fprintf(_cfp_coef, " %d", (int)cf[_i]);
+                    fprintf(_cfp_coef, "\n");
+                    fflush(_cfp_coef);
                 }
             }
 #endif
@@ -688,9 +690,8 @@ skip = stb_av1_msac_bool_adapt(
             out->eob = eob;
 #ifdef STB_DBG_TRACE
         {
-            static FILE *cfbf = NULL;
-            if (!cfbf) cfbf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/trace_blocks.txt", "a");
-            if (cfbf && !is_chroma && y4 < 32) {
+            if (!_cfbf) _cfbf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/trace_blocks.txt", "w");
+            if (_cfbf && !is_chroma && y4 < 32) {
                 const stbv_u16 *sc2;
                 int _n2, _i2;
                 switch (tx) {
@@ -701,12 +702,12 @@ skip = stb_av1_msac_bool_adapt(
                 case STBV_AV1_TX_64X64: sc2 = stbv_av1_scan_32x32; _n2 = 1024; break;
                 default:                sc2 = stbv_av1_scan_rect[tx]; _n2 = stbv_av1_tx_dims[tx].w * stbv_av1_tx_dims[tx].h * 16; break;
                 }
-                fprintf(cfbf, "TXB x=%d y=%d tx=%d txtp=%d eob=%d cf:", x4, y4, tx, txtp, eob);
+                fprintf(_cfbf, "TXB x=%d y=%d tx=%d txtp=%d eob=%d cf:", x4, y4, tx, txtp, eob);
                 for (_i2 = 0; _i2 < _n2 && _i2 <= eob && _i2 < 256; _i2++)
                     if (cf[sc2[_i2]])
-                        fprintf(cfbf, " [%d]=%d", _i2, (int)cf[sc2[_i2]]);
-                fprintf(cfbf, "\n");
-                fflush(cfbf);
+                        fprintf(_cfbf, " [%d]=%d", _i2, (int)cf[sc2[_i2]]);
+                fprintf(_cfbf, "\n");
+                fflush(_cfbf);
             }
         }
 #endif
@@ -1014,6 +1015,9 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                        stbv_av1_leaf_tx_result *out,
                                        const stbv_av1_leaf_recon *recon)
 {
+#ifdef STB_DBG_TRACE
+    static FILE *_imf = NULL;
+#endif
     struct stb_av1_intra_block intra;
     stbv_av1_leaf_decode_ctx c;
     int bw4, bh4, bw4_unc, bh4_unc, max_tx, uv_tx, tx0;
@@ -1304,16 +1308,15 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
 
 #ifdef STB_DBG_TRACE
     {
-        static FILE *imf = NULL;
-        if (!imf) imf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_intermediate.txt", "a");
-        if (imf && stb_dbg_blknum < 100000) {
+        if (!_imf) _imf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_intermediate.txt", "w");
+        if (_imf && stb_dbg_blknum < 100000) {
             int _lm = (state->intra.left_mode && (unsigned)by4 < state->intra.left_count)
                 ? state->intra.left_mode[by4] : -1;
             int _am = (state->intra.above_mode && (unsigned)bx4 < state->intra.above_count)
                 ? state->intra.above_mode[bx4] : -1;
-            fprintf(imf, "FILTPOST blknum=%d bx4=%d by4=%d rng=%u ymode=%d lmode=%d amode=%d\n",
+            fprintf(_imf, "FILTPOST blknum=%d bx4=%d by4=%d rng=%u ymode=%d lmode=%d amode=%d\n",
                     stb_dbg_blknum, bx4, by4, msac->rng, intra.y_mode, _lm, _am);
-            fflush(imf);
+            fflush(_imf);
         }
     }
 #endif
@@ -1390,16 +1393,15 @@ if (frame && frame->txfm_mode == 1 &&
 #endif
 #ifdef STB_DBG_TRACE
     {
-        static FILE *imf = NULL;
-        if (!imf) imf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_intermediate.txt", "a");
-        if (imf && stb_dbg_blknum < 100000) {
+        if (!_imf) _imf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_intermediate.txt", "w");
+        if (_imf && stb_dbg_blknum < 100000) {
             int _lm = (state->intra.left_mode && (unsigned)by4 < state->intra.left_count)
                 ? state->intra.left_mode[by4] : -1;
             int _am = (state->intra.above_mode && (unsigned)bx4 < state->intra.above_count)
                 ? state->intra.above_mode[bx4] : -1;
-            fprintf(imf, "TXPOST blknum=%d bx4=%d by4=%d rng=%u tx=%d lmode=%d amode=%d\n",
+            fprintf(_imf, "TXPOST blknum=%d bx4=%d by4=%d rng=%u tx=%d lmode=%d amode=%d\n",
                     stb_dbg_blknum, bx4, by4, msac->rng, tx0, _lm, _am);
-            fflush(imf);
+            fflush(_imf);
         }
     }
 #endif

@@ -156,7 +156,7 @@ static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
 #ifdef STB_DBG_TRACE
     {
         static FILE *imf = NULL;
-        if (!imf) imf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_intermediate.txt", "a");
+        if (!imf) imf = fopen("C:/Users/Roy/AppData/Local/Temp/opencode/our_intermediate.txt", "w");
         if (imf && stb_dbg_blknum < 100000) {
             fprintf(imf, "UVMODE_POST blknum=%d bx4=%d by4=%d rng=%u uv=%d cfl=%d lmode=%d amode=%d\n",
                     stb_dbg_blknum, stb_dbg_blkx, stb_dbg_blky, msac->rng,
