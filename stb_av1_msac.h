@@ -108,19 +108,18 @@ static unsigned int stb_av1_msac_symbol(struct stb_av1_msac *s,
                         (STB_AV1_MSAC_EC_WIN_SIZE - 16));
     const stbv_u32 r = s->rng >> 8;
     stbv_u32 u, v = s->rng;
-    unsigned int val = 0;
+    unsigned int val = (unsigned int)-1;
 
-    /* dav1d: val starts at -1 and increments first; emulate with do-style
-     * loop while keeping C89 declarations-at-top cleanliness. */
+    /* Match dav1d exactly: val starts at -1, increments first, then
+     * computes v and checks c < v.  The previous do-while rewrite
+     * broke the u/v tracking when all symbols were exhausted. */
     do {
+        val++;
         u = v;
         v = r * (cdf[val] >> STB_AV1_MSAC_EC_PROB_SHIFT);
         v >>= 7 - STB_AV1_MSAC_EC_PROB_SHIFT;
         v += STB_AV1_MSAC_EC_MIN_PROB * ((unsigned int)n_symbols - val);
-        if (c >= v)
-            break;
-        val++;
-    } while (val <= n_symbols);
+    } while (c < v);
 
     stb_av1_msac_norm(s,
         s->dif - ((stbv_u64)v << (STB_AV1_MSAC_EC_WIN_SIZE - 16)),
@@ -178,6 +177,31 @@ static unsigned int stb_av1_msac_uniform(struct stb_av1_msac *s,
     if (v < m)
         return v;
     return (v << 1) - m + stb_av1_msac_bool_equi(s);
+}
+
+static unsigned int stbv_av1_inv_recenter(unsigned int r, unsigned int v)
+{
+    if (v > (r << 1))
+        return v;
+    else if ((v & 1) == 0)
+        return (v >> 1) + r;
+    else
+        return r - ((v + 1) >> 1);
+}
+
+static int stb_av1_msac_subexp(struct stb_av1_msac *s, int ref,
+                                int n, unsigned int k)
+{
+    unsigned int a = 0, v;
+    if (stb_av1_msac_bool_equi(s)) {
+        if (stb_av1_msac_bool_equi(s))
+            k += stb_av1_msac_bool_equi(s) + 1;
+        a = 1U << k;
+    }
+    v = stb_av1_msac_bools(s, k) + a;
+    return (unsigned int)ref * 2 <= (unsigned int)n
+        ? (int)stbv_av1_inv_recenter((unsigned int)ref, v)
+        : n - 1 - (int)stbv_av1_inv_recenter((unsigned int)(n - 1 - ref), v);
 }
 
 static void stb_av1_msac_init(struct stb_av1_msac *s,

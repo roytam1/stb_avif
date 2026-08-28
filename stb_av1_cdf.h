@@ -1555,6 +1555,16 @@ static const stbv_u16 stb_av1_cdf_color_map[560] = {
     31190, 31329, 31516, 31679, 31825, 32026, 32322, 0,
 };
 
+static const stbv_u16 stb_av1_cdf_restore_switchable[4] = {
+    9413, 22581, 0, 0,
+};
+static const stbv_u16 stb_av1_cdf_restore_wiener[2] = {
+    11570, 0,
+};
+static const stbv_u16 stb_av1_cdf_restore_sgrproj[2] = {
+    16855, 0,
+};
+
 typedef struct stbv_av1_cdf {
     stbv_u16 y_mode[64];
     stbv_u16 uv_mode[416];
@@ -1577,6 +1587,9 @@ typedef struct stbv_av1_cdf {
     stbv_u16 coef[3050];
     stbv_u16 seg_id[24]; /* 3 contexts x 8 symbols each */
     stbv_u16 seg_pred[8];
+    stbv_u16 restore_switchable[4];
+    stbv_u16 restore_wiener[2];
+    stbv_u16 restore_sgrproj[2];
 } stbv_av1_cdf;
 
 #define STBV_AV1_COEF_SKIP_OFF       0
@@ -1694,6 +1707,12 @@ static void stbv_av1_cdf_init(stbv_av1_cdf *c, unsigned qcat)
     stbv_av1_cdf_inv(c->seg_id, stb_av1_cdf_seg_id, 3, 8, 7);
     memcpy(c->seg_pred, stb_av1_cdf_seg_pred, sizeof(c->seg_pred));
     stbv_av1_cdf_inv(c->seg_pred, stb_av1_cdf_seg_pred, 4, 2, 1);
+    memcpy(c->restore_switchable, stb_av1_cdf_restore_switchable, sizeof(c->restore_switchable));
+    stbv_av1_cdf_inv(c->restore_switchable, stb_av1_cdf_restore_switchable, 1, 4, 2);
+    memcpy(c->restore_wiener, stb_av1_cdf_restore_wiener, sizeof(c->restore_wiener));
+    stbv_av1_cdf_inv(c->restore_wiener, stb_av1_cdf_restore_wiener, 1, 2, 1);
+    memcpy(c->restore_sgrproj, stb_av1_cdf_restore_sgrproj, sizeof(c->restore_sgrproj));
+    stbv_av1_cdf_inv(c->restore_sgrproj, stb_av1_cdf_restore_sgrproj, 1, 2, 1);
     if (qcat > 3) qcat = 3;
     switch (qcat) {
     case 0: stbv_av1_cdf_copy_coef(c->coef, 0); break;
