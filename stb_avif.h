@@ -3477,6 +3477,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
 
     memset(&stream, 0, sizeof(stream));
     r = stb_av1_parse_internal_stream(&stream, av1_data, av1_size);
+    fprintf(stderr, "DECODE_FRAME: parse_stream r=%d have_seq=%d have_frame=%d tile_data=%p tile_size=%zu\n",
+            r, stream.have_seq, stream.have_frame, (void*)stream.tile_data, stream.tile_size);
 #ifdef STB_DBG_TRACE
     fprintf(stderr, "LF y0=%d y1=%d u=%d v=%d dltlf=%d\n",
         (int)stream.frame.loopfilter.level_y[0], (int)stream.frame.loopfilter.level_y[1],
@@ -3490,6 +3492,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
 #endif
     if (r < 0 || !stream.have_seq || !stream.have_frame)
         return -1;
+    fprintf(stderr, "DECODE_FRAME: frame_w0=%d frame_h=%d tc_w=%d tc_h=%d\n",
+            stream.frame.width[0], stream.frame.height, tc->frame_width, tc->frame_height);
     if ((int)stream.frame.width[0] != tc->frame_width ||
         (int)stream.frame.height != tc->frame_height)
         return -2;

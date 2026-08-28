@@ -265,6 +265,21 @@ static int stb_av1_parse_framehdr(struct stb_av1_framehdr *h,
         while (n--) *p++ = 0;
     }
 
+#ifdef STB_DBG_TRACE
+    fprintf(stderr, "FH_START: profile=%d reduced=%d scr=%d sb128=%d cdef=%d restor=%d sres=%d oh=%d mw=%d mh=%d\n",
+            s->profile, s->reduced_still_picture_header, s->screen_content_tools,
+            s->sb128, s->cdef, s->restoration, s->super_res, s->order_hint,
+            s->max_width, s->max_height);
+    fprintf(stderr, "  FH_INIT bitpos=%u\n", stb_av1_get_bits_pos(gb));
+    {
+        int k;
+        fprintf(stderr, "FH_DATA(%d):", (int)(gb->ptr_end - gb->ptr_start));
+        for (k = 0; k < (int)(gb->ptr_end - gb->ptr_start) && k < 20; k++)
+            fprintf(stderr, " %02x", gb->ptr_start[k]);
+        fprintf(stderr, "\n");
+    }
+#endif
+
     if (!s->reduced_still_picture_header)
         h->show_existing_frame = stb_av1_get_bit(gb);
     if (h->show_existing_frame)
@@ -294,8 +309,16 @@ static int stb_av1_parse_framehdr(struct stb_av1_framehdr *h,
         s->reduced_still_picture_header || stb_av1_get_bit(gb);
 
     h->disable_cdf_update = stb_av1_get_bit(gb);
+#ifdef STB_DBG_TRACE
+    fprintf(stderr, "  FH_OFF(%d): disable_cdf=%u\n",
+            stb_av1_get_bits_pos(gb), h->disable_cdf_update);
+#endif
     h->allow_screen_content_tools = s->screen_content_tools == 2 ?
         stb_av1_get_bit(gb) : s->screen_content_tools;
+#ifdef STB_DBG_TRACE
+    fprintf(stderr, "  FH_OFF(%d): scr=%u\n",
+            stb_av1_get_bits_pos(gb), h->allow_screen_content_tools);
+#endif
     if (h->allow_screen_content_tools)
         h->force_integer_mv = s->force_integer_mv == 2 ?
             stb_av1_get_bit(gb) : s->force_integer_mv;
@@ -330,10 +353,20 @@ static int stb_av1_parse_framehdr(struct stb_av1_framehdr *h,
     if (!s->reduced_still_picture_header && !h->disable_cdf_update)
         h->refresh_context = !stb_av1_get_bit(gb);
 
+    /* Tiling params - between refresh_context and quantization (per dav1d obu.c). */
+#ifdef STB_DBG_TRACE
+    fprintf(stderr, "FH_PRE_TILING: gb_off=%d gb_rem=%zu bitpos=%u\n",
+            (int)(gb->ptr - gb->ptr_start), (size_t)(gb->ptr_end - gb->ptr),
+            stb_av1_get_bits_pos(gb));
+#endif
     if (stb_av1_parse_tiling(h, s, gb) < 0)
         return -1;
 
     /* Quantization parameters. */
+#ifdef STB_DBG_TRACE
+    fprintf(stderr, "FH_PRE_QUANT: gb_off=%d gb_rem=%zu\n",
+            (int)(gb->ptr - gb->ptr_start), (size_t)(gb->ptr_end - gb->ptr));
+#endif
     h->quant.yac = stb_av1_get_bits(gb, 8);
     if (stb_av1_get_bit(gb))
         h->quant.ydc_delta = stb_av1_get_sbits(gb, 7);
@@ -484,6 +517,11 @@ static int stb_av1_parse_framehdr(struct stb_av1_framehdr *h,
             }
         }
     }
+
+#ifdef STB_DBG_TRACE
+    fprintf(stderr, "  FH_OFF(%d): after LF cdef=%d restor=%d\n",
+            stb_av1_get_bits_pos(gb), s->cdef, s->restoration);
+#endif
 
     /* CDEF. */
     if (!h->all_lossless && s->cdef && !h->allow_intrabc) {

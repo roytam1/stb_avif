@@ -158,6 +158,12 @@ static int stb_av1_parse_obu_payload_frame(struct stb_av1_internal_stream *st,
     if (res < 0 || gb.error)
         return -1;
     st->have_frame = 1;
+#ifdef STB_DBG_TRACE
+    fprintf(stderr, "FRAMEHDR_OK: tiling cols=%u rows=%u n_bytes=%u uniform=%u gb_off=%d gb_rem=%zu obu_sz=%zu\n",
+            st->frame.tiling.cols, st->frame.tiling.rows,
+            st->frame.tiling.n_bytes, st->frame.tiling.uniform,
+            (int)(gb.ptr - gb.ptr_start), (size_t)(gb.ptr_end - gb.ptr), obu->size);
+#endif
 
     if (!combined)
         return 0;
