@@ -105,7 +105,11 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
     tile_x4 = sx0 * (sb_size >> 2); tile_y4 = sy0 * (sb_size >> 2);
     tile_w4 = (sx1 - sx0) * (sb_size >> 2); tile_h4 = (sy1 - sy0) * (sb_size >> 2);
     pd.msac = &td->msac; pd.cdf = &td->cdf;
-    pd.frame_w4 = (int)(tile_x4 + tile_w4); pd.frame_h4 = (int)(tile_y4 + tile_h4);
+    /* dav1d uses the full frame dimensions (f->bw, f->bh) for partition
+       split decisions, NOT tile-local dimensions.  Using tile-local sizes
+       causes wrong splitting at the right/bottom edge of the frame. */
+    pd.frame_w4 = (int)((frame->width[0] + 3U) >> 2);
+    pd.frame_h4 = (int)((frame->height + 3U) >> 2);
     pd.ctx_x4 = (int)tile_x4; pd.ctx_y4 = (int)tile_y4;
     above_n = (int)(((tile_w4 + 15U) >> 1) + 1U); left_n = (int)(((tile_h4 + 15U) >> 1) + 1U);
     above = (stbv_u8 *)malloc((size_t)above_n); left = (stbv_u8 *)malloc((size_t)left_n);
