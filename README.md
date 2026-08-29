@@ -276,6 +276,14 @@ implementation.
 ## Source layout
 
 ``` text
+dist/stb_avif.h
+    All functions
+```
+
+
+## Source layout (for development)
+
+``` text
 stb_avif.h
     AVIF/ISOBMFF parsing and public API
 
@@ -339,6 +347,9 @@ stb_av1_lr.h
 
 test_avif2pnm.c
     Development/test program
+
+build_single_header.py
+    Python script for creating distributable single file stb_avif.h in dist/ 
 ```
 
 ## References
