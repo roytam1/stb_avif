@@ -221,7 +221,9 @@ static void stb_avif_free_internal(void *ptr)
     free(ptr);
 }
 
+#ifndef STB_AVIF_USE_DAV1D
 #include "stb_av1_lr.h"
+#endif
 
 /* ----------- BITSTREAM READER ----------- */
 int sh_parsed_ok = 0;
@@ -1898,17 +1900,16 @@ static int stb_avif_decode_with_dav1d(const unsigned char *av1_data, size_t av1_
     ret = dav1d_open(&ctx, &s);
     if (ret < 0) {  return 0; }
 
-    /* Wrap the AV1 data */
-    /* Manually initialize Dav1dData to avoid potential NULL check issues */
-    memset(&data, 0, sizeof(data));
-    data.data = (const uint8_t *)av1_data;
-    data.sz = av1_size;
-    ret = 0;
+    /* Copy the AV1 data into dav1d-managed memory (dav1d takes ownership) */
+    {
+        uint8_t *ptr = dav1d_data_create(&data, av1_size);
+        if (!ptr) { dav1d_close(&ctx); return 0; }
+        memcpy(ptr, av1_data, av1_size);
+    }
 
     /* Send data to decoder */
     ret = dav1d_send_data(ctx, &data);
     if (ret < 0 && ret != DAV1D_ERR(EAGAIN)) {
-        
         dav1d_data_unref(&data);
         dav1d_close(&ctx);
         return 0;
@@ -4497,6 +4498,7 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
         sh_parsed_ok = 1;
     }
 
+#ifndef STB_AVIF_USE_DAV1D
     /* Authoritative re-parse: the legacy bool-reader based sequence
      * decode above mis-reads real streams (it arithmetic-decodes what
      * is actually plain f(n) bit syntax).  stb_av1_parse_internal_stream
@@ -4527,6 +4529,7 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
 #endif
         }
     }
+#endif /* !STB_AVIF_USE_DAV1D */
 
     /* If we didn't find a frame header, use defaults for still picture */
     if (!fh.frame_width || !fh.frame_height) {
@@ -4727,6 +4730,7 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
         (void)found_iloc_box;
         if (info.alpha_av1 && info.alpha_size > 0 &&
             !sh.monochrome) {
+#ifndef STB_AVIF_USE_DAV1D
             /* Decode the mono alpha stream with the scalar path. */
             struct stb_av1_tile_context tc2;
             struct stb_av1_internal_stream astream;
@@ -4774,6 +4778,7 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
                         sh.monochrome = probe_seq_mono;
                     }
             }
+#endif /* !STB_AVIF_USE_DAV1D */
         }
     }
 
