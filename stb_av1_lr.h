@@ -170,31 +170,40 @@ static void stbv_av1_wiener_plane(unsigned short *plane, int stride,
     for (i = 0; i < 7; i++)
         tmp_rows[i] = tmp_buf + i * ew;
 
-    /* Initialize ring buffer: replicate clamped rows */
+    /* Initialize ring buffer: replicate clamped rows.
+     * The horizontal source starts 3 pixels before the LR unit (ux0-3)
+     * so the 7-tap filter centered at position x reads src[x-3..x+3]. */
     for (i = 0; i < 6; i++) {
         int src_y = uy0 + i - 3;
+        int src_x0 = ux0 >= 3 ? ux0 - 3 : 0;
         if (src_y < 0) src_y = 0;
         if (src_y >= frame_h) src_y = frame_h - 1;
-        stbv_av1_wiener_filter_h(tmp_rows[i], plane + src_y * stride + ux0,
+        stbv_av1_wiener_filter_h(tmp_rows[i], plane + src_y * stride + src_x0,
                                  stride, ew, fh, bit_depth);
     }
 
-    /* Process uh rows of output */
+    /* Process uh rows of output.
+     * The horizontal filter produces ew = uw + 6 elements starting from
+     * ux0-3 (or 0). Positions 3..3+uw-1 are the valid LR unit pixels.
+     * The vertical pass must only write uw elements to avoid corrupting
+     * adjacent LR units. We offset the read pointers by +3 to skip the
+     * left padding. */
     for (y = 0; y < uh; y++) {
         int src_y = uy0 + y + 3;
+        int src_x0 = ux0 >= 3 ? ux0 - 3 : 0;
         unsigned short *row_dst;
         const unsigned short *vptrs[7];
 
         if (src_y >= frame_h) src_y = frame_h - 1;
         stbv_av1_wiener_filter_h(tmp_rows[(y + 6) % 7],
-                                 plane + src_y * stride + ux0,
+                                 plane + src_y * stride + src_x0,
                                  stride, ew, fh, bit_depth);
 
         for (i = 0; i < 7; i++)
-            vptrs[i] = tmp_rows[(y + i) % 7];
+            vptrs[i] = tmp_rows[(y + i) % 7] + 3;
 
         row_dst = plane + (uy0 + y) * stride + ux0;
-        stbv_av1_wiener_filter_v(row_dst, vptrs, fv, ew, bit_depth);
+        stbv_av1_wiener_filter_v(row_dst, vptrs, fv, uw, bit_depth);
     }
 
     stb_avif_free_internal(tmp_buf);
