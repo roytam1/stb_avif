@@ -46,7 +46,7 @@ static void stb_av1_read_restoration_info(struct stb_av1_msac *msac,
 
     if (frame_type == STBV_AV1_RESTORATION_SWITCHABLE) {
         int filter = (int)stb_av1_msac_symbol(msac, cdf->restore_switchable, 2);
-        lr_type = filter + (filter != 0); /* NONE=0, WIENER=1, SGRPROJ=2 */
+        lr_type = filter + (filter != 0); /* NONE=0, WIENER=2, SGRPROJ=3 */
     } else {
         stbv_u16 *cdf_ptr = frame_type == STBV_AV1_RESTORATION_WIENER ?
             cdf->restore_wiener : cdf->restore_sgrproj;
@@ -242,14 +242,13 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
                     lr_unit_size_log2[0], lr_unit_size_log2[1]);
 #endif
         }
-        for (p = 0; p < 3; p++) {
-            lr_ref[p].filter_v[0] = 3; lr_ref[p].filter_v[1] = -7; lr_ref[p].filter_v[2] = 15;
-            lr_ref[p].filter_h[0] = 3; lr_ref[p].filter_h[1] = -7; lr_ref[p].filter_h[2] = 15;
-            lr_ref[p].sgr_weights[0] = -32; lr_ref[p].sgr_weights[1] = 31;
-        }
-
         for (sy = sy0; sy < sy1; sy++) { unsigned int sx;
           memset(left, 0, (size_t)left_n); if (sy == sy0) memset(above, 0, (size_t)above_n);
+          for (p = 0; p < 3; p++) {
+              lr_ref[p].filter_v[0] = 3; lr_ref[p].filter_v[1] = -7; lr_ref[p].filter_v[2] = 15;
+              lr_ref[p].filter_h[0] = 3; lr_ref[p].filter_h[1] = -7; lr_ref[p].filter_h[2] = 15;
+              lr_ref[p].sgr_weights[0] = -32; lr_ref[p].sgr_weights[1] = 31;
+          }
           if (row_cb) row_cb(opaque);
           for (sx = sx0; sx < sx1; sx++) {
             int bl = seq->sb128 ? STBV_AV1_BL_128X128 : STBV_AV1_BL_64X64;
@@ -275,21 +274,9 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
                     if (y && y + half_unit > h_px) continue;
                     if (x & mask) continue;
                     if (x && x + half_unit > w_px) continue;
-#ifdef STBV_AV1_PART_TRACE
-                    if (bx == 0 && by == 0)
-                        fprintf(stderr, "LR_BEFORE p=%d frame_type=%d r=%u c=%d d=%016llx\n",
-                                p, (int)frame->restoration.type[p],
-                                td->msac.rng, td->msac.cnt,
-                                (unsigned long long)td->msac.dif);
-#endif
                     stb_av1_read_restoration_info(&td->msac, &td->cdf,
                                                    &lr_ref[p], p,
                                                    frame->restoration.type[p]);
-#ifdef STBV_AV1_PART_TRACE
-                    if (bx == 0 && by == 0)
-                        fprintf(stderr, "LR_READ p=%d r=%u c=%d\n",
-                                p, td->msac.rng, td->msac.cnt);
-#endif
                 }
             }
 
