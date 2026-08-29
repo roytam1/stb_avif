@@ -6,9 +6,17 @@
 
 #include <stddef.h>
 
+#ifndef STBV_I8_DEFINED
+typedef char stbv_i8;
+#define STBV_I8_DEFINED 1
+#endif
 #ifndef STBV_U8_DEFINED
 typedef unsigned char stbv_u8;
 #define STBV_U8_DEFINED 1
+#endif
+#ifndef STBV_I16_DEFINED
+typedef  short stbv_i16;
+#define STBV_I16_DEFINED 1
 #endif
 #ifndef STBV_U16_DEFINED
 typedef unsigned short stbv_u16;

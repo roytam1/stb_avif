@@ -10,17 +10,6 @@
 #define STB_AV1_CDEF_H
 
 #include <stddef.h>
-/* Provide stdint types for MSVC versions that lack stdint.h */
-#if defined(_MSC_VER) && _MSC_VER < 1600
-typedef signed char int8_t;
-typedef short int16_t;
-typedef int int32_t;
-typedef unsigned char uint8_t;
-typedef unsigned short uint16_t;
-typedef unsigned int uint32_t;
-#else
-#include <stdint.h>
-#endif
 
 /* Edge flags for CDEF padding */
 enum {
@@ -32,7 +21,7 @@ enum {
 
 /* Direction offsets into a 12-wide tmp buffer (matches dav1d table).
  * Indexed as [dir + offset][pass], where dir is 0-7 and offset wraps. */
-static const int8_t stb_av1_cdef_directions[12][2] = {
+static const stbv_i8 stb_av1_cdef_directions[12][2] = {
     {  1 * 12 + 0,  2 * 12 + 0 }, /* dir 6 */
     {  1 * 12 + 0,  2 * 12 - 1 }, /* dir 7 */
     { -1 * 12 + 1, -2 * 12 + 2 }, /* dir 0 */
@@ -182,9 +171,9 @@ static void stb_av1_cdef_filter_block(stbv_u16 *dst, int dst_stride,
                                        int bitdepth_min_8)
 {
     const int tmp_stride = 12;
-    int16_t tmp_buf[144];
-    int16_t *tmp = tmp_buf + 2 * tmp_stride + 2;
-    const int8_t (*cdef_dirs)[2] = &stb_av1_cdef_directions[dir];
+    stbv_i16 tmp_buf[144];
+    stbv_i16 *tmp = tmp_buf + 2 * tmp_stride + 2;
+    const stbv_i8 (*cdef_dirs)[2] = &stb_av1_cdef_directions[dir];
     int x, y, k;
 
     /* Fill tmp with the block + 2-pixel padding on each side. */
@@ -192,7 +181,7 @@ static void stb_av1_cdef_filter_block(stbv_u16 *dst, int dst_stride,
         for (x = -2; x < w + 2; x++) {
             int fx = bx + x, fy = by + y;
             if (fx >= 0 && fx < frame_w && fy >= 0 && fy < frame_h)
-                tmp[y * tmp_stride + x] = (int16_t)dst[fy * dst_stride + fx];
+                tmp[y * tmp_stride + x] = (stbv_i16)dst[fy * dst_stride + fx];
             else
                 tmp[y * tmp_stride + x] = -32768;
         }
@@ -397,7 +386,7 @@ static void stb_av1_cdef_frame(stbv_u16 *plane_y, stbv_u16 *plane_u,
 
             /* Filter chroma. */
             if (uv_pri_lvl || uv_sec_lvl) {
-                static const uint8_t uv_dir_map[8] = {
+                static const stbv_u8 uv_dir_map[8] = {
                     0, 1, 2, 3, 4, 5, 6, 7
                 };
                 int uvdir = uv_pri_lvl ? uv_dir_map[dir] : 0;
