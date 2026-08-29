@@ -34,6 +34,7 @@ typedef struct stbv_av1_lr_ref {
     int filter_v[3];  /* 0=offset, 1=sharp, 2=dense */
     int filter_h[3];
     int sgr_weights[2];
+    int type_val;     /* decoded restoration type for this unit */
 } stbv_av1_lr_ref;
 
 static void stb_av1_read_restoration_info(struct stb_av1_msac *msac,
@@ -79,17 +80,46 @@ static void stb_av1_read_restoration_info(struct stb_av1_msac *msac,
             stb_av1_msac_subexp(msac, lr_ref->filter_h[1] + 23, 32, 2) - 23;
         lr_ref->filter_h[2] =
             stb_av1_msac_subexp(msac, lr_ref->filter_h[2] + 17, 64, 3) - 17;
+        /* Wiener: copy sgr_weights from ref for delta coding */
+        lr_ref->sgr_weights[0] = lr_ref->sgr_weights[0];
+        lr_ref->sgr_weights[1] = lr_ref->sgr_weights[1];
     } else if (lr_type == STBV_AV1_RESTORATION_SGRPROJ) {
         unsigned int idx = stb_av1_msac_bools(msac, 4);
         int w0, w1;
+        /* SGR index encoded into type (matches dav1d: lr->type += idx) */
+        lr_type += (int)idx;
         w0 = stbv_av1_sgr_params[idx][0] ?
             stb_av1_msac_subexp(msac, lr_ref->sgr_weights[0] + 96, 128, 4) - 96 : 0;
         w1 = stbv_av1_sgr_params[idx][1] ?
             stb_av1_msac_subexp(msac, lr_ref->sgr_weights[1] + 32, 128, 4) - 32 : 95;
         lr_ref->sgr_weights[0] = w0;
         lr_ref->sgr_weights[1] = w1;
+        /* SGR: copy wiener filters from ref for delta coding */
+        lr_ref->filter_v[0] = lr_ref->filter_v[0];
+        lr_ref->filter_v[1] = lr_ref->filter_v[1];
+        lr_ref->filter_v[2] = lr_ref->filter_v[2];
+        lr_ref->filter_h[0] = lr_ref->filter_h[0];
+        lr_ref->filter_h[1] = lr_ref->filter_h[1];
+        lr_ref->filter_h[2] = lr_ref->filter_h[2];
     }
+    lr_ref->type_val = lr_type;
 }
+
+/* Per-SB restoration unit storage (for LR filter application after decode) */
+typedef struct stbv_av1_lr_unit {
+    unsigned char type;          /* STBV_AV1_RESTORATION_NONE/WIENER/SGRPROJ */
+    signed char filter_h[3];     /* Wiener horizontal */
+    signed char filter_v[3];     /* Wiener vertical */
+    signed char sgr_weights[2];  /* SGR weights */
+    unsigned char sgr_idx;       /* SGR index into params table */
+} stbv_av1_lr_unit;
+
+typedef struct stbv_av1_lr_mask {
+    stbv_av1_lr_unit *units[3]; /* per-plane flat array of LR units */
+    int grid_stride[3];         /* stride in LR units per plane */
+    int grid_rows[3];           /* rows in LR units per plane */
+    int unit_size_log2[2];      /* [0]=luma, [1]=chroma */
+} stbv_av1_lr_mask;
 
 struct stb_av1_tile_decoder {
     struct stb_av1_msac msac;
@@ -102,6 +132,8 @@ struct stb_av1_tile_decoder {
     unsigned int tile_h4;
     unsigned int leaves;
     int error;
+    /* LR mask for storing decoded restoration params (owned by caller) */
+    stbv_av1_lr_mask *lr_mask;
 };
 
 struct stb_av1_tile_leaf_info {
@@ -168,7 +200,12 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
     if (frame->frame_type != STB_AV1_FRAME_KEY && frame->frame_type != STB_AV1_FRAME_INTRA_ONLY) return -2;
     if (tile_col >= frame->tiling.cols || tile_row >= frame->tiling.rows) return -3;
     if (frame->superres_enabled) return -4;
-    memset(td, 0, sizeof(*td)); td->seq = seq; td->frame = frame;
+    {
+        stbv_av1_lr_mask *saved_lr_mask = td->lr_mask;
+        memset(td, 0, sizeof(*td));
+        td->lr_mask = saved_lr_mask;
+    }
+    td->seq = seq; td->frame = frame;
     td->tile_col = tile_col; td->tile_row = tile_row;
     qcat = (frame->quant.yac > 20) + (frame->quant.yac > 60) + (frame->quant.yac > 120);
     stbv_av1_cdf_init(&td->cdf, (unsigned)qcat);
@@ -242,13 +279,18 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
                     lr_unit_size_log2[0], lr_unit_size_log2[1]);
 #endif
         }
+        /* LR reference defaults: set once per tile (dav1d does this in
+         * setup_tile, NOT per row). The subexponential delta coding in
+         * read_restoration_info uses lr_ref as the reference for the next
+         * SB's LR params. Resetting per row would lose the carryover from
+         * the previous row, causing wrong LR filter values and MSAC desync. */
+        for (p = 0; p < 3; p++) {
+            lr_ref[p].filter_v[0] = 3; lr_ref[p].filter_v[1] = -7; lr_ref[p].filter_v[2] = 15;
+            lr_ref[p].filter_h[0] = 3; lr_ref[p].filter_h[1] = -7; lr_ref[p].filter_h[2] = 15;
+            lr_ref[p].sgr_weights[0] = -32; lr_ref[p].sgr_weights[1] = 31;
+        }
         for (sy = sy0; sy < sy1; sy++) { unsigned int sx;
           memset(left, 0, (size_t)left_n); if (sy == sy0) memset(above, 0, (size_t)above_n);
-          for (p = 0; p < 3; p++) {
-              lr_ref[p].filter_v[0] = 3; lr_ref[p].filter_v[1] = -7; lr_ref[p].filter_v[2] = 15;
-              lr_ref[p].filter_h[0] = 3; lr_ref[p].filter_h[1] = -7; lr_ref[p].filter_h[2] = 15;
-              lr_ref[p].sgr_weights[0] = -32; lr_ref[p].sgr_weights[1] = 31;
-          }
           if (row_cb) row_cb(opaque);
           for (sx = sx0; sx < sx1; sx++) {
             int bl = seq->sb128 ? STBV_AV1_BL_128X128 : STBV_AV1_BL_64X64;
@@ -277,6 +319,27 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
                     stb_av1_read_restoration_info(&td->msac, &td->cdf,
                                                    &lr_ref[p], p,
                                                    frame->restoration.type[p]);
+                    /* Store decoded LR params into the frame-level mask */
+                    if (td->lr_mask) {
+                        int lr_x = x >> unit_size_log2;
+                        int lr_y = y >> unit_size_log2;
+                        int gw = td->lr_mask->grid_stride[p];
+                        int gr = td->lr_mask->grid_rows[p];
+                        if (lr_x >= 0 && lr_x < gw && lr_y >= 0 && lr_y < gr) {
+                            stbv_av1_lr_unit *u = &td->lr_mask->units[p][lr_y * gw + lr_x];
+                            u->type = (stbv_u8)lr_ref[p].type_val;
+                            u->filter_h[0] = (signed char)lr_ref[p].filter_h[0];
+                            u->filter_h[1] = (signed char)lr_ref[p].filter_h[1];
+                            u->filter_h[2] = (signed char)lr_ref[p].filter_h[2];
+                            u->filter_v[0] = (signed char)lr_ref[p].filter_v[0];
+                            u->filter_v[1] = (signed char)lr_ref[p].filter_v[1];
+                            u->filter_v[2] = (signed char)lr_ref[p].filter_v[2];
+                            u->sgr_weights[0] = (signed char)lr_ref[p].sgr_weights[0];
+                            u->sgr_weights[1] = (signed char)lr_ref[p].sgr_weights[1];
+                            u->sgr_idx = (u->type >= STBV_AV1_RESTORATION_SGRPROJ) ?
+                                (stbv_u8)(u->type - STBV_AV1_RESTORATION_SGRPROJ) : 0;
+                        }
+                    }
                 }
             }
 

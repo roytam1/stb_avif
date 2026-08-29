@@ -221,6 +221,8 @@ static void stb_avif_free_internal(void *ptr)
     free(ptr);
 }
 
+#include "stb_av1_lr.h"
+
 /* ----------- BITSTREAM READER ----------- */
 int sh_parsed_ok = 0;
 int probe_seq_hbd = 0, probe_seq_mono = 0;
@@ -3567,6 +3569,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     stbv_u8 *lf_done_map = 0;
     int *cdef_idx_grid = 0;
     int cdef_grid_stride = 0;
+    stbv_av1_lr_mask lr_mask;
+    int lr_mask_ok = 0;
     int bw8al, bh8al;
     stbv_u8 *above_cre0 = 0, *above_cre1 = 0, *left_cre0 = 0, *left_cre1 = 0;
     stbv_u8 *above_skip = 0, *left_skip = 0, *above_pal_sz = 0;
@@ -3794,6 +3798,18 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     /* Wire the CDEF grid into the leaf state (after allocation). */
     state.cdef_idx_grid = cdef_idx_grid;
     state.cdef_grid_stride = cdef_grid_stride;
+
+    /* Allocate LR mask for storing decoded restoration params. */
+    if (stream.seq.restoration && !stream.frame.allow_intrabc) {
+        int lr_usz[2];
+        lr_usz[0] = stream.frame.restoration.unit_size[0];
+        lr_usz[1] = stream.frame.restoration.unit_size[1];
+        if (stbv_av1_lr_mask_alloc(&lr_mask, tc->frame_width, tc->frame_height,
+                                   lr_usz, stream.seq.ss_hor ? 1 : 0,
+                                   (stream.seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0) == 0) {
+            lr_mask_ok = 1;
+        }
+    }
     memset(&recon, 0, sizeof(recon));
     recon.lf_blkid = lf_blkid_map;
     recon.lf_txlw = lf_txlw_map;
@@ -3867,10 +3883,15 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
             /* Recon callbacks point at g_scalar_recon, so publish the
              * current tile's bounds before decoding its first leaf. */
             g_scalar_recon = recon;
+            td.lr_mask = lr_mask_ok ? &lr_mask : 0;
             r = stb_av1_decode_tile_at(&td, &stream.seq, &stream.frame,
                                        stream.tiles[ti].data, stream.tiles[ti].size,
                                        tcx, tr, stb_avif_leaf_cb, &state,
                                        stb_avif_row_reset_cb);
+            fprintf(stderr, "TILE[%u] pos=(%u,%u) sz=%zu msac={rng=%u cnt=%d bytes_used=%d}\n",
+                    ti, tcx, tr, stream.tiles[ti].size,
+                    td.msac.rng, td.msac.cnt,
+                    (int)(td.msac.buf_pos - stream.tiles[ti].data));
             if (r) break;
         }
     }
@@ -3931,6 +3952,17 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                            y_pri_arr, y_sec_arr,
                            uv_pri_arr, uv_sec_arr,
                            (int)fh->cdef.damping);
+    }
+
+        /* Loop restoration filtering (after CDEF, before 8-bit conversion). */
+    if (!r && lr_mask_ok && stream.seq.restoration && !stream.frame.allow_intrabc) {
+        stb_av1_lr_frame(py16, pu16, pv16,
+                         tc->stride_y, tc->stride_u, tc->stride_v,
+                         tc->frame_width, tc->frame_height,
+                         stream.seq.ss_hor ? 1 : 0,
+                         (stream.seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0,
+                         8 + stream.seq.hbd * 2,
+                         &lr_mask);
     }
 
     /* Convert internal u16 planes to the caller's 8-bit planes. */
@@ -4140,6 +4172,7 @@ oom16:
     stb_avif_free_internal(above_pal0); stb_avif_free_internal(above_pal1);
     stb_avif_free_internal(left_pal0); stb_avif_free_internal(left_pal1);
     stb_avif_free_internal(cdef_idx_grid);
+    stbv_av1_lr_mask_free(&lr_mask);
     stb_avif_free_internal(lf_blkid_map); stb_avif_free_internal(lf_blkid_map_c);
     stb_avif_free_internal(lf_txlw_map); stb_avif_free_internal(lf_txlw_map_c);
     stb_avif_free_internal(lf_done_map);

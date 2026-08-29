@@ -10,7 +10,17 @@
 #define STB_AV1_CDEF_H
 
 #include <stddef.h>
+/* Provide stdint types for MSVC versions that lack stdint.h */
+#if defined(_MSC_VER) && _MSC_VER < 1600
+typedef signed char int8_t;
+typedef short int16_t;
+typedef int int32_t;
+typedef unsigned char uint8_t;
+typedef unsigned short uint16_t;
+typedef unsigned int uint32_t;
+#else
 #include <stdint.h>
+#endif
 
 /* Edge flags for CDEF padding */
 enum {
