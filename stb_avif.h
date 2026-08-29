@@ -4856,10 +4856,12 @@ while (more_obus && obu_reader.pos < obu_reader.size) {
                 /* Color matrix based on sequence header matrix_coefficients */
                 {
                     int mc = sh.matrix_coefficients;
+                    if (row == 0 && col == 0)
+                        fprintf(stderr, "YUV2RGB: mc=%d cr=%d\n", mc, sh.color_range);
                     if (mc == 0) {
-                        r = y_val + u_val;
-                        g = y_val + v_val;
-                        b = y_val + ((u_val + v_val) >> 1);
+                        r = y_val + v_val + 128;
+                        g = y_val;
+                        b = u_val + 128;
                     } else if (mc >= 8 && mc <= 10) {
                         r = y_val + ((378 * v_val) >> 8);
                         g = y_val - ((42 * u_val + 120 * v_val) >> 8);
