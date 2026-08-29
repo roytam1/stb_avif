@@ -94,7 +94,7 @@ static int stb_av1_cdef_find_dir(const stbv_u16 *img, int stride,
     int partial_sum_hv[2][8] = {{0},{0}};
     int partial_sum_diag[2][15] = {{0},{0}};
     int partial_sum_alt[4][11] = {{0},{0}};
-    unsigned cost[8];
+    unsigned cost[8] = {0};
     int best_dir = 0;
     unsigned best_cost;
     int y, x, n, m;
