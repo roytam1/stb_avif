@@ -2657,17 +2657,40 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
      * (dav1d recon_b_intra: intra_pred -> coefs -> itxfm_add).
      * Intra-frame "skip" suppresses only the residual; the prediction
      * itself must always be written. */
-    if (!rc->pal_y)
+    if (!rc->pal_y) {
         stb_avif_recon_predict_txb_luma(rc, x4, y4, tx);
-#ifdef STB_DBG_TRACE
-    if ((x4 == 8 && y4 == 14) || (x4 == 10 && y4 == 14))
-        fprintf(stderr, "OURFLG x=%d y=%d tx=%d fl=%d\n", x4, y4, tx,
-                stb_avif_recon_txb_edge_flags(rc, 1, rc->cur_bx4,
-                                              rc->cur_by4, rc->cur_bw4,
-                                              rc->cur_bh4, x4, y4,
-                                              stbv_av1_tx_dims[tx].w,
-                                              stbv_av1_tx_dims[tx].h));
-#endif
+        /* dav1d writes intra prediction directly into the plane, then
+         * itxfm_add adds residual on top.  Our predict writes to rc->pred
+         * so we must copy it into the plane before add_res overwrites
+         * rc->pred with (stale) plane data. */
+        {
+            int _w = stbv_av1_tx_dims[tx].w << 2;
+            int _h = stbv_av1_tx_dims[tx].h << 2;
+            int _cw = rc->stride_y - (x4 << 2);
+            int _ch = (rc->frame_h + 64) - (y4 << 2);
+            int _i;
+            if (_cw > _w) _cw = _w;
+            if (_ch > _h) _ch = _h;
+            if (_cw > 0 && _ch > 0) {
+                for (_i = 0; _i < _ch; _i++)
+                    memcpy(rc->plane_y + (size_t)((y4 << 2) + _i) * rc->stride_y + (x4 << 2),
+                           rc->pred + _i * _w, (size_t)(_cw * sizeof(stbv_u16)));
+            }
+        }
+    }
+    {
+        static int _cfdump_n = 0;
+        if (_cfdump_n < 30 && eob >= 0 && cf) {
+            int _k, area;
+            int _lw = stbv_av1_tx_dims[tx].lw, _lh = stbv_av1_tx_dims[tx].lh;
+            area = (4 << _lw) * (4 << _lh);
+            fprintf(stderr, "CFDUMP #%d x=%d y=%d tx=%d eob=%d txtp=%d area=%d:", _cfdump_n, x4, y4, tx, eob, txtp, area);
+            for (_k = 0; _k < area && _k < 64; _k++)
+                fprintf(stderr, " %d", (int)cf[_k]);
+            fprintf(stderr, "\n");
+            _cfdump_n++;
+        }
+    }
     /* eob is dav1d-style 0-based LAST-coefficient index: 0 == DC-only
      * (coefficients present!), < 0 == none. */
     if (!rc->block_skip && eob >= 0)
@@ -2675,6 +2698,19 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
                                x4 << 2, y4 << 2, rc->frame_w,
                                rc->frame_h + 64,
                                tx, txtp, eob, cf);
+    {
+        static int _posttx_n = 0;
+        if (_posttx_n < 30) {
+            int _w = stbv_av1_tx_dims[tx].w << 2;
+            int _h = stbv_av1_tx_dims[tx].h << 2;
+            int _i, _j;
+            fprintf(stderr, "POSTTX #%d x=%d y=%d tx=%d eob=%d skip=%d:", _posttx_n, x4, y4, tx, eob, (int)rc->block_skip);
+            for (_i = 0; _i < _w && _i < 16; _i++)
+                fprintf(stderr, " %d", (int)rc->pred[_i]);
+            fprintf(stderr, "\n");
+            _posttx_n++;
+        }
+    }
     {
         /* record transform coverage for the deblocking pass */
         if (rc->lf_blkid) {
@@ -3098,21 +3134,25 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
      * residual (dav1d recon_b_intra semantics).  eob >= 0: DC-only
      * still carries a coefficient.  UV-palette blocks own the chroma
      * planes instead. */
-    if (!rc->pal_uv)
+    if (!rc->pal_uv) {
         stb_avif_recon_predict_txb_chroma(rc, pl, x4, y4, tx);
-#ifdef STB_DBG_TRACE
-    if (pl == 0 && x4 == 0 && y4 == 2) {
-        int r5, c5;
-        int tw = stbv_av1_tx_dims[tx].w << 2;
-        fprintf(stderr, "CHPRE x=%d y=%d w=%d\n", x4, y4, tw);
-        for (r5 = 0; r5 < 8; r5++) {
-            fprintf(stderr, "PRG");
-            for (c5 = 0; c5 < tw && c5 < 8; c5++)
-                fprintf(stderr, " %04x", (unsigned)rc->pred[r5 * tw + c5]);
-            fprintf(stderr, "\n");
+        /* Copy prediction from rc->pred into the plane so add_res adds
+         * residual on top of the prediction, not stale plane data. */
+        {
+            int _w = stbv_av1_tx_dims[tx].w << 2;
+            int _h = stbv_av1_tx_dims[tx].h << 2;
+            int _cw = stride - (x4 << 2);
+            int _ch = (ph + 32) - (y4 << 2);
+            int _i;
+            if (_cw > _w) _cw = _w;
+            if (_ch > _h) _ch = _h;
+            if (_cw > 0 && _ch > 0) {
+                for (_i = 0; _i < _ch; _i++)
+                    memcpy(plane + (size_t)((y4 << 2) + _i) * stride + (x4 << 2),
+                           rc->pred + _i * _w, (size_t)(_cw * sizeof(stbv_u16)));
+            }
         }
     }
-#endif
     if (!rc->block_skip && !rc->pal_uv && eob >= 0)
         stb_avif_recon_add_res(rc, plane, stride,
                                x4 << 2, y4 << 2, stride, ph + 32,
@@ -3952,7 +3992,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                            cdef_idx_grid, cdef_grid_stride,
                            y_pri_arr, y_sec_arr,
                            uv_pri_arr, uv_sec_arr,
-                           (int)fh->cdef.damping);
+                            (int)fh->cdef.damping);
     }
 
         /* Loop restoration filtering (after CDEF, before 8-bit conversion). */
@@ -3963,7 +4003,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                          stream.seq.ss_hor ? 1 : 0,
                          (stream.seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0,
                          8 + stream.seq.hbd * 2,
-                         &lr_mask);
+                          &lr_mask);
     }
 
     /* Convert internal u16 planes to the caller's 8-bit planes. */
