@@ -332,8 +332,6 @@ static const stbv_u16 stbv_av1_scan_32x8[256] = {
     254, 255
 };
 
-
-
 static const stbv_u16 *const stbv_av1_scan_rect[STBV_AV1_N_TX_SIZES] = {
     stbv_av1_scan_4x4,  stbv_av1_scan_8x8,    stbv_av1_scan_16x16,
     stbv_av1_scan_32x32, stbv_av1_scan_32x32,
@@ -456,12 +454,6 @@ dbg_pre = msac->rng;
     }
 
     eob = stb_av1_msac_symbol(msac, eob_bin_cdf, 4U + szctx);
-#ifdef STB_DBG_TRACE
-    if (stb_dbg_blknum <= 200000)
-        fprintf(stderr, "TEOB pl=%d tx=%d pre=%u post=%u "
-                        "bin=%u\n",
-                chroma, tx, dbg_pre, msac->rng, eob);
-#endif
     if (eob > 1U) {
         eob_bin = eob - 2U;
         /* eob_hi_bit[N_TX_SIZES][2][9][2] */
@@ -617,11 +609,6 @@ dbg_pre = msac->rng;
          * DC, is present. */
         tok = stb_av1_msac_symbol(msac, eob_cdf, 2U);
         dc_tok = (int)(1U + tok);
-#ifdef STB_DBG_TRACE
-        if (stb_dbg_blknum <= 200000)
-            fprintf(stderr, "TDCLO pl=%d post=%u tok=%u\n",
-                    chroma, msac->rng, tok);
-#endif
         if (tok == 2U)
             dc_tok = (int)stbv_av1_coef_hi_tok(msac, hi_cdf);
         eob = 1; /* DC coefficient is present */
@@ -638,13 +625,6 @@ dbg_pre = msac->rng;
         dc_sign_cdf = cdf->coef + 3038U + (chroma != 0) * 6U +
                       (unsigned)dc_sign_ctx * 2U;
         dc_sign = (int)stb_av1_msac_bool_adapt(msac, dc_sign_cdf);
-#ifdef STB_DBG_TRACE
-        if (stb_dbg_blknum <= 200000)
-            fprintf(stderr, "TDCSGN pl=%d ctx=%d pre=%u post=%u sign=%d "
-                            "dc_tok=%d s=%d\n",
-                    chroma, dc_sign_ctx, stb_dbg_pre, msac->rng, dc_sign,
-                    dc_tok, stb_dbg_dcsign_s);
-#endif
         dc_sign_level = (dc_sign - 1) & (2 << 6);
 
         dc_dq = dq_dc;
@@ -662,18 +642,6 @@ dbg_pre = msac->rng;
             dc_dq = cf_max + dc_sign;
         cf[0] = dc_sign ? -dc_dq : dc_dq;
         cul_level = (unsigned)dc_tok;
-#ifdef STB_DBG_TRACE
-        {
-            static int dbg_dc_n = 0;
-            if (dbg_dc_n < 8) {
-                fprintf(stderr, "DCVAL tok=%d dq_base=%d shift=%d "
-                        "dc_dq_final=%d sign=%d\n",
-                        (int)dc_tok_orig, (int)dq_dc, dq_shift,
-                        dc_dq, dc_sign);
-                dbg_dc_n++;
-            }
-        }
-#endif
         }
     }
 

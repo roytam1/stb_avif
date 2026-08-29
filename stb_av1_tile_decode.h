@@ -52,18 +52,7 @@ static void stb_av1_read_restoration_info(struct stb_av1_msac *msac,
         stbv_u16 *cdf_ptr = frame_type == STBV_AV1_RESTORATION_WIENER ?
             cdf->restore_wiener : cdf->restore_sgrproj;
         int has_filter;
-#ifdef STBV_AV1_PART_TRACE
-        if (plane == 0)
-            fprintf(stderr, "LR_BOOL_DECIDE p=%d ft=%d cdf0=%u cdf1=%u rng=%u cnt=%d d=%016llx\n",
-                    plane, (int)frame_type, (unsigned)cdf_ptr[0], (unsigned)cdf_ptr[1],
-                    msac->rng, msac->cnt, (unsigned long long)msac->dif);
-#endif
         has_filter = (int)stb_av1_msac_bool_adapt(msac, cdf_ptr);
-#ifdef STBV_AV1_PART_TRACE
-        if (plane == 0)
-            fprintf(stderr, "LR_BOOL_RESULT p=%d has_filter=%d rng=%u cnt=%d\n",
-                    plane, has_filter, msac->rng, msac->cnt);
-#endif
         lr_type = has_filter ? (int)frame_type : STBV_AV1_RESTORATION_NONE;
     }
 
@@ -210,30 +199,6 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
     qcat = (frame->quant.yac > 20) + (frame->quant.yac > 60) + (frame->quant.yac > 120);
     stbv_av1_cdf_init(&td->cdf, (unsigned)qcat);
     stb_av1_msac_init(&td->msac, data, size, (int)frame->disable_cdf_update);
-#ifdef STB_DBG_TRACE
-    if (tile_col == 0 && tile_row == 0) {
-        fprintf(stderr, "TILE0_DIAG yac=%d ydc_delta=%d udc_delta=%d uac_delta=%d "
-                        "vdc_delta=%d vac_delta=%d qcat=%d hbd=%d layout=%d "
-                        "w=%d h=%d cols=%d rows=%d sb128=%d cdef=%d restor=%d "
-                        "msac_rng=%u msac_cnt=%d disable_cdf=%d\n",
-                (int)frame->quant.yac, (int)frame->quant.ydc_delta,
-                (int)frame->quant.udc_delta, (int)frame->quant.uac_delta,
-                (int)frame->quant.vdc_delta, (int)frame->quant.vac_delta,
-                qcat, (int)seq->hbd, (int)seq->layout,
-                (int)frame->width[0], (int)frame->height,
-                (int)frame->tiling.cols, (int)frame->tiling.rows,
-                (int)seq->sb128, (int)seq->cdef, (int)seq->restoration,
-                (unsigned)td->msac.rng, td->msac.cnt,
-                (int)frame->disable_cdf_update);
-        fprintf(stderr, "TILE0_DATA first8:");
-        {
-            int _bi;
-            for (_bi = 0; _bi < 8 && _bi < (int)size; _bi++)
-                fprintf(stderr, " %02x", (unsigned)data[_bi]);
-        }
-        fprintf(stderr, "\n");
-    }
-#endif
     sb_log2 = 6U + seq->sb128; sb_size = 1U << sb_log2;
     sx0 = frame->tiling.col_start_sb[tile_col]; sx1 = frame->tiling.col_start_sb[tile_col + 1];
     sy0 = frame->tiling.row_start_sb[tile_row]; sy1 = frame->tiling.row_start_sb[tile_row + 1];
@@ -271,13 +236,6 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
                 restore_planes |= 4U;
             lr_unit_size_log2[0] = frame->restoration.unit_size[0];
             lr_unit_size_log2[1] = frame->restoration.unit_size[1];
-#ifdef STBV_AV1_PART_TRACE
-            fprintf(stderr, "LR_INIT restore_planes=%u type[%u,%u,%u] unit_sz_log2=[%u,%u]\n",
-                    restore_planes,
-                    frame->restoration.type[0], frame->restoration.type[1],
-                    frame->restoration.type[2],
-                    lr_unit_size_log2[0], lr_unit_size_log2[1]);
-#endif
         }
         /* LR reference defaults: set once per tile (dav1d does this in
          * setup_tile, NOT per row). The subexponential delta coding in
@@ -342,7 +300,6 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
                     }
                 }
             }
-
             if (stbv_av1_partition_decode_sb(&pd, bl, bx, by)) { td->error = 1; rc = -1; goto done; }
           }
         }
@@ -361,6 +318,5 @@ static int stb_av1_decode_tile(struct stb_av1_tile_decoder *td,
 {
     return stb_av1_decode_tile_at(td, seq, frame, data, size, 0, 0, cb, opaque, row_cb);
 }
-
 
 #endif

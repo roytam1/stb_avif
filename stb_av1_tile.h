@@ -43,12 +43,6 @@ static int stb_av1_parse_tile_group(const struct stb_av1_framehdr *fh,
     const stbv_u8 *p, *pend;
     if (!fh || !gb || !tiles || !tile_count) return -1;
     n_tiles = fh->tiling.cols * fh->tiling.rows;
-#ifdef STB_DBG_TRACE
-    fprintf(stderr, "TG_INIT: n_tiles=%u cols=%u rows=%u gb_ptr_off=%d gb_rem=%zu n_bytes=%u uniform=%u\n",
-            n_tiles, fh->tiling.cols, fh->tiling.rows,
-            (int)(gb->ptr - gb->ptr_start), (size_t)(gb->ptr_end - gb->ptr),
-            fh->tiling.n_bytes, fh->tiling.uniform);
-#endif
     if (!n_tiles || n_tiles > max_tiles) return -1;
     stb_av1_getbits_bytealign(gb);
     if (gb->error) { fprintf(stderr, "TG_FAIL: bytealign error\n"); return -1; }
@@ -67,11 +61,6 @@ static int stb_av1_parse_tile_group(const struct stb_av1_framehdr *fh,
     tile_size_bytes = fh->tiling.n_bytes;
     if (n_tiles > 1 && tile_size_bytes == 0) { fprintf(stderr, "TG_FAIL: n_bytes=0 multi-tile\n"); return -1; }
     p = gb->ptr; pend = gb->ptr_end; *tile_count = 0;
-#ifdef STB_DBG_TRACE
-    fprintf(stderr, "TG_LOOP: start=%u end=%u p_off=%d pend_off=%d rem=%zu tile_sz_bytes=%u\n",
-            start, end, (int)(p - gb->ptr_start), (int)(pend - gb->ptr_start),
-            (size_t)(pend - p), tile_size_bytes);
-#endif
     for (i = start; i <= end; i++) {
         size_t sz; unsigned int k;
         if (i != end) {
@@ -90,9 +79,6 @@ static int stb_av1_parse_tile_group(const struct stb_av1_framehdr *fh,
         tiles[*tile_count].data = p;
         tiles[*tile_count].size = sz;
         tiles[*tile_count].start = i; tiles[*tile_count].end = i;
-#ifdef STB_DBG_TRACE
-        fprintf(stderr, "TG_TILE[%u]: sz=%zu p_off=%d\n", i, sz, (int)(p - gb->ptr_start));
-#endif
         (*tile_count)++; p += sz;
     }
     if (p != pend) {
@@ -103,6 +89,5 @@ static int stb_av1_parse_tile_group(const struct stb_av1_framehdr *fh,
     if (tile_end) *tile_end = end;
     return 0;
 }
-
 
 #endif

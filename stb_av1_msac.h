@@ -13,17 +13,6 @@ struct stb_av1_msac {
     int allow_update_cdf;
 };
 
-#ifdef STB_DBG_TRACE
-/* shared debug state (single-TU builds); tentative definitions */
-int stb_dbg_blknum;
-int stb_dbg_blkx;
-int stb_dbg_blky;
-unsigned int stb_dbg_pre;
-unsigned int stb_dbg_tx_dec;
-int stb_dbg_dcsign_s;
-#define STB_DBG_PRE(s) ((stb_dbg_pre = (s)->rng))
-#endif
-
 #define STB_AV1_MSAC_EC_PROB_SHIFT 6
 #define STB_AV1_MSAC_EC_MIN_PROB 4
 #define STB_AV1_MSAC_EC_WIN_SIZE ((int)(sizeof(stbv_u64) * 8))

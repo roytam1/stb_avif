@@ -139,25 +139,8 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
     pc = stbv_av1_partition_cdf(d->cdf->partition, bl, ctx);
 
     if (have_h_split && have_v_split) {
-#ifdef STBV_AV1_PART_TRACE
-        {
-            int _nc = stbv_av1_partition_type_count[bl];
-            fprintf(stderr, "PRE-PART y=%d x=%d bl=%d ctx=%d r=%u d=%08x%08x c=%d n=%d cdf:",
-                    by, bx, bl, ctx, d->msac->rng,
-                    (unsigned)(d->msac->dif >> 32), (unsigned)d->msac->dif,
-                    d->msac->cnt, _nc);
-            { int _i; for (_i = 0; _i < _nc; _i++) fprintf(stderr, " %d", pc[_i]); }
-            fprintf(stderr, "\n");
-        }
-#endif
         bp = (int)stb_av1_msac_symbol(d->msac, pc,
                                        stbv_av1_partition_type_count[bl]);
-#ifdef STBV_AV1_PART_TRACE
-        fprintf(stderr, "POST-PART y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%08x%08x c=%d c0=%d c8=%d\n",
-                by, bx, bl, ctx, bp, d->msac->rng,
-                (unsigned)(d->msac->dif >> 32), (unsigned)d->msac->dif,
-                d->msac->cnt, pc[0], pc[8]);
-#endif
         if (bp < 0 || bp >= STBV_AV1_N_PARTITIONS)
             return -1;
 
@@ -261,12 +244,6 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         unsigned int is_split;
         is_split = stb_av1_msac_bool(d->msac,
                                      stbv_av1_gather_top_partition_prob(pc, bl));
-#ifdef STBV_AV1_PART_TRACE
-        fprintf(stderr, "P y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%08x c=%d\n",
-                by, bx, bl, ctx, is_split ? STBV_AV1_PARTITION_SPLIT
-                                          : STBV_AV1_PARTITION_H,
-                d->msac->rng, (unsigned)d->msac->dif, d->msac->cnt);
-#endif
         bp = is_split ? (int)STBV_AV1_PARTITION_SPLIT : (int)STBV_AV1_PARTITION_H;
         if (is_split) {
             if (bl >= STBV_AV1_BL_8X8) {
@@ -300,12 +277,6 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         unsigned int is_split;
         is_split = stb_av1_msac_bool(d->msac,
                                      stbv_av1_gather_left_partition_prob(pc, bl));
-#ifdef STBV_AV1_PART_TRACE
-        fprintf(stderr, "P y=%d x=%d bl=%d ctx=%d bp=%d r=%u d=%08x c=%d\n",
-                by, bx, bl, ctx, is_split ? STBV_AV1_PARTITION_SPLIT
-                                          : STBV_AV1_PARTITION_V,
-                d->msac->rng, (unsigned)d->msac->dif, d->msac->cnt);
-#endif
         bp = is_split ? (int)STBV_AV1_PARTITION_SPLIT : (int)STBV_AV1_PARTITION_V;
         if (is_split) {
             if (bl >= STBV_AV1_BL_8X8) {

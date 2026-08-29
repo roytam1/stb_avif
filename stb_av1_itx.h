@@ -172,21 +172,6 @@ static int stbv_av1_inv_txfm_core(stbv_i32 *coeff, const int eob,
         if (lnc + 1 < sh)
             memset(c, 0, (size_t)(sh - lnc - 1) * w * sizeof(stbv_i32));
     }
-#ifdef STB_DBG_TRACE
-    if (w==32 && bd==10 && coeff[0]==5439 && eob==178) {
-        int _q;
-        cf_dbg_hit=1;
-        fprintf(stderr,"OURT1 ");
-        {
-            int _r,_c;
-            for(_r=0;_r<4;_r++){
-                fprintf(stderr,"|");
-                for(_c=0;_c<12;_c++) fprintf(stderr," %d",(int)tmp[_r*32+_c]);
-            }
-        }
-        for(_q=0;_q<0;_q++) fprintf(stderr," %d",(int)tmp[_q]); fprintf(stderr,"\n");
-    }
-#endif
     if (sh < h)
         memset(tmp + sh * w, 0, (size_t)((h - sh) * w) * sizeof(stbv_i32));
 
@@ -197,14 +182,6 @@ static int stbv_av1_inv_txfm_core(stbv_i32 *coeff, const int eob,
 
     for (x = 0; x < w; x++)
         second_fn(&tmp[x], w, col_clip_min, col_clip_max);
-#ifdef STB_DBG_TRACE
-    if (w==32 && bd==10 && cf_dbg_hit) {
-        int _q;
-        fprintf(stderr,"OURT3 ");
-        for(_q=0;_q<12;_q++) fprintf(stderr," %d",(int)tmp[_q]);
-        fprintf(stderr,"\n");
-    }
-#endif
     return 1;
 }
 
