@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import tempfile
 
-SRC_DIR = r'\\roy-xp\c\devel\stb_avif_my'
+SRC_DIR = r'.'
 DIST_DIR = os.path.join(SRC_DIR, 'dist')
 
 INCLUDE_RE = re.compile(r'^\s*#include\s+"(stb_av1_\w+\.h)"\s*$', re.MULTILINE)
@@ -154,7 +154,7 @@ def build_single_header():
     tmp_hdr = os.path.join(tmpdir, 'stb_avif.h')
     shutil.copy2(out_path, tmp_hdr)
 
-    gcc = r'C:\msys64\mingw64\bin\gcc.exe'
+    gcc = r'gcc'
     result = subprocess.run(
         [gcc, '-std=c89', '-O1', '-DSTB_AVIF_DEBLOCK', '-o', exe_out, test_c, '-lm'],
         capture_output=True, text=True, cwd=tmpdir
