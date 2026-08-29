@@ -2098,6 +2098,20 @@ static int stb_avif_recon_decoded_before(int qx4, int qy4,
  * on the row above (decoded earlier unless in a right-hand SB of this SB
  * row); bottom-left follows decoding order.  Values use our port's
  * STBV_AV1_EDGE_I444_* convention: bit0 TOP_HAS_RIGHT, bit1 LEFT_HAS_BOTTOM. */
+static int stb_avif_recon_have_left(const struct stb_avif_scalar_recon *rc,
+                                       int luma, int x4)
+{
+    int tx0 = luma ? rc->tile_x4 : (rc->tile_x4 >> rc->ss_hor);
+    return x4 > tx0;
+}
+
+static int stb_avif_recon_have_top(const struct stb_avif_scalar_recon *rc,
+                                   int luma, int y4)
+{
+    int ty0 = luma ? rc->tile_y4 : (rc->tile_y4 >> rc->ss_ver);
+    return y4 > ty0;
+}
+
 static int stb_avif_recon_block_edge_flags(struct stb_avif_scalar_recon *rc,
                                            int luma, int x4, int y4,
                                            int w4, int h4);
@@ -2315,7 +2329,8 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
         if (mode == STBV_AV1_INTRA_FILTER)
             mode = STBV_AV1_IPRED_FILTER;
         if (cw <= 0 || ch <= 0) return;
-                impl = stbv_av1_prepare_intra_edges_16(bx4, bx4 > 0, by4, by4 > 0,
+                impl = stbv_av1_prepare_intra_edges_16(bx4, stb_avif_recon_have_left(rc, 1, bx4),
+                                              by4, stb_avif_recon_have_top(rc, 1, by4),
                                               fw4, fh4,
                                               stb_avif_recon_block_edge_flags(rc, 1, bx4, by4, bw4c, bh4c),
                                               rc->plane_y + y * rc->stride_y + x,
@@ -2358,7 +2373,8 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
         cw = ((rc->frame_w + ss_hor) >> ss_hor) - x; if (cw > w) cw = w;
         ch = ((rc->frame_h + ss_ver) >> ss_ver) - y; if (ch > h) ch = h;
         if (cw <= 0 || ch <= 0) return;
-    cimpl = stbv_av1_prepare_intra_edges_16(cx4, cx4 > 0, cy4, cy4 > 0,
+    cimpl = stbv_av1_prepare_intra_edges_16(cx4, stb_avif_recon_have_left(rc, 0, cx4),
+                                           cy4, stb_avif_recon_have_top(rc, 0, cy4),
                                                cfw4, cfh4,
                                                stb_avif_recon_block_edge_flags(rc, 0, cx4, cy4, cbw4, cbh4),
                                                rc->plane_u + y * rc->stride_u + x,
@@ -2481,7 +2497,8 @@ static void stb_avif_recon_pred_rect(struct stb_avif_scalar_recon *rc,
     ch = ph - (py4 << 2); if (ch > h) ch = h;
     if (cw <= 0 || ch <= 0) return;
 
-    impl = stbv_av1_prepare_intra_edges_16(px4, px4 > 0, py4, py4 > 0,
+    impl = stbv_av1_prepare_intra_edges_16(px4, stb_avif_recon_have_left(rc, 1, px4),
+                                          py4, stb_avif_recon_have_top(rc, 1, py4),
                                           fw4, fh4, 0,
                                           plane + (py4 << 2) * stride + (px4 << 2),
                                           stride, NULL,
@@ -2818,7 +2835,7 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
      * single-threaded and the plane row above is exactly what dav1d would
      * have snapshotted, so gate the same way and pass the row directly. */
     const stbv_u16 *sb_edge =
-        (y4 > 0 && !(y4 & (rc->sb_step4 - 1))) ?
+        (y4 > rc->tile_y4 && !(y4 & (rc->sb_step4 - 1))) ?
             rc->plane_y + (size_t)((y4 << 2) - 1) * rc->stride_y : NULL;
 
     if (mode == STBV_AV1_INTRA_FILTER)
@@ -2834,7 +2851,8 @@ static void stb_avif_recon_predict_txb_luma(struct stb_avif_scalar_recon *rc,
     cw = rc->stride_y - (x4 << 2); if (cw > w) cw = w;
     ch = (rc->frame_h + 64) - (y4 << 2); if (ch > h) ch = h;
     if (cw <= 0 || ch <= 0) return;
-    impl = stbv_av1_prepare_intra_edges_16(x4, x4 > 0, y4, y4 > 0,
+    impl = stbv_av1_prepare_intra_edges_16(x4, stb_avif_recon_have_left(rc, 1, x4),
+                                          y4, stb_avif_recon_have_top(rc, 1, y4),
                                           fw4, fh4,
                                           stb_avif_recon_txb_edge_flags(
                                               rc, 1, rc->cur_bx4, rc->cur_by4,
@@ -3286,7 +3304,8 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
         fprintf(stderr, "\n  topleft=%d\n", plane[((cy4 << 2) - 1) * stride + (cx4 << 2) - 1]);
     }
 #endif
-    cimpl = stbv_av1_prepare_intra_edges_16(cx4, cx4 > 0, cy4, cy4 > 0,
+    cimpl = stbv_av1_prepare_intra_edges_16(cx4, stb_avif_recon_have_left(rc, 0, cx4),
+                                           cy4, stb_avif_recon_have_top(rc, 0, cy4),
                                            cfw4, cfh4,
                                            stb_avif_recon_txb_edge_flags(
                                                rc, 0, rc->cur_bx4, rc->cur_by4,
@@ -4058,6 +4077,34 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
             }
         }
 #endif
+        {
+            static int _yuv_dumped = 0;
+            if (!_yuv_dumped) {
+                int _yy, _xx;
+                fprintf(stderr, "YUV_PRE sh=%d rndv=%d bd=%d\n", sh, rndv, bd);
+                fprintf(stderr, "Y_row0 Y16:");
+                for (_xx = 0; _xx < 16 && _xx < w; _xx++)
+                    fprintf(stderr, " %u", (unsigned)py16[_xx]);
+                fprintf(stderr, "\n");
+                fprintf(stderr, "Y_row1 Y16:");
+                for (_xx = 0; _xx < 16 && _xx < w; _xx++)
+                    fprintf(stderr, " %u", (unsigned)py16[tc->stride_y + _xx]);
+                fprintf(stderr, "\n");
+                if (pu16) {
+                    fprintf(stderr, "U_row0 U16:");
+                    for (_xx = 0; _xx < 16 && _xx < w; _xx++)
+                        fprintf(stderr, " %u", (unsigned)pu16[_xx]);
+                    fprintf(stderr, "\n");
+                }
+                if (pv16) {
+                    fprintf(stderr, "V_row0 V16:");
+                    for (_xx = 0; _xx < 16 && _xx < w; _xx++)
+                        fprintf(stderr, " %u", (unsigned)pv16[_xx]);
+                    fprintf(stderr, "\n");
+                }
+                _yuv_dumped = 1;
+            }
+        }
         for (y0 = 0; y0 < h; y0++)
             for (x0 = 0; x0 < w; x0++) {
                 unsigned v = (unsigned)py16[y0 * tc->stride_y + x0];
