@@ -38,8 +38,7 @@
  *
  *   The library decodes AVIF images down to plain RGBA pixels.
  *   With STB_AVIF_USE_DAV1D, it uses libdav1d for correct AV1 decoding.
- *   Without it, the built-in AV1 decoder is a simplified placeholder
- *   and will produce garbage pixels ("snow").
+ *   Without it, the built-in AV1 decoder will be used.
  *
  *   Supported formats:
  *     - Profile 0 (Main): 8-bit, 4:2:0, 4:2:2, 4:4:4
@@ -83,7 +82,7 @@ extern "C" {
  *  Free it with stb_avif_free().
  *
  *  When STB_AVIF_USE_DAV1D is defined, uses libdav1d for correct output.
- *  Link with -ldav1d. Without dav1d, the internal decoder produces garbage.
+ *  Link with -ldav1d. Without dav1d, the internal decoder will be used.
  */
 unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
                                           int *x, int *y, int *channels,
@@ -105,6 +104,14 @@ static unsigned char *stb_avif_last_alpha(int *stride)
 }
 
 const char *stb_avif_failure_reason(void);
+
+/* Load an AVIF from a file path.  Returns an 8-bit RGB/RGBA pixel buffer
+ * (freed with stb_avif_free()) or NULL on failure.
+ * req_channels: 0 = keep original (3 or 4), 3 = force RGB, 4 = force RGBA.
+ * w/h/channels receive image dimensions and actual channel count. */
+unsigned char *stb_avif_load_from_file(const char *filePath,
+                                       int *w, int *h, int *channels,
+                                       int req_channels);
 
 /* -------------------------------------------------------------------------- */
 /* PRIVATE TYPES (exposed for implementation)                                 */
@@ -14344,6 +14351,41 @@ void stb_avif_free(void *ptr)
     free(ptr);
 }
 
+unsigned char *stb_avif_load_from_file(const char *filePath,
+                                       int *w, int *h, int *channels,
+                                       int req_channels)
+{
+    FILE *f;
+    unsigned char *buf;
+    long file_size;
+    unsigned char *result;
+
+    if (!filePath) return NULL;
+    f = fopen(filePath, "rb");
+    if (!f) return NULL;
+
+    fseek(f, 0, SEEK_END);
+    file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (file_size <= 0) { fclose(f); return NULL; }
+
+    buf = (unsigned char *)malloc((size_t)file_size);
+    if (!buf) { fclose(f); return NULL; }
+
+    if ((long)fread(buf, 1, (size_t)file_size, f) != file_size) {
+        free(buf);
+        fclose(f);
+        return NULL;
+    }
+    fclose(f);
+
+    result = stb_avif_load_from_memory(buf, (int)file_size, w, h, channels,
+                                       req_channels);
+    free(buf);
+    return result;
+}
+
 unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
                                           int *x, int *y, int *channels,
                                           int req_channels)
@@ -14480,7 +14522,7 @@ ivf_decoded:
         (void)obu_extension_flag;
         obu_size = 0;
 
-while (more_obus && obu_reader.pos < obu_reader.size) {
+        while (more_obus && obu_reader.pos < obu_reader.size) {
             /* Parse OBU header */
             if (obu_reader.pos + 1 > obu_reader.size)
                 break;

@@ -105,6 +105,14 @@ static unsigned char *stb_avif_last_alpha(int *stride)
 
 const char *stb_avif_failure_reason(void);
 
+/* Load an AVIF from a file path.  Returns an 8-bit RGB/RGBA pixel buffer
+ * (freed with stb_avif_free()) or NULL on failure.
+ * req_channels: 0 = keep original (3 or 4), 3 = force RGB, 4 = force RGBA.
+ * w/h/channels receive image dimensions and actual channel count. */
+unsigned char *stb_avif_load_from_file(const char *filePath,
+                                       int *w, int *h, int *channels,
+                                       int req_channels);
+
 /* -------------------------------------------------------------------------- */
 /* PRIVATE TYPES (exposed for implementation)                                 */
 /* -------------------------------------------------------------------------- */
@@ -3436,6 +3444,41 @@ const char *stb_avif_failure_reason(void)
 void stb_avif_free(void *ptr)
 {
     free(ptr);
+}
+
+unsigned char *stb_avif_load_from_file(const char *filePath,
+                                       int *w, int *h, int *channels,
+                                       int req_channels)
+{
+    FILE *f;
+    unsigned char *buf;
+    long file_size;
+    unsigned char *result;
+
+    if (!filePath) return NULL;
+    f = fopen(filePath, "rb");
+    if (!f) return NULL;
+
+    fseek(f, 0, SEEK_END);
+    file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (file_size <= 0) { fclose(f); return NULL; }
+
+    buf = (unsigned char *)malloc((size_t)file_size);
+    if (!buf) { fclose(f); return NULL; }
+
+    if ((long)fread(buf, 1, (size_t)file_size, f) != file_size) {
+        free(buf);
+        fclose(f);
+        return NULL;
+    }
+    fclose(f);
+
+    result = stb_avif_load_from_memory(buf, (int)file_size, w, h, channels,
+                                       req_channels);
+    free(buf);
+    return result;
 }
 
 unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
