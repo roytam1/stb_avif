@@ -25,7 +25,7 @@
  *      // ... use img ...
  *      stb_avif_free(img);
  *
- *   Example (with dav1d — correct output):
+ *   Example (with dav1d - correct output):
  *      #define STB_AVIF_USE_DAV1D
  *      #define STB_AVIF_IMPLEMENTATION
  *      #include "stb_avif.h"
@@ -1198,7 +1198,7 @@ static int stb_av1_decode_nsym(struct stb_av1_bool_reader *br, int n)
 }
 
 /* -------------------------------------------------------------------------- */
-/* AV1 SEQUENCE HEADER PARSER                                                */
+/* AV1 SEQUENCE HEADER STRUCT                                                 */
 /* -------------------------------------------------------------------------- */
 
 struct stb_av1_sequence_header {
@@ -1237,182 +1237,6 @@ struct stb_av1_sequence_header {
     int subsampling_x;
     int subsampling_y;
 };
-
-static void stb_av1_parse_sequence_header_obu(struct stb_avif_reader *r,
-                                               struct stb_av1_sequence_header *sh,
-                                               struct stb_av1_bool_reader *br)
-{
-    /* AV1 spec section 5.5: Sequence Header OBU syntax */
-    sh->seq_profile = (int)stb_av1_bool_decode_literal(br, 3);
-    sh->still_picture = stb_av1_bool_decode(br, 128);
-    sh->reduced_still_picture_header = stb_av1_bool_decode(br, 128);
-
-    if (sh->reduced_still_picture_header) {
-        sh->timing_info_present = 0;
-        sh->decoder_model_info_present = 0;
-        sh->display_model_info_present = 0;
-        sh->operating_points_cnt = 1;
-        /* operating_point_idc[0] = 0 implicitly */
-        sh->frame_width_bits = 4;
-        sh->frame_height_bits = 4;
-        sh->max_frame_width = 16;
-        sh->max_frame_height = 16;
-        sh->enable_order_hint = 0;
-        sh->enable_dist_wtd_comp = 0;
-        sh->enable_masked_comp = 0;
-        sh->enable_intra_edge_filter = 1; /* default 1 */
-        sh->enable_interintra_comp = 0;
-        sh->enable_dual_filter = 0;
-        sh->enable_jnt_comp = 0;
-        sh->enable_superres = 0;
-        sh->enable_cdef = 1; /* default 1 for still picture? */
-        sh->enable_restoration = 0; /* default */
-        sh->film_grain_params_present = 0;
-    } else {
-        int op;
-        sh->operating_points_cnt = (int)stb_av1_bool_decode_literal(br, 5) + 1;
-        for (op = 0; op < sh->operating_points_cnt; op++) {
-            /* operating_point_idc */
-            stb_av1_bool_decode_literal(br, 12);
-            /* seq_level_idx */
-            stb_av1_bool_decode_literal(br, 5);
-            if (stb_av1_bool_decode(br, 128)) { /* seq_tier */
-                stb_av1_bool_decode(br, 128);
-            }
-            if (op == 0) {
-                /* decoder_model_present_for_this_op */
-                if (stb_av1_bool_decode(br, 128)) {
-                    /* decoder_buffer_delay */
-                    stb_av1_bool_decode_literal(br, 8);
-                    /* encoder_buffer_delay */
-                    stb_av1_bool_decode_literal(br, 8);
-                    stb_av1_bool_decode(br, 128); /* low_delay_mode */
-                }
-            }
-        }
-
-        /* frame_width_bits */
-        sh->frame_width_bits = (int)stb_av1_bool_decode_literal(br, 4) + 1;
-        /* frame_height_bits */
-        sh->frame_height_bits = (int)stb_av1_bool_decode_literal(br, 4) + 1;
-        /* max_frame_width */
-        sh->max_frame_width = (int)stb_av1_bool_decode_literal(br, sh->frame_width_bits) + 1;
-        /* max_frame_height */
-        sh->max_frame_height = (int)stb_av1_bool_decode_literal(br, sh->frame_height_bits) + 1;
-
-        /* Frame ID numbers */
-        if (stb_av1_bool_decode(br, 128)) {
-            stb_av1_bool_decode_literal(br, 4); /* delta_frame_id_length */
-            stb_av1_bool_decode_literal(br, 3); /* additional_frame_id_length */
-        }
-
-        /* Use 124th order hint */
-        sh->enable_order_hint = stb_av1_bool_decode(br, 128);
-        if (sh->enable_order_hint) {
-            stb_av1_bool_decode_literal(br, 2); /* order_hint_bits_minus_1 */
-        }
-        sh->enable_dist_wtd_comp = stb_av1_bool_decode(br, 128);
-        sh->enable_masked_comp = stb_av1_bool_decode(br, 128);
-
-        sh->enable_intra_edge_filter = stb_av1_bool_decode(br, 128);
-        sh->enable_interintra_comp = stb_av1_bool_decode(br, 128);
-        sh->enable_dual_filter = stb_av1_bool_decode(br, 128);
-        sh->enable_jnt_comp = stb_av1_bool_decode(br, 128);
-        sh->enable_superres = stb_av1_bool_decode(br, 128);
-
-        /* Timing info */
-        sh->timing_info_present = stb_av1_bool_decode(br, 128);
-        if (sh->timing_info_present) {
-            stb_av1_bool_decode_literal(br, 32); /* num_units_in_tick */
-            stb_av1_bool_decode_literal(br, 32); /* time_scale */
-            if (stb_av1_bool_decode(br, 128)) { /* equal_picture_interval */
-                stb_av1_bool_decode_literal(br, 32); /* num_ticks_per_picture */
-            }
-
-            /* decoder_model_info */
-            sh->decoder_model_info_present = stb_av1_bool_decode(br, 128);
-            if (sh->decoder_model_info_present) {
-                stb_av1_bool_decode_literal(br, 5); /* buffer_delay_length_minus_1 */
-                stb_av1_bool_decode_literal(br, 4); /* num_units_in_decoding_tick */
-                sh->buffer_removal_time_length_minus_1 = (int)stb_av1_bool_decode_literal(br, 5);
-                stb_av1_bool_decode_literal(br, 5); /* frame_presentation_time_length_minus_1 */
-            }
-
-            sh->display_model_info_present = stb_av1_bool_decode(br, 128);
-        }
-    }
-
-    /* Initial display delay */
-    if (!sh->reduced_still_picture_header) {
-        sh->initial_display_delay_present = stb_av1_bool_decode(br, 128);
-        if (sh->initial_display_delay_present) {
-            stb_av1_bool_decode_literal(br, 4); /* initial_display_delay */
-        }
-    }
-
-    /* Color config -- always present in AV1 spec, even for reduced_still_picture */
-    {
-        int high_bitdepth;
-        high_bitdepth = stb_av1_bool_decode(br, 128); /* high_bitdepth */
-        if (high_bitdepth) {
-            sh->bit_depth = stb_av1_bool_decode(br, 128) ? 12 : 10;
-        } else {
-            sh->bit_depth = 8;
-        }
-
-        if (sh->seq_profile == 0 && sh->bit_depth > 8) {
-            sh->monochrome = 0;
-        } else {
-            sh->monochrome = stb_av1_bool_decode(br, 128);
-        }
-
-        if (stb_av1_bool_decode(br, 128)) {
-            sh->color_description_present = 1;
-            sh->color_primaries = (int)stb_av1_bool_decode_literal(br, 8);
-            sh->transfer_characteristics = (int)stb_av1_bool_decode_literal(br, 8);
-            sh->matrix_coefficients = (int)stb_av1_bool_decode_literal(br, 8);
-        } else {
-            sh->color_description_present = 0;
-            sh->color_primaries = 2;
-            sh->transfer_characteristics = 2;
-            sh->matrix_coefficients = 2;
-        }
-
-        if (sh->monochrome) {
-            sh->color_range = stb_av1_bool_decode(br, 128);
-            sh->subsampling_x = 1;
-            sh->subsampling_y = 1;
-            sh->chroma_sample_position = 0;
-        } else if (sh->color_primaries == 1
-                   && sh->transfer_characteristics == 13
-                   && sh->matrix_coefficients == 0) {
-            sh->color_range = 1;
-            sh->subsampling_x = 0;
-            sh->subsampling_y = 0;
-            sh->chroma_sample_position = 0;
-        } else {
-            sh->color_range = stb_av1_bool_decode(br, 128);
-            sh->subsampling_x = stb_av1_bool_decode(br, 128);
-            sh->subsampling_y = stb_av1_bool_decode(br, 128);
-            if (sh->subsampling_x && sh->subsampling_y) {
-                sh->chroma_sample_position = (int)stb_av1_bool_decode_literal(br, 2);
-            }
-        }
-
-        sh->film_grain_params_present = stb_av1_bool_decode(br, 128);
-    }
-
-    /* Separator: always 1 for valid sequence headers */
-    if (!stb_av1_bool_decode(br, 128)) {
-        STB_AVIF_ERROR("Invalid AV1 sequence header");
-    }
-
-    /* CDEF and restoration filtering */
-    if (!sh->reduced_still_picture_header) {
-        sh->enable_cdef = stb_av1_bool_decode(br, 128);
-        sh->enable_restoration = stb_av1_bool_decode(br, 128);
-    }
-}
 
 /* -------------------------------------------------------------------------- */
 /* AV1 FRAME HEADER PARSER                                                   */
@@ -3715,22 +3539,12 @@ ivf_decoded:
 
             /* Process based on type */
             switch (obu_type) {
-                case STB_AV1_OBU_SEQUENCE_HEADER: {
-                    struct stb_avif_reader seq_r;
-                    struct stb_av1_bool_reader seq_br;
-
-                    /* Initialize a reader for this OBU's data */
-                    stb_avif_reader_init(&seq_r,
-                                          obu_reader.data + obu_reader.pos,
-                                          (size_t)obu_size);
-                    stb_av1_bool_reader_init(&seq_br,
-                                               obu_reader.data + obu_reader.pos,
-                                               (size_t)obu_size);
-
-                    stb_av1_parse_sequence_header_obu(&seq_r, &sh, &seq_br);
+                case STB_AV1_OBU_SEQUENCE_HEADER:
+                    /* Mark header found; the authoritative raw-bit
+                     * parser (stb_av1_parse_internal_stream) runs later
+                     * and fills all geometry/colour fields. */
                     seq_header_found = 1;
                     break;
-                }
                 case STB_AV1_OBU_FRAME_HEADER:
                 case STB_AV1_OBU_REDUNDANT_FRAME_HEADER: {
                     struct stb_avif_reader fh_r;
@@ -3825,7 +3639,7 @@ ivf_decoded:
 
         /* Fallback: no sequence-header OBU in the item stream (AVIF
          * encoders often put it only inside av1C).  Parse the config
-         * OBU from av1C now — AFTER the stream walk, so the stream's
+         * OBU from av1C now - AFTER the stream walk, so the stream's
          * own seq header always wins. */
         if (!seq_header_found && info.av1c_size > 0) {
             struct stb_avif_reader config_r;
@@ -3841,15 +3655,6 @@ ivf_decoded:
                 config_obu_sz = (stbv_u32)(info.av1c_size - (size_t)(config_r.pos));
 
             if (config_obu_type == STB_AV1_OBU_SEQUENCE_HEADER && config_obu_sz > 0) {
-                struct stb_avif_reader seq_config_r;
-                struct stb_av1_bool_reader seq_config_br;
-                stb_avif_reader_init(&seq_config_r,
-                                      config_r.data + config_r.pos,
-                                      (size_t)config_obu_sz);
-                stb_av1_bool_reader_init(&seq_config_br,
-                                           config_r.data + config_r.pos,
-                                           (size_t)config_obu_sz);
-                stb_av1_parse_sequence_header_obu(&seq_config_r, &sh, &seq_config_br);
                 seq_header_found = 1;
             }
         }
@@ -3864,29 +3669,64 @@ ivf_decoded:
     }
 
 #ifndef STB_AVIF_USE_DAV1D
-    /* Authoritative re-parse: the legacy bool-reader based sequence
-     * decode above mis-reads real streams (it arithmetic-decodes what
-     * is actually plain f(n) bit syntax).  stb_av1_parse_internal_stream
-     * uses the raw-bit seqhdr parser that matches dav1d bit-for-bit on
-     * the whole sample set; let it own colour/geometry description. */
+    /* Authoritative sequence-header parse: stb_av1_parse_internal_stream
+     * uses raw-bit f(n) parsing that matches dav1d bit-for-bit.  It owns
+     * ALL geometry/colour/filtering fields so we no longer need the
+     * legacy bool-reader based parser above. */
     {
         struct stb_av1_internal_stream probe;
         if (stb_av1_parse_internal_stream(&probe, info.av1_data,
                                           info.av1_size) == 0 &&
             probe.have_seq) {
-            sh.monochrome = probe.seq.monochrome ? 1 : 0;
-            sh.bit_depth = 8 + (int)probe.seq.hbd * 2;
-            sh.subsampling_x = probe.seq.ss_hor ? 1 : 0;
-            sh.subsampling_y = probe.seq.ss_ver ? 1 : 0;
-#ifdef STB_AVIF_TEST_NO_MC_OVERRIDE
-            /* A/B test hook */
-#else
-            sh.matrix_coefficients = probe.seq.mtrx;
-            sh.color_range = probe.seq.color_range;
-#endif
-            probe_seq_hbd = probe.seq.hbd;
-            probe_seq_mono = probe.seq.monochrome ? 1 : 0;
-            sh_parsed_ok = 1;
+            const struct stb_av1_seqhdr *sq = &probe.seq;
+
+            /* Geometry */
+            sh.frame_width_bits  = (int)sq->width_n_bits;
+            sh.frame_height_bits = (int)sq->height_n_bits;
+            sh.max_frame_width   = (int)sq->max_width;
+            sh.max_frame_height  = (int)sq->max_height;
+
+            /* Profile / picture type */
+            sh.seq_profile                = (int)sq->profile;
+            sh.still_picture              = (int)sq->still_picture;
+            sh.reduced_still_picture_header = (int)sq->reduced_still_picture_header;
+
+            /* Tool flags (consumed by frame header parser) */
+            sh.enable_order_hint        = (int)sq->order_hint;
+            sh.enable_dist_wtd_comp     = 0;
+            sh.enable_masked_comp       = (int)sq->masked_compound;
+            sh.enable_intra_edge_filter = (int)sq->intra_edge_filter;
+            sh.enable_interintra_comp   = (int)sq->inter_intra;
+            sh.enable_dual_filter       = (int)sq->dual_filter;
+            sh.enable_jnt_comp          = (int)sq->jnt_comp;
+            sh.enable_superres          = (int)sq->super_res;
+            sh.enable_cdef              = (int)sq->cdef;
+            sh.enable_restoration       = (int)sq->restoration;
+            sh.film_grain_params_present = (int)sq->film_grain_present;
+
+            /* Timing / decoder model */
+            sh.timing_info_present         = (int)sq->timing_info_present;
+            sh.decoder_model_info_present  = (int)sq->decoder_model_info_present;
+            sh.display_model_info_present  = (int)sq->display_model_info_present;
+            sh.operating_points_cnt        = (int)sq->num_operating_points;
+
+            /* Colour */
+            sh.color_description_present = (int)sq->color_description_present;
+            sh.color_primaries           = (int)sq->pri;
+            sh.transfer_characteristics  = (int)sq->trc;
+            sh.matrix_coefficients       = (int)sq->mtrx;
+            sh.color_range               = (int)sq->color_range;
+            sh.chroma_sample_position     = (int)sq->chr;
+
+            /* Pixel format */
+            sh.monochrome    = sq->monochrome ? 1 : 0;
+            sh.bit_depth     = 8 + (int)sq->hbd * 2;
+            sh.subsampling_x = sq->ss_hor ? 1 : 0;
+            sh.subsampling_y = sq->ss_ver ? 1 : 0;
+
+            probe_seq_hbd  = sq->hbd;
+            probe_seq_mono = sq->monochrome ? 1 : 0;
+            sh_parsed_ok   = 1;
         }
     }
 #endif /* !STB_AVIF_USE_DAV1D */
@@ -4175,7 +4015,7 @@ ivf_decoded:
                 }
 
                 /* NOTE: planes are already scaled to 8-bit in the
-                 * u16→u8 conversion above (lines ~3662-3745).
+                 * u16 -> u8 conversion above (lines ~3662-3745).
                  * Do NOT apply a second bit-depth shift here. */
 
                 /* Range expansion for limited range (color_range=0) */
