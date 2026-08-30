@@ -257,12 +257,15 @@ static int stb_av1_parse_seqhdr(struct stb_av1_seqhdr *h,
         h->layout = STB_AV1_LAYOUT_I400;
         h->ss_hor = h->ss_ver = 1;
         h->chr = STB_AV1_CHR_UNKNOWN;
-    } else if (h->pri == 1 && h->trc == 13 && h->mtrx == 0) {
-        /* BT.709 / sRGB / identity matrix special case. */
+    } else if (h->pri == 1 && h->trc == 13 && h->mtrx == 0
+               && (h->profile == 1
+                   || (h->profile == 2 && h->hbd == 2))) {
+        /* BT.709 / sRGB / identity matrix special case.
+         * Only valid for profile 1 or profile 2 with hbd==2 per spec.
+         * For other profiles (e.g. profile 0), fall through to the
+         * normal path so we read color_range and subsampling correctly. */
         h->layout = STB_AV1_LAYOUT_I444;
         h->color_range = 1;
-        if (h->profile != 1 && !(h->profile == 2 && h->hbd == 2))
-            return -1;
     } else {
         h->color_range = stb_av1_get_bit(gb);
         switch (h->profile) {
