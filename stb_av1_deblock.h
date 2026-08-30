@@ -171,12 +171,21 @@ static void stb_avif_deblock_plane_u16(stbv_u16 *p, ptrdiff_t stride,
                                        const stbv_u8 *txlw,
                                        ptrdiff_t b4stride,
                                        int mapw4, int maph4,
-                                       int ssx, int ssy)
+                                       int ssx, int ssy,
+                                       const unsigned int *tile_col_start_sb,
+                                       int tile_cols,
+                                       const unsigned int *tile_row_start_sb,
+                                       int tile_rows,
+                                       int sb_size)
 {
     int e_lim, lut_i[64], lut_e[64];
     int L, x, y, X, Y;
 
     if (!level_v && !level_h) return;
+
+    /* Loop filtering must not cross a tile boundary.  The reconstruction
+     * maps are frame-wide, so a plain blkid comparison would otherwise
+     * make every tile boundary look like an ordinary block edge. */
 
     /* dav1d_calc_eih */
     for (L = 0; L < 64; L++) {
@@ -213,6 +222,16 @@ static void stb_avif_deblock_plane_u16(stbv_u16 *p, ptrdiff_t stride,
                         edge = 1;
                         if (ll < bucket) bucket = ll;
                         if (lr < bucket) bucket = lr;
+                    }
+                }
+                if (!edge) continue;
+                /* No deblock across a tile-column boundary.  X is in this
+                 * plane's pixel coordinates; tile starts are in SB units. */
+                if (tile_col_start_sb && tile_cols > 1) {
+                    int tc;
+                    for (tc = 1; tc < tile_cols; tc++) {
+                        int tbx = (int)((tile_col_start_sb[tc] * (unsigned int)sb_size) >> ssx);
+                        if (X == tbx) { edge = 0; break; }
                     }
                 }
                 if (!edge) continue;
@@ -255,6 +274,15 @@ static void stb_avif_deblock_plane_u16(stbv_u16 *p, ptrdiff_t stride,
                         edge = 1;
                         if (lu < bucket) bucket = lu;
                         if (ld < bucket) bucket = ld;
+                    }
+                }
+                if (!edge) continue;
+                /* No deblock across a tile-row boundary. */
+                if (tile_row_start_sb && tile_rows > 1) {
+                    int tr;
+                    for (tr = 1; tr < tile_rows; tr++) {
+                        int tby = (int)((tile_row_start_sb[tr] * (unsigned int)sb_size) >> ssy);
+                        if (Y == tby) { edge = 0; break; }
                     }
                 }
                 if (!edge) continue;
