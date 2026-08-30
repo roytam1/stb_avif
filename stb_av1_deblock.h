@@ -73,7 +73,7 @@ static void stb_av1_loop_filter_edge(stbv_u16 *dst, ptrdiff_t stridea,
             flat8in = 0;
 
         if (wd >= 8)
-            flat8in &= abs(p3 - p0) <= F && abs(q3 - p0) <= F;
+            flat8in &= abs(p3 - p0) <= F && abs(q3 - q0) <= F;
 
         if (wd >= 16 && (flat8out & flat8in)) {
             dst[strideb * -6] = (stbv_u16)stb_av1_db_iclip(
@@ -190,12 +190,12 @@ static void stb_avif_deblock_plane_u16(stbv_u16 *p, ptrdiff_t stride,
         lut_e[L] = 2 * (L + 2) + limit;
     }
 
-    /* ---- vertical edges (at px X = multiples of 8) ---- */
+    /* ---- vertical edges (at px X = multiples of 4) ---- */
     if (level_v) {
-        for (X = 8; X < w; X += 8) {
+        for (X = 4; X < w; X += 4) {
             for (Y = 0; Y < h; Y += 4) {
-                int bx_r = (X >> ssx) >> 2;          /* unit col right of edge */
-                int by_a = (Y >> ssy) >> 2;          /* first unit row of band */
+                int bx_r = (X << ssx) >> 2;          /* unit col right of edge */
+                int by_a = (Y << ssy) >> 2;          /* first unit row of band */
                 int band_rows = 4 >> ssy;
                 int edge = 0, bucket = 99;
                 int r;
@@ -232,12 +232,12 @@ static void stb_avif_deblock_plane_u16(stbv_u16 *p, ptrdiff_t stride,
         }
     }
 
-    /* ---- horizontal edges ---- */
+    /* ---- horizontal edges (at px Y = multiples of 4) ---- */
     if (level_h) {
-        for (Y = 8; Y < h; Y += 8) {
+        for (Y = 4; Y < h; Y += 4) {
             for (X = 0; X < w; X += 4) {
-                int by_r = (Y >> ssy) >> 2;
-                int bx_a = (X >> ssx) >> 2;
+                int by_r = (Y << ssy) >> 2;
+                int bx_a = (X << ssx) >> 2;
                 int band_cols = 4 >> ssx;
                 int edge = 0, bucket = 99;
                 int c;
