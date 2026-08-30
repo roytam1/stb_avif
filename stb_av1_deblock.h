@@ -244,6 +244,10 @@ static void stb_avif_deblock_plane_u16(stbv_u16 *p, ptrdiff_t stride,
                     stbv_u16 *q0 = p + (size_t)Y * stride + X;
                     int wd = 4 << bucket;
                     if (is_chroma) wd = 4 + 2 * bucket;
+                    if (wd >= 16 && (X < 7 || w - X < 6)) wd = 8;
+                    if (wd >= 8 && (X < 4 || w - X < 3)) wd = is_chroma ? 6 : 4;
+                    if (wd >= 6 && (X < 3 || w - X < 2)) wd = 4;
+                    if (wd >= 4 && (X < 2 || w - X < 1)) continue;
                     stb_av1_loop_filter_edge(q0, sa, sb, lut_e[L], lut_i[L],
                                              L >> 4, wd, maxv, bd8);
                 }
@@ -295,6 +299,10 @@ static void stb_avif_deblock_plane_u16(stbv_u16 *p, ptrdiff_t stride,
                     stbv_u16 *q0 = p + (size_t)Y * stride + X;
                     int wd = 4 << bucket;
                     if (is_chroma) wd = 4 + 2 * bucket;
+                    if (wd >= 16 && (Y < 7 || h - Y < 6)) wd = 8;
+                    if (wd >= 8 && (Y < 4 || h - Y < 3)) wd = is_chroma ? 6 : 4;
+                    if (wd >= 6 && (Y < 3 || h - Y < 2)) wd = 4;
+                    if (wd >= 4 && (Y < 2 || h - Y < 1)) continue;
                     stb_av1_loop_filter_edge(q0, sa, sb, lut_e[L], lut_i[L],
                                              L >> 4, wd, maxv, bd8);
                 }
