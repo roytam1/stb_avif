@@ -79,6 +79,26 @@ static const unsigned char stbv_av1_tx_set_intra1[7] = {
     STBV_AV1_TX_DCT_ADST
 };
 
+/* Inter tx type mapping tables from dav1d tables.c tx_types_per_set[]. */
+static const unsigned char stbv_av1_tx_set_inter1[15] = {
+    STBV_AV1_TX_IDTX, STBV_AV1_TX_V_DCT, STBV_AV1_TX_H_DCT,
+    STBV_AV1_TX_V_ADST, STBV_AV1_TX_H_ADST, STBV_AV1_TX_V_FLIPADST,
+    STBV_AV1_TX_H_FLIPADST, STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_ADST_DCT,
+    STBV_AV1_TX_DCT_ADST, STBV_AV1_TX_FLIPADST_DCT,
+    STBV_AV1_TX_DCT_FLIPADST, STBV_AV1_TX_ADST_ADST,
+    STBV_AV1_TX_FLIPADST_FLIPADST, STBV_AV1_TX_ADST_FLIPADST
+};
+static const unsigned char stbv_av1_tx_set_inter2[11] = {
+    STBV_AV1_TX_IDTX, STBV_AV1_TX_V_DCT, STBV_AV1_TX_H_DCT,
+    STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_ADST_DCT, STBV_AV1_TX_DCT_ADST,
+    STBV_AV1_TX_FLIPADST_DCT, STBV_AV1_TX_DCT_FLIPADST,
+    STBV_AV1_TX_ADST_ADST, STBV_AV1_TX_FLIPADST_FLIPADST,
+    STBV_AV1_TX_ADST_FLIPADST
+};
+static const unsigned char stbv_av1_tx_set_inter3[2] = {
+    STBV_AV1_TX_IDTX, STBV_AV1_TX_DCT_DCT
+};
+
 /* Transform dimensions use 4x4 units. */
 typedef struct stbv_av1_tx_dim {
     unsigned char w;
@@ -282,6 +302,59 @@ static int stbv_av1_decode_intra_txtp(struct stb_av1_msac *msac,
     if (idx < 7)
         return stbv_av1_tx_set_intra1[idx];
     return STBV_AV1_TX_DCT_DCT;
+}
+
+/*
+ * Decode the chroma txtp for inter blocks (including IBC).
+ * uvt_dim is the chroma transform dimension; ytxtp is the already-decoded
+ * luma txtp.  No MSAC consumption.
+ */
+static int stbv_av1_get_uv_inter_txtp(int uvt_dim_min, int uvt_dim_max,
+                                      int ytxtp)
+{
+    if (uvt_dim_max == 3) /* TX_32X32 */
+        return ytxtp == STBV_AV1_TX_IDTX ? STBV_AV1_TX_IDTX
+                                          : STBV_AV1_TX_DCT_DCT;
+    if (uvt_dim_min == 2) { /* TX_16X16 */
+        /* H_FLIPADST=15, V_FLIPADST=14, H_ADST=13, V_ADST=12 */
+        if ((1 << ytxtp) & ((1 << 15) | (1 << 14) | (1 << 13) | (1 << 12)))
+            return STBV_AV1_TX_DCT_DCT;
+    }
+    return ytxtp;
+}
+
+/*
+ * Decode the transform type for an inter block (including IBC).
+ *
+ * t_dim_min is the smaller dimension of the luma transform.
+ * t_dim_max is the larger dimension.
+ * reduced_txtp_set selects the restricted inter set.
+ *
+ * Returns the decoded transform type.  The caller must NOT be in an intra
+ * block (use stbv_av1_decode_intra_txtp for intra).
+ */
+static int stbv_av1_decode_inter_txtp(struct stb_av1_msac *msac,
+                                      stbv_av1_cdf *cdf,
+                                      int t_dim_min, int t_dim_max,
+                                      int reduced_txtp_set)
+{
+    unsigned int idx;
+
+    if (reduced_txtp_set || t_dim_max == 3 /* TX_32X32 */) {
+        /* txtp_inter3[t_dim_min]: single bool CDF, DCT_DCT vs IDTX */
+        int min2 = t_dim_min > 3 ? 3 : (t_dim_min < 0 ? 0 : t_dim_min);
+        idx = stb_av1_msac_bool_adapt(msac,
+                  &cdf->txtp_inter3[min2 * 2]);
+        return stbv_av1_tx_set_inter3[idx];
+    } else if (t_dim_min == 2 /* TX_16X16 */) {
+        idx = stb_av1_msac_symbol(msac, cdf->txtp_inter2, 10);
+        return stbv_av1_tx_set_inter2[idx < 11 ? idx : 0];
+    } else {
+        /* t_dim_min is 0 or 1 */
+        int min2 = t_dim_min > 1 ? 1 : (t_dim_min < 0 ? 0 : t_dim_min);
+        idx = stb_av1_msac_symbol(msac, cdf->txtp_inter1[min2], 14);
+        return stbv_av1_tx_set_inter1[idx < 15 ? idx : 0];
+    }
 }
 
 #endif /* STB_AV1_TX_H */

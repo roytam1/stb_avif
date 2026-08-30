@@ -408,6 +408,7 @@ typedef struct stbv_av1_leaf_decode_ctx {
     int block_skip;
     int reduced_txtp_set;
     int hbd;
+    int is_intra;  /* 1 = intra block, 0 = IBC block */
     const stbv_av1_leaf_recon *recon;
 } stbv_av1_leaf_decode_ctx;
 
@@ -442,14 +443,21 @@ skip = stb_av1_msac_bool_adapt(
             txtp = STBV_AV1_TX_WHT_WHT;
         else if (max + 1 >= STBV_AV1_TX_64X64) /* max + intra >= TX_64X64 */
             txtp = STBV_AV1_TX_DCT_DCT;
-        else if (is_chroma)
-            /* inferred from the intra UV mode, never coded */
-            txtp = stbv_av1_txtp_from_uvmode[c->intra ? c->intra->uv_mode : 0];
-        else if (!c->qidx)
+        else if (is_chroma) {
+            if (c->is_intra)
+                txtp = stbv_av1_txtp_from_uvmode[c->intra ? c->intra->uv_mode : 0];
+            else
+                /* IBC/inter chroma txtp derived from luma txtp (see below) */
+                txtp = STBV_AV1_TX_DCT_DCT;
+        } else if (!c->qidx)
             txtp = STBV_AV1_TX_DCT_DCT;
-        else
+        else if (c->is_intra)
             txtp = stbv_av1_decode_intra_txtp(msac, cdf,
                 stbv_av1_tx_dims[tx].min, c->y_mode_txtp,
+                c->reduced_txtp_set);
+        else
+            txtp = stbv_av1_decode_inter_txtp(msac, cdf,
+                stbv_av1_tx_dims[tx].min, stbv_av1_tx_dims[tx].max,
                 c->reduced_txtp_set);
     } else {
         /* dav1d: *txtp = lossless * WHT_WHT */
@@ -867,6 +875,19 @@ static void stbv_av1_read_mv_residual(struct stb_av1_msac *msac,
             cdf->mv_classN, mv_prec);
 }
 
+/* ---- IBC luma TX tree leaf callback ---- */
+/* Called by stbv_av1_decode_tx_tree for each luma TX leaf in an IBC block.
+ * Decodes coefficients at the leaf's TX size. */
+static int stbv_av1_ibc_luma_leaf(int x4, int y4, int tx, void *opaque)
+{
+    stbv_av1_leaf_decode_ctx *c = (stbv_av1_leaf_decode_ctx *)opaque;
+    int r;
+    if (!c) return -1;
+    r = stbv_av1_leaf_tx_plane(c->msac, c->cdf, c, x4, y4, tx, 0,
+                               &c->state->res, c->bw4, c->bh4, NULL);
+    return r ? -1 : 0;
+}
+
 static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                        stbv_av1_cdf *cdf,
                                        stbv_av1_leaf_state *state,
@@ -887,6 +908,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     int seg_id = 0, seg_pred = 0;
     unsigned block_skip = 0;
     unsigned int n;
+    int intra_flag = 1; /* 1 = intra, 0 = IBC */
 c.recon = recon;
     if (!msac || !cdf || !state || bs < 0 || bs >= STBV_AV1_N_BS_SIZES)
         return -1;
@@ -1094,9 +1116,7 @@ c.recon = recon;
      * flag (dav1d decode.c:1043-1044).  For key frames without intrabc,
      * all blocks are implicitly intra. */
     if (frame && frame->allow_intrabc) {
-        int intra_flag = !stb_av1_msac_bool_adapt(msac, cdf->intrabc);
-        /* For now we treat IBC blocks as intra (no IBC recon). */
-        (void)intra_flag;
+        intra_flag = !stb_av1_msac_bool_adapt(msac, cdf->intrabc);
     }
 
     /* Recompute qidx using the SB-level last_qidx (may have been updated
@@ -1105,77 +1125,93 @@ c.recon = recon;
     if (qidx < 1) qidx = 1;
     if (qidx > 255) qidx = 255;
 
+    /* IBC MV residual decode (dav1d decode.c:1267-1290).
+     * Prediction MV is (0,0) since we have no refmvs buffer;
+     * only the residual is decoded from MSAC. */
+    if (!intra_flag) {
+        int mv_y = 0, mv_x = 0;
+        stbv_av1_read_mv_residual(msac, cdf, &mv_y, &mv_x, -1);
+        (void)mv_y; (void)mv_x;
+    }
+
     cfl_allowed = lossless ? (cbw4 == 1 && cbh4 == 1) :
         !!(STBV_AV1_CFL_ALLOWED_MASK & (1U << bs));
-    if (stb_av1_intra_state_decode_leaf(msac, cdf, &state->intra,
-                                        bx4, by4, bs, cfl_allowed,
-                                        has_chroma, &intra))
-        return -3;
+    if (intra_flag) {
+        if (stb_av1_intra_state_decode_leaf(msac, cdf, &state->intra,
+                                            bx4, by4, bs, cfl_allowed,
+                                            has_chroma, &intra))
+            return -3;
+    } else {
+        /* IBC: no intra mode decode; set defaults for ctx. */
+        memset(&intra, 0, sizeof(intra));
+        intra.y_mode = STBV_AV1_INTRA_DC;
+        intra.uv_mode = STBV_AV1_INTRA_DC;
+    }
 
-    /* Palette: presence bools, size, colors and index map (dav1d decode.c
-     * 1126-1193 + recon_tmpl read_pal_plane/read_pal_uv/read_pal_indices). */
+    /* Palette, filter-intra, and palette indices: intra-only.
+     * IBC blocks skip all of these (dav1d decode.c:1267). */
     state->pal_sz_y = 0;
     state->pal_sz_uv = 0;
-    if (frame && frame->allow_screen_content_tools &&
-        (bw4 > bh4 ? bw4 : bh4) <= 16 && bw4 + bh4 >= 4) {
-        int sz_ctx = stbv_av1_block_dimensions[bs][2] +
-                     stbv_av1_block_dimensions[bs][3] - 2;
-        int bpc = 8 + (seq ? seq->hbd : 0) * 2;
-        if (intra.y_mode == STBV_AV1_INTRA_DC) {
-            int pal_ctx = 0;
-            if (state->above_pal_sz && (unsigned)bx4 < state->above_pal_sz_n &&
-                state->above_pal_sz[bx4] > 0)
-                pal_ctx++;
-            if (state->left_pal_sz && (unsigned)by4 < state->left_pal_sz_n &&
-                state->left_pal_sz[by4] > 0)
-                pal_ctx++;
-            if (stb_av1_msac_bool_adapt(msac,
-                                        cdf->pal_y + sz_ctx * 6 + pal_ctx * 2)) {
-                if (stbv_av1_palette_read_plane(msac, cdf, state, 0, sz_ctx,
-                                                bx4, by4, bpc, state->pal_y,
-                                                &state->pal_sz_y))
-                    return -7;
+    if (intra_flag) {
+        if (frame && frame->allow_screen_content_tools &&
+            (bw4 > bh4 ? bw4 : bh4) <= 16 && bw4 + bh4 >= 4) {
+            int sz_ctx = stbv_av1_block_dimensions[bs][2] +
+                         stbv_av1_block_dimensions[bs][3] - 2;
+            int bpc = 8 + (seq ? seq->hbd : 0) * 2;
+            if (intra.y_mode == STBV_AV1_INTRA_DC) {
+                int pal_ctx = 0;
+                if (state->above_pal_sz && (unsigned)bx4 < state->above_pal_sz_n &&
+                    state->above_pal_sz[bx4] > 0)
+                    pal_ctx++;
+                if (state->left_pal_sz && (unsigned)by4 < state->left_pal_sz_n &&
+                    state->left_pal_sz[by4] > 0)
+                    pal_ctx++;
+                if (stb_av1_msac_bool_adapt(msac,
+                                            cdf->pal_y + sz_ctx * 6 + pal_ctx * 2)) {
+                    if (stbv_av1_palette_read_plane(msac, cdf, state, 0, sz_ctx,
+                                                    bx4, by4, bpc, state->pal_y,
+                                                    &state->pal_sz_y))
+                        return -7;
+                }
+            }
+            if (has_chroma && intra.uv_mode == STBV_AV1_INTRA_DC) {
+                int pal_ctx = state->pal_sz_y > 0;
+                if (stb_av1_msac_bool_adapt(msac, cdf->pal_uv + pal_ctx * 2)) {
+                    if (stbv_av1_palette_read_plane(msac, cdf, state, 1, sz_ctx,
+                                                    bx4, by4, bpc, state->pal_u,
+                                                    &state->pal_sz_uv))
+                        return -8;
+                    stbv_av1_palette_read_uv_v(msac, bpc, state->pal_sz_uv,
+                                               state->pal_v);
+                }
             }
         }
-        if (has_chroma && intra.uv_mode == STBV_AV1_INTRA_DC) {
-            int pal_ctx = state->pal_sz_y > 0;
-            if (stb_av1_msac_bool_adapt(msac, cdf->pal_uv + pal_ctx * 2)) {
-                if (stbv_av1_palette_read_plane(msac, cdf, state, 1, sz_ctx,
-                                                bx4, by4, bpc, state->pal_u,
-                                                &state->pal_sz_uv))
-                    return -8;
-                stbv_av1_palette_read_uv_v(msac, bpc, state->pal_sz_uv,
-                                           state->pal_v);
+
+        /* Filter-intra bool (dav1d decode.c, after the palette bools). */
+        if (seq && seq->filter_intra && intra.y_mode == STBV_AV1_INTRA_DC &&
+            !state->pal_sz_y &&
+            stbv_av1_block_dimensions[bs][2] <= 3 &&
+            stbv_av1_block_dimensions[bs][3] <= 3) {
+            if (stb_av1_msac_bool_adapt(msac, cdf->use_filter_intra + bs * 2)) {
+                intra.y_mode = STBV_AV1_INTRA_FILTER;
+                intra.y_angle = (int)stb_av1_msac_symbol(msac, cdf->filter_intra, 4);
             }
         }
-    }
 
-    /* Filter-intra bool (dav1d decode.c, after the palette bools). */
-    if (seq && seq->filter_intra && intra.y_mode == STBV_AV1_INTRA_DC &&
-        !state->pal_sz_y &&
-        stbv_av1_block_dimensions[bs][2] <= 3 &&
-        stbv_av1_block_dimensions[bs][3] <= 3) {
-        if (stb_av1_msac_bool_adapt(msac, cdf->use_filter_intra + bs * 2)) {
-            intra.y_mode = STBV_AV1_INTRA_FILTER;
-            intra.y_angle = (int)stb_av1_msac_symbol(msac, cdf->filter_intra, 4);
-        } else {
+        /* Palette index maps come after filter-intra. */
+        if (state->pal_sz_y) {
+            if (stbv_av1_palette_indices(msac, cdf, 0, state->pal_sz_y,
+                                         bw4, bh4, state->pal_tmp_y,
+                                         state->pal_order, state->pal_ctxs))
+                return -7;
         }
-    }
-
-    /* Palette index maps come after filter-intra (dav1d read_pal_indices
-     * is called after the filter-intra bool in decode.c). */
-    if (state->pal_sz_y) {
-        if (stbv_av1_palette_indices(msac, cdf, 0, state->pal_sz_y,
-                                     bw4, bh4, state->pal_tmp_y,
-                                     state->pal_order, state->pal_ctxs))
-            return -7;
-    }
-    if (state->pal_sz_uv) {
-        if (stbv_av1_palette_indices(msac, cdf, 1, state->pal_sz_uv,
-                                     cbw4, cbh4, state->pal_tmp,
-                                     state->pal_order, state->pal_ctxs))
-            return -8;
-    }
+        if (state->pal_sz_uv) {
+            if (stbv_av1_palette_indices(msac, cdf, 1, state->pal_sz_uv,
+                                         cbw4, cbh4, state->pal_tmp,
+                                         state->pal_order, state->pal_ctxs))
+                return -8;
+        }
+    } /* end intra-only palette/filter-intra */
 
     /* block_info hook: fires AFTER all mode decisions are final (including
      * filter_intra override), so reconstruction uses the correct mode.
@@ -1208,7 +1244,11 @@ c.recon = recon;
 
     /* Transform size.  dav1d: lossless blocks are forced to TX_4X4; the
      * maximum otherwise comes from max_txfm_size_for_bs[bs][plane]; with
-     * TX_SWITCHABLE a tx-size symbol is coded when max > TX_4X4. */
+     * TX_SWITCHABLE a tx-size symbol is coded when max > TX_4X4.
+     *
+     * For IBC blocks, the TX tree bools are decoded separately via
+     * read_vartx_tree/read_tx_tree (dav1d decode.c:1352).  No single
+     * tx-size symbol is decoded for IBC. */
     if (lossless) {
         tx0 = STBV_AV1_TX_4X4;
         uv_tx = STBV_AV1_TX_4X4;
@@ -1217,20 +1257,18 @@ c.recon = recon;
         tx0 = stbv_av1_max_tx_for_bs[bs][0];
         uv_tx = stbv_av1_max_tx_for_bs[bs][layout];
         max_tx = tx0;
-if (frame && frame->txfm_mode == 1 &&
-    stbv_av1_tx_dims[max_tx].max > STBV_AV1_TX_4X4) {
-    tx0 = stbv_av1_decode_tx_size(msac, cdf, max_tx,
-                                  stbv_av1_tx_is_large(state->tx.above_tx, bx4,
-                                                       stbv_av1_tx_dims[max_tx].lw,
-                                                       state->tx.above_n) +
-                                  stbv_av1_tx_is_large(state->tx.left_tx, by4,
-                                                       stbv_av1_tx_dims[max_tx].lh,
-                                                       state->tx.left_n));
-    /* NOTE: no size-based clamp here — dav1d derives b->tx purely from
-     * max_txfm_size_for_bs[bs] and the sub-chain; the tx-size symbol
-     * semantics do not depend on frame-edge clipping of bw4/bh4. */
+        if (intra_flag &&
+            frame && frame->txfm_mode == 1 &&
+            stbv_av1_tx_dims[max_tx].max > STBV_AV1_TX_4X4) {
+            tx0 = stbv_av1_decode_tx_size(msac, cdf, max_tx,
+                                          stbv_av1_tx_is_large(state->tx.above_tx, bx4,
+                                                               stbv_av1_tx_dims[max_tx].lw,
+                                                               state->tx.above_n) +
+                                          stbv_av1_tx_is_large(state->tx.left_tx, by4,
+                                                               stbv_av1_tx_dims[max_tx].lh,
+                                                               state->tx.left_n));
+        }
     }
-}
 
     c.msac = msac;
     c.cdf = cdf;
@@ -1256,6 +1294,7 @@ if (frame && frame->txfm_mode == 1 &&
     c.reduced_txtp_set = frame ? (int)frame->reduced_txtp_set : 0;
     c.hbd = seq ? (int)seq->hbd : 0;
     c.block_skip = (int)block_skip;
+    c.is_intra = intra_flag;
     /* TXTP mode: dav1d maps FILTER_PRED to the filter angle's directional
      * mode (dav1d_filter_mode_to_y_mode), unlike the neighbour-mode map
      * which uses DC_PRED. */
@@ -1272,11 +1311,8 @@ if (frame && frame->txfm_mode == 1 &&
     }
 
     /* Coefficients: intra blocks use one transform size across the whole
-     * block.  dav1d recon_b_intra walks 64x64-pixel QUADRANTS (init_y/x
-     * stepping 16 units); inside each quadrant it decodes that band's luma
-     * transforms followed immediately by that band's chroma transforms.
-     * The MSAC symbol order therefore interleaves per-quadrant, which we
-     * replicate here exactly. */
+     * block.  IBC blocks use a variable TX tree for luma and fixed uv_tx
+     * for chroma (dav1d decode.c:1352 read_vartx_tree). */
     {
         int txw4 = stbv_av1_tx_dims[tx0].w;
         int txh4 = stbv_av1_tx_dims[tx0].h;
@@ -1296,18 +1332,55 @@ if (frame && frame->txfm_mode == 1 &&
                     if (qw4 > 16) qw4 = 16;
                     scw4 = (qw4 + ss_hor) >> ss_hor;
 
-                    for (y4 = qy4; y4 < qy4 + qh4; y4 += txh4) {
-                        for (x4 = qx4; x4 < qx4 + qw4; x4 += txw4) {
-                            r = stbv_av1_leaf_tx_plane(msac, cdf, &c,
-                                                       x4, y4,
-                                                       tx0, 0, &state->res,
-                                                       bw4, bh4,
-                                                       first ? out : NULL);
-                            first = 0;
-                            if (r) return -4;
+                    if (intra_flag) {
+                        /* Intra: fixed tx0 luma + fixed uv_tx chroma */
+                        for (y4 = qy4; y4 < qy4 + qh4; y4 += txh4) {
+                            for (x4 = qx4; x4 < qx4 + qw4; x4 += txw4) {
+                                r = stbv_av1_leaf_tx_plane(msac, cdf, &c,
+                                                           x4, y4,
+                                                           tx0, 0, &state->res,
+                                                           bw4, bh4,
+                                                           first ? out : NULL);
+                                first = 0;
+                                if (r) return -4;
+                            }
+                        }
+                    } else {
+                        /* IBC: variable TX tree for luma (dav1d read_vartx_tree +
+                         * read_coef_tree).  Chroma uses fixed uv_tx. */
+                        int ytxw = stbv_av1_tx_dims[max_tx].w;
+                        int ytxh = stbv_av1_tx_dims[max_tx].h;
+                        if (stbv_av1_tx_dims[max_tx].max > STBV_AV1_TX_4X4 &&
+                            frame && frame->txfm_mode == 1) {
+                            /* Variable TX: recursively read split bools from MSAC
+                             * and decode coefficients at each leaf. */
+                            int ty4, tx4;
+                            for (ty4 = qy4; ty4 < qy4 + qh4; ty4 += ytxh) {
+                                for (tx4 = qx4; tx4 < qx4 + qw4; tx4 += ytxw) {
+                                    r = stbv_av1_decode_tx_tree(msac, cdf,
+                                        &state->tx, max_tx, tx4, ty4,
+                                        stbv_av1_ibc_luma_leaf, &c);
+                                    if (r) return -4;
+                                }
+                            }
+                        } else {
+                            /* Fixed max_tx luma (non-switchable or lossless) */
+                            for (y4 = qy4; y4 < qy4 + qh4; y4 += txh4) {
+                                for (x4 = qx4; x4 < qx4 + qw4; x4 += txw4) {
+                                    r = stbv_av1_leaf_tx_plane(msac, cdf, &c,
+                                                               x4, y4,
+                                                               max_tx, 0,
+                                                               &state->res,
+                                                               bw4, bh4,
+                                                               first ? out : NULL);
+                                    first = 0;
+                                    if (r) return -4;
+                                }
+                            }
                         }
                     }
 
+                    /* Chroma: fixed uv_tx (both intra and IBC). */
                     if (!has_chroma) continue;
                     {
                         int cbx4 = qx4 >> ss_hor;

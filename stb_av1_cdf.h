@@ -1599,8 +1599,10 @@ typedef struct stbv_av1_cdf {
     stbv_u16 mv_classes[11];  /* 11 symbols */
     stbv_u16 mv_class0[2];    /* 2 symbols */
     stbv_u16 mv_classN[10][2]; /* 10 entries, each 2 symbols */
-    /* TX partition CDF (7 cats x 3 contexts) */
-    stbv_u16 txpart[7][3]; /* each 2 symbols */
+    /* Inter txtp CDFs */
+    stbv_u16 txtp_inter1[2][16]; /* 2 entries, 15 symbols each + count */
+    stbv_u16 txtp_inter2[12];    /* 11 symbols + count */
+    stbv_u16 txtp_inter3[8];     /* 4 bools, each 2 (val + count) */
 } stbv_av1_cdf;
 
 #define STBV_AV1_COEF_SKIP_OFF       0
@@ -1766,7 +1768,7 @@ static void stbv_av1_cdf_init(stbv_av1_cdf *c, unsigned qcat)
             c->mv_classN[i][1] = 0;
         }
     }
-    /* TX partition CDF: 7 categories x 3 contexts */
+    /* TX partition CDF: 7 categories x 3 contexts (each bool CDF = 2 entries) */
     {
         static const stbv_u16 txpart_def[7][3] = {
             { 28581, 23846, 20847 },
@@ -1779,8 +1781,42 @@ static void stbv_av1_cdf_init(stbv_av1_cdf *c, unsigned qcat)
         };
         int r, cl;
         for (r = 0; r < 7; r++)
-            for (cl = 0; cl < 3; cl++)
-                c->txpart[r][cl] = 32768U - txpart_def[r][cl];
+            for (cl = 0; cl < 3; cl++) {
+                c->txpart[(r * 3 + cl) * 2] = 32768U - txpart_def[r][cl];
+                c->txpart[(r * 3 + cl) * 2 + 1] = 0;
+            }
+    }
+    /* Inter txtp CDFs: dav1d default values inverted. */
+    {
+        /* txtp_inter1: 2 entries x 15 symbols + count each = 32 entries */
+        static const stbv_u16 inter1_def[2][15] = {
+            { 4458, 5560, 7695, 9709, 13330, 14789, 17537, 20266,
+              21504, 22848, 23934, 25474, 27727, 28915, 30631 },
+            { 1645, 2573, 4778, 5711, 7807, 8622, 10522, 15357,
+              17674, 20408, 22517, 25010, 27116, 28856, 30749 }
+        };
+        /* txtp_inter2: 11 symbols + count = 12 entries */
+        static const stbv_u16 inter2_def[11] = {
+            770, 2421, 5225, 12907, 15819, 18927,
+            21561, 24089, 26595, 28526, 30529
+        };
+        /* txtp_inter3: 4 bool CDFs (val + count each) */
+        static const stbv_u16 inter3_def[4] = {
+            16384, 4167, 1998, 748
+        };
+        int j;
+        for (i = 0; i < 2; i++) {
+            for (j = 0; j < 15; j++)
+                c->txtp_inter1[i][j] = 32768U - inter1_def[i][j];
+            c->txtp_inter1[i][15] = 0; /* count */
+        }
+        for (j = 0; j < 11; j++)
+            c->txtp_inter2[j] = 32768U - inter2_def[j];
+        c->txtp_inter2[11] = 0; /* count */
+        for (i = 0; i < 4; i++) {
+            c->txtp_inter3[i * 2] = 32768U - inter3_def[i];
+            c->txtp_inter3[i * 2 + 1] = 0; /* count */
+        }
     }
     if (qcat > 3) qcat = 3;
     switch (qcat) {
