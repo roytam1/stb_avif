@@ -38,8 +38,7 @@
  *
  *   The library decodes AVIF images down to plain RGBA pixels.
  *   With STB_AVIF_USE_DAV1D, it uses libdav1d for correct AV1 decoding.
- *   Without it, the built-in AV1 decoder is a simplified placeholder
- *   and will produce garbage pixels ("snow").
+ *   Without it, the built-in AV1 decoder will be used.
  *
  *   Supported formats:
  *     - Profile 0 (Main): 8-bit, 4:2:0, 4:2:2, 4:4:4
@@ -83,7 +82,7 @@ extern "C" {
  *  Free it with stb_avif_free().
  *
  *  When STB_AVIF_USE_DAV1D is defined, uses libdav1d for correct output.
- *  Link with -ldav1d. Without dav1d, the internal decoder produces garbage.
+ *  Link with -ldav1d. Without dav1d, the internal decoder will be used.
  */
 unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
                                           int *x, int *y, int *channels,
@@ -3575,7 +3574,7 @@ ivf_decoded:
         (void)obu_extension_flag;
         obu_size = 0;
 
-while (more_obus && obu_reader.pos < obu_reader.size) {
+        while (more_obus && obu_reader.pos < obu_reader.size) {
             /* Parse OBU header */
             if (obu_reader.pos + 1 > obu_reader.size)
                 break;
