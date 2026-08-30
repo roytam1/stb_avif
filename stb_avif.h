@@ -3186,7 +3186,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                                        stream.tiles[ti].data, stream.tiles[ti].size,
                                        tcx, tr, stb_avif_leaf_cb, &state,
                                        stb_avif_row_reset_cb);
-            if (r) break;
+            if (r) { fprintf(stderr, "  tile %u decode failed: r=%d\n", ti, r); break; }
         }
     }
 
@@ -3282,6 +3282,10 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         int w, h, hh, y0, x0;
         w = tc->frame_width;
         h = tc->frame_height;
+        fprintf(stderr, "DBG u16->u8: bd=%d sh=%d w=%d h=%d py16[0]=%u py16[1]=%u py16[stride]=%u\n",
+                bd, sh, w, h,
+                (unsigned)py16[0], (unsigned)py16[1],
+                (unsigned)py16[tc->stride_y]);
         for (y0 = 0; y0 < h; y0++)
             for (x0 = 0; x0 < w; x0++) {
                 unsigned v = (unsigned)py16[y0 * tc->stride_y + x0];
@@ -3332,8 +3336,7 @@ oom16:
     stb_avif_free_internal(lf_blkid_map); stb_avif_free_internal(lf_blkid_map_c);
     stb_avif_free_internal(lf_txlw_map); stb_avif_free_internal(lf_txlw_map_c);
     stb_avif_free_internal(lf_done_map);
-    (void)r;
-    return 0;
+    return r;
 }
 
 #endif /* !STB_AVIF_USE_DAV1D */
@@ -3539,12 +3542,56 @@ ivf_decoded:
 
             /* Process based on type */
             switch (obu_type) {
-                case STB_AV1_OBU_SEQUENCE_HEADER:
-                    /* Mark header found; the authoritative raw-bit
-                     * parser (stb_av1_parse_internal_stream) runs later
-                     * and fills all geometry/colour fields. */
+                case STB_AV1_OBU_SEQUENCE_HEADER: {
+                    /* Parse the sequence header with the authoritative
+                     * raw-bit parser so sh is populated BEFORE the frame
+                     * header parser runs (it reads sh->frame_width_bits,
+                     * sh->enable_cdef, etc.). */
+                    struct stb_av1_seqhdr sq;
+                    struct stb_av1_getbits sq_gb;
+                    const stbv_u8 *sq_data = obu_reader.data + obu_reader.pos;
+                    size_t sq_sz = (size_t)obu_size;
+                    memset(&sq, 0, sizeof(sq));
+                    stb_av1_getbits_init(&sq_gb, sq_data, sq_sz);
+                    if (stb_av1_parse_seqhdr(&sq, &sq_gb) == 0) {
+                        sh.frame_width_bits  = (int)sq.width_n_bits;
+                        sh.frame_height_bits = (int)sq.height_n_bits;
+                        sh.max_frame_width   = (int)sq.max_width;
+                        sh.max_frame_height  = (int)sq.max_height;
+                        sh.seq_profile                = (int)sq.profile;
+                        sh.still_picture              = (int)sq.still_picture;
+                        sh.reduced_still_picture_header = (int)sq.reduced_still_picture_header;
+                        sh.enable_order_hint        = (int)sq.order_hint;
+                        sh.enable_dist_wtd_comp     = 0;
+                        sh.enable_masked_comp       = (int)sq.masked_compound;
+                        sh.enable_intra_edge_filter = (int)sq.intra_edge_filter;
+                        sh.enable_interintra_comp   = (int)sq.inter_intra;
+                        sh.enable_dual_filter       = (int)sq.dual_filter;
+                        sh.enable_jnt_comp          = (int)sq.jnt_comp;
+                        sh.enable_superres          = (int)sq.super_res;
+                        sh.enable_cdef              = (int)sq.cdef;
+                        sh.enable_restoration       = (int)sq.restoration;
+                        sh.film_grain_params_present = (int)sq.film_grain_present;
+                        sh.timing_info_present         = (int)sq.timing_info_present;
+                        sh.decoder_model_info_present  = (int)sq.decoder_model_info_present;
+                        sh.display_model_info_present  = (int)sq.display_model_info_present;
+                        sh.operating_points_cnt        = (int)sq.num_operating_points;
+                        sh.color_description_present = (int)sq.color_description_present;
+                        sh.color_primaries           = (int)sq.pri;
+                        sh.transfer_characteristics  = (int)sq.trc;
+                        sh.matrix_coefficients       = (int)sq.mtrx;
+                        sh.color_range               = (int)sq.color_range;
+                        sh.chroma_sample_position     = (int)sq.chr;
+                        sh.monochrome    = sq.monochrome ? 1 : 0;
+                        sh.bit_depth     = 8 + (int)sq.hbd * 2;
+                        sh.subsampling_x = sq.ss_hor ? 1 : 0;
+                        sh.subsampling_y = sq.ss_ver ? 1 : 0;
+                        probe_seq_hbd  = sq.hbd;
+                        probe_seq_mono = sq.monochrome ? 1 : 0;
+                    }
                     seq_header_found = 1;
                     break;
+                }
                 case STB_AV1_OBU_FRAME_HEADER:
                 case STB_AV1_OBU_REDUNDANT_FRAME_HEADER: {
                     struct stb_avif_reader fh_r;

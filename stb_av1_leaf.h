@@ -988,9 +988,9 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
         !((bx4 | by4) & (sb_step - 1)))
         return -6;
 
-    /* Intra flag: key frames without intrabc need no symbol. */
-    if (frame && frame->allow_intrabc)
-        return -6;
+    /* Intra flag: key frames and intra-only frames are implicitly intra;
+     * no intra flag symbol is coded.  Non-key frames decode the intra
+     * flag here.  This function currently only handles intra blocks. */
 
     cfl_allowed = lossless ? (cbw4 == 1 && cbh4 == 1) :
         !!(STBV_AV1_CFL_ALLOWED_MASK & (1U << bs));
