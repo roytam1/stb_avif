@@ -1593,6 +1593,14 @@ typedef struct stbv_av1_cdf {
     stbv_u16 intrabc[2];
     stbv_u16 delta_q[8];   /* 4 symbols x 2 ctx */
     stbv_u16 delta_lf[16]; /* 4 symbols x 4 ctx */
+    /* MV CDFs for IBC (intra block copy) */
+    stbv_u16 mv_joint[4];     /* 4 symbols (ZERO/H/V/HV) */
+    stbv_u16 mv_sign[2];      /* 2 symbols */
+    stbv_u16 mv_classes[11];  /* 11 symbols */
+    stbv_u16 mv_class0[2];    /* 2 symbols */
+    stbv_u16 mv_classN[10][2]; /* 10 entries, each 2 symbols */
+    /* TX partition CDF (7 cats x 3 contexts) */
+    stbv_u16 txpart[7][3]; /* each 2 symbols */
 } stbv_av1_cdf;
 
 #define STBV_AV1_COEF_SKIP_OFF       0
@@ -1730,6 +1738,49 @@ static void stbv_av1_cdf_init(stbv_av1_cdf *c, unsigned qcat)
         c->delta_lf[i*4+1] = 32768U - 32120;
         c->delta_lf[i*4+2] = 32768U - 32677;
         c->delta_lf[i*4+3] = 0;
+    }
+    /* MV CDFs: joint CDF3(4096,11264,19328), sign CDF1(16384),
+     * classes CDF10(28672,30976,31858,32320,32551,32656,32740,32757,32762,32767),
+     * class0 CDF1(27648),
+     * classN[0..9] = CDF1(17408..30720). All inverted (32768-val). */
+    {
+        static const stbv_u16 mv_joint_def[3] = { 28672, 21504, 13440 };
+        static const stbv_u16 mv_classes_def[10] = {
+            4096, 1792, 910, 448, 217, 112, 28, 11, 6, 1
+        };
+        static const stbv_u16 mv_classN_def[10] = {
+            15360, 14848, 13824, 12288, 10240, 8192, 4096, 2816, 2816, 2048
+        };
+        for (i = 0; i < 3; i++)
+            c->mv_joint[i] = 32768U - mv_joint_def[i];
+        c->mv_joint[3] = 0;
+        c->mv_sign[0] = 32768U - 16384;
+        c->mv_sign[1] = 0;
+        for (i = 0; i < 10; i++)
+            c->mv_classes[i] = 32768U - mv_classes_def[i];
+        c->mv_classes[10] = 0;
+        c->mv_class0[0] = 32768U - 27648;
+        c->mv_class0[1] = 0;
+        for (i = 0; i < 10; i++) {
+            c->mv_classN[i][0] = 32768U - mv_classN_def[i];
+            c->mv_classN[i][1] = 0;
+        }
+    }
+    /* TX partition CDF: 7 categories x 3 contexts */
+    {
+        static const stbv_u16 txpart_def[7][3] = {
+            { 28581, 23846, 20847 },
+            { 24315, 18196, 12133 },
+            { 18791, 10887, 11005 },
+            { 27179, 20004, 11281 },
+            { 26549, 19308, 14224 },
+            { 28015, 21546, 14400 },
+            { 28165, 22401, 16088 }
+        };
+        int r, cl;
+        for (r = 0; r < 7; r++)
+            for (cl = 0; cl < 3; cl++)
+                c->txpart[r][cl] = 32768U - txpart_def[r][cl];
     }
     if (qcat > 3) qcat = 3;
     switch (qcat) {

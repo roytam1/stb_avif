@@ -810,6 +810,63 @@ static int stbv_av1_palette_indices(struct stb_av1_msac *msac,
     return 0;
 }
 
+/* ---- MV residual decode for IBC (dav1d decode.c:76-117) ---- */
+
+/* Decode the diff for one MV component. For IBC, mv_prec=-1 so fp and hp
+ * are never decoded (only sign + class + class bits). */
+static int stbv_av1_read_mv_component_diff(struct stb_av1_msac *msac,
+                                            stbv_u16 *mv_comp_sign,
+                                            stbv_u16 *mv_comp_classes,
+                                            stbv_u16 *mv_comp_class0,
+                                            stbv_u16 mv_comp_classN[10][2],
+                                            int mv_prec)
+{
+    int sign, cl, up, fp = 3, hp = 1;
+    sign = (int)stb_av1_msac_bool_adapt(msac, mv_comp_sign);
+    cl = (int)stb_av1_msac_symbol(msac, mv_comp_classes, 10);
+    if (!cl) {
+        up = (int)stb_av1_msac_bool_adapt(msac, mv_comp_class0);
+        if (mv_prec >= 0) {
+            fp = (int)stb_av1_msac_symbol(msac,
+                mv_comp_class0 + up * 4, 3);
+            if (mv_prec > 0)
+                hp = (int)stb_av1_msac_bool_adapt(msac,
+                    mv_comp_class0 + up * 4 + 2);
+        }
+    } else {
+        up = 1 << cl;
+        { int n; for (n = 0; n < cl; n++)
+            up |= (int)stb_av1_msac_bool_adapt(msac, mv_comp_classN[n]) << n;
+        }
+        if (mv_prec >= 0) {
+            fp = (int)stb_av1_msac_symbol(msac, mv_comp_classN[0] + 10, 3);
+            if (mv_prec > 0)
+                hp = (int)stb_av1_msac_bool_adapt(msac, mv_comp_classN[0] + 12);
+        }
+    }
+    { int diff = ((up << 3) | (fp << 1) | hp) + 1;
+      return sign ? -diff : diff;
+    }
+}
+
+/* Decode MV joint + component residuals. mv_prec=-1 for IBC. */
+static void stbv_av1_read_mv_residual(struct stb_av1_msac *msac,
+                                       stbv_av1_cdf *cdf,
+                                       int *mv_y, int *mv_x,
+                                       int mv_prec)
+{
+    int joint;
+    joint = (int)stb_av1_msac_symbol(msac, cdf->mv_joint, 3);
+    if (joint & 2) /* MV_JOINT_V */
+        *mv_y += stbv_av1_read_mv_component_diff(msac,
+            cdf->mv_sign, cdf->mv_classes, cdf->mv_class0,
+            cdf->mv_classN, mv_prec);
+    if (joint & 1) /* MV_JOINT_H */
+        *mv_x += stbv_av1_read_mv_component_diff(msac,
+            cdf->mv_sign, cdf->mv_classes, cdf->mv_class0,
+            cdf->mv_classN, mv_prec);
+}
+
 static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                        stbv_av1_cdf *cdf,
                                        stbv_av1_leaf_state *state,
