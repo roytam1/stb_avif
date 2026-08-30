@@ -275,6 +275,9 @@ typedef struct stbv_av1_leaf_state {
     /* CDEF index output grid (per-64x64 block) */
     int *cdef_idx_grid;
     int cdef_grid_stride;
+    /* Per-SB quantizer/lf state (persists across leaf callbacks within a tile) */
+    int last_qidx;
+    int last_delta_lf[4];
 } stbv_av1_leaf_state;
 
 static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
@@ -840,7 +843,9 @@ c.recon = recon;
     ss_ver = layout == STB_AV1_LAYOUT_I420;
     sb_step = (seq && seq->sb128) ? 32 : 16;
     lossless = frame ? (int)frame->segmentation.lossless[0] : 0;
-    qidx = frame ? (int)frame->segmentation.qidx[seg_id] : 0;
+    qidx = state->last_qidx + (frame ? (int)frame->segmentation.d[seg_id].delta_q : 0);
+    if (qidx < 1) qidx = 1;
+    if (qidx > 255) qidx = 255;
     /* dav1d gates chroma presence on the UNCLIPPED block dims, then clips
      * the coefficient grids to the padded frame area ((w+7)&~7)>>2. */
     has_chroma = layout != STB_AV1_LAYOUT_I400 &&
@@ -921,7 +926,9 @@ c.recon = recon;
         }
     }
 
-    /* Block-level skip, decoded before intra modes (dav1d decode_b). */
+    /* Block-level skip, decoded before intra modes (dav1d decode_b).
+     * When skip_mode or segment skip is already set, skip=1 without
+     * reading from MSAC (dav1d decode.c:888-895). */
     {
         int sctx = 0;
         if (state->above_skip && (unsigned int)bx4 < state->above_skip_n &&
@@ -930,7 +937,9 @@ c.recon = recon;
         if (state->left_skip && (unsigned int)by4 < state->left_skip_n &&
             state->left_skip[by4])
             sctx += 1;
-block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
+        if (!block_skip) {
+            block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
+        }
         for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->above_skip_n; i++)
             state->above_skip[bx4 + i] = (stbv_u8)block_skip;
         for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->left_skip_n; i++)
@@ -982,15 +991,62 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
         }
     }
 
-    /* delta-q/lf at superblock origin; needs the delta_q CDFs which are not
-     * part of this integration pass. */
+    /* delta-q/lf at superblock origin (dav1d decode.c:962-1028). */
     if (frame && frame->delta_q_present &&
         !((bx4 | by4) & (sb_step - 1)))
-        return -6;
+    {
+        int have_delta_q = (bs != (int)(seq && seq->sb128 ? STBV_AV1_BS_128x128 : STBV_AV1_BS_64x64) || !block_skip);
+        if (have_delta_q) {
+            int dq = (int)stb_av1_msac_symbol(msac, cdf->delta_q, 3);
+            if (dq == 3) {
+                int nb = 1 + (int)stb_av1_msac_bools(msac, 3);
+                dq = (int)stb_av1_msac_bools(msac, (unsigned)nb) + 1 + (1 << nb);
+            }
+            if (dq) {
+                if (stb_av1_msac_bool_equi(msac)) dq = -dq;
+                dq *= 1 << frame->delta_q_res_log2;
+            }
+            state->last_qidx = dq + state->last_qidx;
+            if (state->last_qidx < 1) state->last_qidx = 1;
+            if (state->last_qidx > 255) state->last_qidx = 255;
+            if (frame->delta_lf_present) {
+                int nlfs = frame->delta_lf_multi ?
+                    (seq && seq->layout != STB_AV1_LAYOUT_I400 ? 4 : 2) : 1;
+                int i;
+                for (i = 0; i < nlfs; i++) {
+                    int dl = (int)stb_av1_msac_symbol(msac,
+                        cdf->delta_lf + (i + (int)frame->delta_lf_multi) * 4, 3);
+                    if (dl == 3) {
+                        int nb = 1 + (int)stb_av1_msac_bools(msac, 3);
+                        dl = (int)stb_av1_msac_bools(msac, (unsigned)nb) + 1 + (1 << nb);
+                    }
+                    if (dl) {
+                        if (stb_av1_msac_bool_equi(msac)) dl = -dl;
+                        dl *= 1 << frame->delta_lf_res_log2;
+                    }
+                    state->last_delta_lf[i] += dl;
+                    if (state->last_delta_lf[i] < -63) state->last_delta_lf[i] = -63;
+                    if (state->last_delta_lf[i] > 63) state->last_delta_lf[i] = 63;
+                }
+            }
+        }
+        qidx = state->last_qidx;
+    }
 
-    /* Intra flag: key frames and intra-only frames are implicitly intra;
-     * no intra flag symbol is coded.  Non-key frames decode the intra
-     * flag here.  This function currently only handles intra blocks. */
+    /* Intra flag: for key frames with allow_intrabc, decode the intrabc
+     * flag (dav1d decode.c:1043-1044).  For key frames without intrabc,
+     * all blocks are implicitly intra. */
+    if (frame && frame->allow_intrabc) {
+        int intra_flag = !stb_av1_msac_bool_adapt(msac, cdf->intrabc);
+        /* For now we treat IBC blocks as intra (no IBC recon). */
+        (void)intra_flag;
+    }
+
+    /* Recompute qidx using the SB-level last_qidx (may have been updated
+     * by delta_q above). */
+    qidx = state->last_qidx + (frame ? (int)frame->segmentation.d[seg_id].delta_q : 0);
+    if (qidx < 1) qidx = 1;
+    if (qidx > 255) qidx = 255;
 
     cfl_allowed = lossless ? (cbw4 == 1 && cbh4 == 1) :
         !!(STBV_AV1_CFL_ALLOWED_MASK & (1U << bs));

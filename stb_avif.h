@@ -2215,10 +2215,12 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
     }
 }
 
+static int g_block_info_calls=0;
 static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode, int uv_angle, int cfl_alpha_u, int cfl_alpha_v)
 {
     struct stb_avif_scalar_recon *rc;
     int bw4, bh4;
+    g_block_info_calls++;
     (void)cbw4; (void)cbh4; (void)uv_tx;
     (void)pal_sz_y; (void)pal_sz_uv;
     rc = (struct stb_avif_scalar_recon *)ud;
@@ -2380,14 +2382,17 @@ static void stb_avif_extend_right_edge_u16(stbv_u16 *plane, int stride,
     }
 }
 
+static int g_recon_luma_calls=0, g_recon_luma_pal=0, g_recon_luma_writes=0;
 static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf)
 {
     struct stb_avif_scalar_recon *rc;
     int txw4 = stbv_av1_tx_dims[tx].w;
     int txh4 = stbv_av1_tx_dims[tx].h;
     (void)eob;
-    rc = (struct stb_avif_scalar_recon *)ud;
+    rc = (struct stb_av1_scalar_recon *)ud;
     if (!rc) return;
+    g_recon_luma_calls++;
+    if (rc->pal_y) g_recon_luma_pal++;
     (void)txw4; (void)txh4;
 #ifdef STB_AVIF_PRED_ONLY
     (void)cf; (void)tx; (void)txtp;
@@ -2415,6 +2420,7 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
                 for (_i = 0; _i < _ch; _i++)
                     memcpy(rc->plane_y + (size_t)((y4 << 2) + _i) * rc->stride_y + (x4 << 2),
                            rc->pred + _i * _w, (size_t)(_cw * sizeof(stbv_u16)));
+                g_recon_luma_writes++;
             }
         }
     }
@@ -2848,16 +2854,22 @@ static void stb_avif_row_reset_cb(void *opaque)
     stbv_av1_leaf_state_reset_row((stbv_av1_leaf_state *)opaque);
 }
 
+static int g_leaf_cb_count = 0;
+static int g_leaf_first_r = -999;
 static int stb_avif_leaf_cb(struct stb_av1_tile_decoder *td, const struct stb_av1_tile_leaf_info *li, void *opaque)
 {
     stbv_av1_leaf_state *state;
     stbv_av1_leaf_tx_result out;
     int r;
     state = (stbv_av1_leaf_state *)opaque;
+    g_leaf_cb_count++;
     r = stbv_av1_decode_leaf_syntax(&td->msac, &td->cdf, state,
                                        td->seq, td->frame,
                                        li->bs, li->bx, li->by,
                                        &out, &g_scalar_recon_cb);
+    if (g_leaf_first_r == -999) g_leaf_first_r = r;
+    if (r && g_leaf_cb_count <= 5)
+        fprintf(stderr, "DBG leaf_cb[%d] bs=%d bx=%d by=%d r=%d\n", g_leaf_cb_count, li->bs, li->bx, li->by, r);
     return r;
 }
 
@@ -2891,6 +2903,12 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     int cframe_w8 = 0, cframe_h8 = 0;
     int i, j, h2, w2;
 
+    g_leaf_cb_count = 0;
+    g_recon_luma_calls = 0;
+    g_recon_luma_pal = 0;
+    g_recon_luma_writes = 0;
+    g_block_info_calls = 0;
+    g_leaf_first_r = -999;
     memset(&stream, 0, sizeof(stream));
     r = stb_av1_parse_internal_stream(&stream, av1_data, av1_size);
     if (r < 0 || !stream.have_seq || !stream.have_frame)
@@ -3157,6 +3175,19 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         unsigned int ntiles = stream.frame.tiling.cols * stream.frame.tiling.rows;
         unsigned int sb_log2 = 6U + stream.seq.sb128;
         unsigned int sb_size = 1U << sb_log2;
+        fprintf(stderr, "DBG tiles: ntiles=%u cols=%u rows=%u sb128=%u fw=%d fh=%d tile_data=%p tile_size=%zu\n",
+                ntiles, stream.frame.tiling.cols, stream.frame.tiling.rows,
+                stream.seq.sb128, tc->frame_width, tc->frame_height,
+                (void*)stream.tile_data, stream.tile_size);
+        fprintf(stderr, "DBG framehdr: frame_type=%u show=%u allow_intrabc=%u width0=%u delta_q=%u yac=%u\n",
+                stream.frame.frame_type, stream.frame.show_frame,
+                stream.frame.allow_intrabc, stream.frame.width[0],
+                stream.frame.delta_q_present, stream.frame.quant.yac);
+        if (stream.tile_data && stream.tile_size >= 4) {
+            fprintf(stderr, "DBG tile_first_bytes: %02x %02x %02x %02x\n",
+                    stream.tile_data[0], stream.tile_data[1],
+                    stream.tile_data[2], stream.tile_data[3]);
+        }
         for (ti = 0; ti < ntiles; ti++) {
             unsigned int tr, tcx;
             if (!stream.tile_seen[ti]) { r = -1; break; }
@@ -3169,6 +3200,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
             recon.tile_h4 = (int)((stream.frame.tiling.row_start_sb[tr + 1] -
                                    stream.frame.tiling.row_start_sb[tr]) * (sb_size >> 2));
             stbv_av1_leaf_state_init(&state, &arrays);
+            state.last_qidx = (int)stream.frame.quant.yac;
+            memset(state.last_delta_lf, 0, sizeof(state.last_delta_lf));
             /* leaf_state_init NULLs above/left_uvmode via intra_state_init;
              * re-establish them so chroma intra mode decode has proper
              * above/left contexts for each tile (tiles are independent). */
@@ -3188,6 +3221,11 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                                        stb_avif_row_reset_cb);
             if (r) { fprintf(stderr, "  tile %u decode failed: r=%d\n", ti, r); break; }
         }
+    }
+    { int nz=0; unsigned idx;
+      for (idx = 0; idx < (unsigned)(tc->stride_y * tc->frame_height); idx++)
+          if (py16[idx]) nz++;
+      fprintf(stderr, "DBG after tile loop py16 nz=%d luma_calls=%d pal=%d writes=%d block_info=%d\n", nz, g_recon_luma_calls, g_recon_luma_pal, g_recon_luma_writes, g_block_info_calls);
     }
 
 #ifdef STB_AVIF_DEBLOCK
@@ -3282,10 +3320,16 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         int w, h, hh, y0, x0;
         w = tc->frame_width;
         h = tc->frame_height;
+        fprintf(stderr, "DBG leaf_cb_count=%d\n", g_leaf_cb_count);
         fprintf(stderr, "DBG u16->u8: bd=%d sh=%d w=%d h=%d py16[0]=%u py16[1]=%u py16[stride]=%u\n",
                 bd, sh, w, h,
                 (unsigned)py16[0], (unsigned)py16[1],
                 (unsigned)py16[tc->stride_y]);
+        { int nz=0; unsigned idx;
+          for (idx = 0; idx < (unsigned)(tc->stride_y * h); idx++)
+              if (py16[idx]) nz++;
+          fprintf(stderr, "DBG py16 non-zero count: %d / %d\n", nz, tc->stride_y * h);
+        }
         for (y0 = 0; y0 < h; y0++)
             for (x0 = 0; x0 < w; x0++) {
                 unsigned v = (unsigned)py16[y0 * tc->stride_y + x0];

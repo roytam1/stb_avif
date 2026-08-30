@@ -1590,6 +1590,9 @@ typedef struct stbv_av1_cdf {
     stbv_u16 restore_switchable[4];
     stbv_u16 restore_wiener[2];
     stbv_u16 restore_sgrproj[2];
+    stbv_u16 intrabc[2];
+    stbv_u16 delta_q[8];   /* 4 symbols x 2 ctx */
+    stbv_u16 delta_lf[16]; /* 4 symbols x 4 ctx */
 } stbv_av1_cdf;
 
 #define STBV_AV1_COEF_SKIP_OFF       0
@@ -1713,6 +1716,21 @@ static void stbv_av1_cdf_init(stbv_av1_cdf *c, unsigned qcat)
     stbv_av1_cdf_inv(c->restore_wiener, stb_av1_cdf_restore_wiener, 1, 2, 1);
     memcpy(c->restore_sgrproj, stb_av1_cdf_restore_sgrproj, sizeof(c->restore_sgrproj));
     stbv_av1_cdf_inv(c->restore_sgrproj, stb_av1_cdf_restore_sgrproj, 1, 2, 1);
+    /* intrabc: 2-symbol CDF, default = { 30531, 32768 } */
+    c->intrabc[0] = 32768U - 30531;
+    c->intrabc[1] = 0;
+    /* delta_q: 4-symbol CDF, default = { 28160, 32120, 32677, 32768 } */
+    c->delta_q[0] = 32768U - 28160;
+    c->delta_q[1] = 32768U - 32120;
+    c->delta_q[2] = 32768U - 32677;
+    c->delta_q[3] = 0;
+    /* delta_lf: same default as delta_q, 4 contexts x 4 symbols */
+    for (i = 0; i < 4; i++) {
+        c->delta_lf[i*4+0] = 32768U - 28160;
+        c->delta_lf[i*4+1] = 32768U - 32120;
+        c->delta_lf[i*4+2] = 32768U - 32677;
+        c->delta_lf[i*4+3] = 0;
+    }
     if (qcat > 3) qcat = 3;
     switch (qcat) {
     case 0: stbv_av1_cdf_copy_coef(c->coef, 0); break;
