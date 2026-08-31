@@ -13808,14 +13808,11 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
         rc->cfl_alpha_v = 0;
         rc->pal_y = 0;
         rc->pal_uv = 0;
-        /* Source position in 4x4 luma units. */
-        src_luma_x = bx4 + (ibc_mv_x >> 3);
-        src_luma_y = by4 + (ibc_mv_y >> 3);
-        /* Convert to pixel coords. */
-        src_px_x = src_luma_x << 2;
-        src_px_y = src_luma_y << 2;
-        dst_px_x = bx4 << 2;
-        dst_px_y = by4 << 2;
+        /* Source position in pixel coords (matching dav1d mc: dx = bx*4 + mvx>>3). */
+        src_px_x = bx4 * 4 + (ibc_mv_x >> 3);
+        src_px_y = by4 * 4 + (ibc_mv_y >> 3);
+        dst_px_x = bx4 * 4;
+        dst_px_y = by4 * 4;
         pw = bw4 << 2;
         ph = bh4 << 2;
         /* Clamp to frame bounds. */
