@@ -130,7 +130,7 @@ unsigned char *stb_avif_load_from_file(const char *filePath,
 #ifdef STB_AVIF_IMPLEMENTATION
 
 #include <stdlib.h>     /* malloc, free */
-#include <string.h>     /* memset, memcpy */
+#include <string.h>     /* memset, memcpy, memmove */
 #include <setjmp.h>     /* setjmp, longjmp */
 #include <math.h>       /* cos, sin, sqrt */
 #include <time.h>       /* clock, time */
@@ -2341,7 +2341,7 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
          * order guarantees this when src is within the current tile. */
         if (cw > 0 && ch > 0 && rc->plane_y) {
             for (i = 0; i < ch; i++)
-                memcpy(rc->plane_y + (size_t)(dst_px_y + i) * rc->stride_y + dst_px_x,
+                memmove(rc->plane_y + (size_t)(dst_px_y + i) * rc->stride_y + dst_px_x,
                        rc->plane_y + (size_t)(src_px_y + i) * rc->stride_y + src_px_x,
                        (size_t)cw * sizeof(stbv_u16));
         }
@@ -2365,7 +2365,7 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
                 int stride = j == 0 ? rc->stride_u : rc->stride_v;
                 if (!plane) continue;
                 for (i = 0; i < cch; i++)
-                    memcpy(plane + (size_t)(cy_dst + i) * stride + cx_dst,
+                    memmove(plane + (size_t)(cy_dst + i) * stride + cx_dst,
                            plane + (size_t)(cy_src + i) * stride + cx_src,
                            (size_t)ccw * sizeof(stbv_u16));
             }
