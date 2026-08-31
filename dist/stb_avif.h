@@ -9007,6 +9007,69 @@ c.recon = recon;
         mv_y = pred_mv_y;
         mv_x = pred_mv_x;
         stbv_av1_read_mv_residual(msac, cdf, &mv_y, &mv_x, -1);
+
+        /* Clip IBC MV to decoded parts of the current tile/SB
+         * (dav1d decode.c:1292-1346).  All values in pixel units. */
+        {
+            int fw = frame ? (int)frame->width[0] : 0;
+            int border_left  = 0;
+            int border_top   = 0;
+            int border_right, src_left, src_top, src_right, src_bottom;
+            int sbx, sby, sb_size;
+
+            if (has_chroma) {
+                if (bw4 < 2 && ss_hor) border_left += 4;
+                if (bh4 < 2 && ss_ver) border_top  += 4;
+            }
+
+            src_left   = bx4 * 4 + (mv_x >> 3);
+            src_top    = by4 * 4 + (mv_y >> 3);
+            src_right  = src_left + bw4 * 4;
+            src_bottom = src_top  + bh4 * 4;
+
+            /* Single-tile: border_right = frame width rounded up to bw4 */
+            border_right = ((fw + 3 + (bw4 * 4 - 1)) & ~(bw4 * 4 - 1));
+
+            /* Clip to left/right tile boundary */
+            if (src_left < border_left) {
+                src_right += border_left - src_left;
+                src_left  += border_left - src_left;
+            } else if (src_right > border_right) {
+                src_left  -= src_right - border_right;
+                src_right -= src_right - border_right;
+            }
+            /* Clip to top tile boundary */
+            if (src_top < border_top) {
+                src_bottom += border_top - src_top;
+                src_top    += border_top - src_top;
+            }
+
+            /* SB position and size in pixel units */
+            sb_size = 1 << (6 + sb128);
+            sbx = (bx4 >> (4 + sb128)) << (6 + sb128);
+            sby = (by4 >> (4 + sb128)) << (6 + sb128);
+
+            /* Avoid overlap with current superblock */
+            if (src_bottom > sby && src_right > sbx) {
+                if (src_top - border_top >= src_bottom - sby) {
+                    src_top    -= src_bottom - sby;
+                    src_bottom -= src_bottom - sby;
+                } else if (src_left - border_left >= src_right - sbx) {
+                    src_left  -= src_right - sbx;
+                    src_right -= src_right - sbx;
+                }
+            }
+            /* Move src up if below current SB row */
+            if (src_bottom > sby + sb_size) {
+                src_top    -= src_bottom - (sby + sb_size);
+                src_bottom -= src_bottom - (sby + sb_size);
+            }
+
+            /* Write back clipped MV in 1/8-pel luma units */
+            mv_x = (src_left - bx4 * 4) * 8;
+            mv_y = (src_top  - by4 * 4) * 8;
+        }
+
         c.ibc_mv_y = mv_y;
         c.ibc_mv_x = mv_x;
     } else {
