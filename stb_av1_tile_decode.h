@@ -199,9 +199,6 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
     qcat = (frame->quant.yac > 20) + (frame->quant.yac > 60) + (frame->quant.yac > 120);
     stbv_av1_cdf_init(&td->cdf, (unsigned)qcat);
     stb_av1_msac_init(&td->msac, data, size, (int)frame->disable_cdf_update);
-    fprintf(stderr, "DBG msac_init: data0..7=%02x %02x %02x %02x %02x %02x %02x %02x size=%zu cnt=%d rng=%u\n",
-            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
-            size, td->msac.cnt, td->msac.rng);
     sb_log2 = 6U + seq->sb128; sb_size = 1U << sb_log2;
     sx0 = frame->tiling.col_start_sb[tile_col]; sx1 = frame->tiling.col_start_sb[tile_col + 1];
     sy0 = frame->tiling.row_start_sb[tile_row]; sy1 = frame->tiling.row_start_sb[tile_row + 1];

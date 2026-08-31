@@ -278,10 +278,6 @@ typedef struct stbv_av1_leaf_state {
     /* Per-SB quantizer/lf state (persists across leaf callbacks within a tile) */
     int last_qidx;
     int last_delta_lf[4];
-    /* Debug counters */
-    int ibc_dbg_count;
-    int ibc_block_count;
-    int intra_block_count;
 } stbv_av1_leaf_state;
 
 static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
@@ -914,12 +910,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     unsigned int n;
     int intra_flag = 1; /* 1 = intra, 0 = IBC */
 c.recon = recon;
-    if (state->ibc_dbg_count < 10) {
-        fprintf(stderr, "DBG LEAF_ENTRY: bs=%d bx4=%d by4=%d cnt=%d rng=%u dif=%llu cdf_skip=[%u,%u]\n",
-            bs, bx4, by4, msac->cnt, msac->rng,
-            (unsigned long long)msac->dif,
-            (unsigned)cdf->skip[0], (unsigned)cdf->skip[1]);
-    }
     if (!msac || !cdf || !state || bs < 0 || bs >= STBV_AV1_N_BS_SIZES)
         return -1;
     bw4 = stbv_av1_block_dimensions[bs][0];
@@ -1086,12 +1076,6 @@ c.recon = recon;
     {
         int have_delta_q = (bs != (int)(seq && seq->sb128 ? STBV_AV1_BS_128x128 : STBV_AV1_BS_64x64) || !block_skip);
         if (have_delta_q) {
-            if (state->ibc_dbg_count < 10) {
-                fprintf(stderr, "DBG PRE_DELTA_Q: bx4=%d by4=%d cnt=%d rng=%u cdf_dq=[%u,%u,%u,%u]\n",
-                    bx4, by4, msac->cnt, msac->rng,
-                    (unsigned)cdf->delta_q[0], (unsigned)cdf->delta_q[1],
-                    (unsigned)cdf->delta_q[2], (unsigned)cdf->delta_q[3]);
-            }
             int dq = (int)stb_av1_msac_symbol(msac, cdf->delta_q, 3);
             if (dq == 3) {
                 int nb = 1 + (int)stb_av1_msac_bools(msac, 3);
@@ -1126,42 +1110,13 @@ c.recon = recon;
             }
         }
         qidx = state->last_qidx;
-        if (state->ibc_dbg_count < 10) {
-            fprintf(stderr, "DBG POST_DELTA_Q: bx4=%d by4=%d qidx=%d msac_cnt=%d rng=%u\n",
-                bx4, by4, qidx, msac->cnt, msac->rng);
-        }
     }
 
     /* Intra flag: for key frames with allow_intrabc, decode the intrabc
      * flag (dav1d decode.c:1043-1044).  For key frames without intrabc,
      * all blocks are implicitly intra. */
     if (frame && frame->allow_intrabc) {
-        if (state->ibc_dbg_count < 10) {
-            fprintf(stderr, "DBG PRE_INTRABC #%d: bx4=%d by4=%d bs=%d msac_cnt=%d rng=%u dif=%llu cdf_intrabc=[%u,%u] sb_origin=%d\n",
-                state->ibc_block_count + state->intra_block_count,
-                bx4, by4, bs, msac->cnt, msac->rng,
-                (unsigned long long)msac->dif,
-                (unsigned)cdf->intrabc[0], (unsigned)cdf->intrabc[1],
-                !((bx4 | by4) & (sb_step - 1)));
-        }
         intra_flag = !stb_av1_msac_bool_adapt(msac, cdf->intrabc);
-        if (intra_flag)
-            state->intra_block_count++;
-        else
-            state->ibc_block_count++;
-        if (state->ibc_dbg_count < 10) {
-            fprintf(stderr, "DBG POST_INTRABC #%d: intra=%d msac_cnt=%d rng=%u cdf_intrabc=[%u,%u]\n",
-                state->ibc_block_count + state->intra_block_count,
-                intra_flag, msac->cnt, msac->rng,
-                (unsigned)cdf->intrabc[0], (unsigned)cdf->intrabc[1]);
-        }
-        if (state->ibc_dbg_count < 5 && !intra_flag) {
-            fprintf(stderr, "DBG IBC block #%d: bx4=%d by4=%d bs=%d mv_prec=-1 msac_cnt=%d rng=%u cdf_intrabc=[%u,%u]\n",
-                    state->ibc_block_count + state->intra_block_count,
-                    bx4, by4, bs, msac->cnt, msac->rng,
-                    (unsigned)cdf->intrabc[0], (unsigned)cdf->intrabc[1]);
-            state->ibc_dbg_count++;
-        }
     }
 
     /* Recompute qidx using the SB-level last_qidx (may have been updated
