@@ -48,7 +48,7 @@ static int stb_neg_deinterleave(int diff, int ref, int max)
 typedef struct stbv_av1_leaf_recon {
     void *ud;
     stbv_i32 *cf;
-    void (*block_info)(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode, int uv_angle, int cfl_alpha_u, int cfl_alpha_v);
+    void (*block_info)(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode, int uv_angle, int cfl_alpha_u, int cfl_alpha_v, int ibc_mv_y, int ibc_mv_x);
     void (*luma_txb)(void *ud, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf);
     void (*chroma_txb)(void *ud, int pl, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf);
     void (*luma_pal)(void *ud, const stbv_u8 *idx, int sz, int bw4, int bh4, const stbv_u16 *pal);
@@ -230,6 +230,15 @@ typedef struct stbv_av1_leaf_state_arrays {
     unsigned int above_seg_id_n;
     stbv_u8 *left_seg_id;
     unsigned int left_seg_id_n;
+    /* IBC MV neighbour arrays for MV prediction (dav1d refmvs_find). */
+    int *above_ibc_mv_y;
+    int *above_ibc_mv_x;
+    stbv_u8 *above_ibc_valid;
+    unsigned int above_ibc_mv_n;
+    int *left_ibc_mv_y;
+    int *left_ibc_mv_x;
+    stbv_u8 *left_ibc_valid;
+    unsigned int left_ibc_mv_n;
 } stbv_av1_leaf_state_arrays;
 
 typedef struct stbv_av1_leaf_state {
@@ -278,6 +287,15 @@ typedef struct stbv_av1_leaf_state {
     /* Per-SB quantizer/lf state (persists across leaf callbacks within a tile) */
     int last_qidx;
     int last_delta_lf[4];
+    /* IBC MV neighbour arrays for MV prediction. */
+    int *above_ibc_mv_y;
+    int *above_ibc_mv_x;
+    stbv_u8 *above_ibc_valid;
+    unsigned int above_ibc_mv_n;
+    int *left_ibc_mv_y;
+    int *left_ibc_mv_x;
+    stbv_u8 *left_ibc_valid;
+    unsigned int left_ibc_mv_n;
 } stbv_av1_leaf_state;
 
 static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
@@ -330,6 +348,14 @@ static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
     s->left_seg_id = a->left_seg_id;
     s->above_seg_id_n = a->above_seg_id_n;
     s->left_seg_id_n = a->left_seg_id_n;
+    s->above_ibc_mv_y = a->above_ibc_mv_y;
+    s->above_ibc_mv_x = a->above_ibc_mv_x;
+    s->above_ibc_valid = a->above_ibc_valid;
+    s->above_ibc_mv_n = a->above_ibc_mv_n;
+    s->left_ibc_mv_y = a->left_ibc_mv_y;
+    s->left_ibc_mv_x = a->left_ibc_mv_x;
+    s->left_ibc_valid = a->left_ibc_valid;
+    s->left_ibc_mv_n = a->left_ibc_mv_n;
     if (a->above_pal_sz) memset(a->above_pal_sz, 0, a->above_pal_sz_n);
     if (a->left_pal_sz) memset(a->left_pal_sz, 0, a->left_pal_sz_n);
     if (a->above_pal_uv) memset(a->above_pal_uv, 0, a->above_pal_uv_n);
@@ -348,6 +374,8 @@ static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
     if (a->above_skip) memset(a->above_skip, 0, a->above_skip_n);
     if (a->left_skip) memset(a->left_skip, 0, a->left_skip_n);
     if (a->above_seg_id) memset(a->above_seg_id, 0, a->above_seg_id_n);
+    if (a->above_ibc_valid) memset(a->above_ibc_valid, 0, a->above_ibc_mv_n);
+    if (a->left_ibc_valid) memset(a->left_ibc_valid, 0, a->left_ibc_mv_n);
 }
 
 /* dav1d reset_context() resets only the LEFT contexts at the start of each
@@ -410,6 +438,8 @@ typedef struct stbv_av1_leaf_decode_ctx {
     int hbd;
     int is_intra;  /* 1 = intra block, 0 = IBC block */
     int luma_txtp; /* stored luma txtp for inter/IBC chroma derivation */
+    int ibc_mv_y;  /* decoded IBC MV, 1/8-pel luma units */
+    int ibc_mv_x;
     const stbv_av1_leaf_recon *recon;
 } stbv_av1_leaf_decode_ctx;
 
@@ -881,6 +911,74 @@ static void stbv_av1_read_mv_residual(struct stb_av1_msac *msac,
             cdf->mv_classN, mv_prec);
 }
 
+/* Find IBC MV prediction from spatial neighbours (dav1d refmvs_find with
+ * ref={0,-1}).  Searches above-right, above, above-left, left, below-left
+ * in that order; returns the first valid candidate.  If none found, returns
+ * a default MV: (-(512<<sb128)-2048, 0) if near top of frame, else
+ * (0, -(512<<sb128)).  These match dav1d decode.c:1279-1287. */
+static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
+                                       int bx4, int by4, int bw4, int bh4,
+                                       int frame_top4, int sb128,
+                                       int *pred_y, int *pred_x)
+{
+    int i;
+    /* Search above row (by4-1): right-to-left across block width. */
+    if (s->above_ibc_mv_y && s->above_ibc_valid && by4 > 0) {
+        for (i = bw4 - 1; i >= 0; i--) {
+            int col = bx4 + i;
+            if (col >= 0 && (unsigned)col < s->above_ibc_mv_n &&
+                s->above_ibc_valid[col]) {
+                *pred_y = s->above_ibc_mv_y[col];
+                *pred_x = s->above_ibc_mv_x[col];
+                return;
+            }
+        }
+    }
+    /* Search above-left. */
+    if (s->above_ibc_mv_y && s->above_ibc_valid && by4 > 0 && bx4 > 0) {
+        int col = bx4 - 1;
+        if (col >= 0 && (unsigned)col < s->above_ibc_mv_n &&
+            s->above_ibc_valid[col]) {
+            *pred_y = s->above_ibc_mv_y[col];
+            *pred_x = s->above_ibc_mv_x[col];
+            return;
+        }
+    }
+    /* Search left column (bx4-1): top-to-bottom across block height. */
+    if (s->left_ibc_mv_y && s->left_ibc_valid && bx4 > 0) {
+        for (i = 0; i < bh4; i++) {
+            int row = by4 + i;
+            if (row >= 0 && (unsigned)row < s->left_ibc_mv_n &&
+                s->left_ibc_valid[row]) {
+                *pred_y = s->left_ibc_mv_y[row];
+                *pred_x = s->left_ibc_mv_x[row];
+                return;
+            }
+        }
+    }
+    /* Search below-left. */
+    if (s->left_ibc_mv_y && s->left_ibc_valid && bx4 > 0) {
+        int row = by4 + bh4;
+        if (row >= 0 && (unsigned)row < s->left_ibc_mv_n &&
+            s->left_ibc_valid[row]) {
+            *pred_y = s->left_ibc_mv_y[row];
+            *pred_x = s->left_ibc_mv_x[row];
+            return;
+        }
+    }
+    /* No spatial candidate found: use dav1d default MV. */
+    {
+        int sb_step = 16 << sb128;
+        if (by4 - sb_step < frame_top4) {
+            *pred_y = 0;
+            *pred_x = -(512 << sb128) - 2048;
+        } else {
+            *pred_y = -(512 << sb128);
+            *pred_x = 0;
+        }
+    }
+}
+
 /* ---- IBC luma TX tree leaf callback ---- */
 /* Called by stbv_av1_decode_tx_tree for each luma TX leaf in an IBC block.
  * Decodes coefficients at the leaf's TX size. */
@@ -1131,13 +1229,25 @@ c.recon = recon;
     if (qidx < 0) qidx = 0;
     if (qidx > 255) qidx = 255;
 
-    /* IBC MV residual decode (dav1d decode.c:1267-1290).
-     * Prediction MV is (0,0) since we have no refmvs buffer;
-     * only the residual is decoded from MSAC. */
+    /* IBC MV residual decode (dav1d decode.c:1267-1340).
+     * Find spatial MV prediction from above/left IBC neighbours, then
+     * decode residual relative to that prediction. */
     if (!intra_flag) {
-        int mv_y = 0, mv_x = 0;
+        int pred_mv_y = 0, pred_mv_x = 0;
+        int mv_y, mv_x;
+        int sb128 = (seq && seq->sb128) ? 1 : 0;
+        int frame_top4 = 0;
+        stbv_av1_find_ibc_mv_pred(state, bx4, by4, bw4, bh4,
+                                   frame_top4, sb128,
+                                   &pred_mv_y, &pred_mv_x);
+        mv_y = pred_mv_y;
+        mv_x = pred_mv_x;
         stbv_av1_read_mv_residual(msac, cdf, &mv_y, &mv_x, -1);
-        (void)mv_y; (void)mv_x;
+        c.ibc_mv_y = mv_y;
+        c.ibc_mv_x = mv_x;
+    } else {
+        c.ibc_mv_y = 0;
+        c.ibc_mv_x = 0;
     }
 
     cfl_allowed = lossless ? (cbw4 == 1 && cbh4 == 1) :
@@ -1224,13 +1334,14 @@ c.recon = recon;
      * For palette blocks this still fires but luma_pal/chroma_pal will
      * overwrite the prediction afterwards. */
     if (c.recon && c.recon->block_info)
-        c.recon->block_info(c.recon->ud, 1, bs, bx4, by4,
+        c.recon->block_info(c.recon->ud, intra_flag, bs, bx4, by4,
                             has_chroma, cbw4, cbh4, 0, 0,
                             state->pal_sz_y, state->pal_sz_uv,
                             (int)block_skip,
                             intra.y_mode, intra.y_angle, intra.uv_mode,
                             intra.uv_angle,
-                            intra.cfl_alpha_u, intra.cfl_alpha_v);
+                            intra.cfl_alpha_u, intra.cfl_alpha_v,
+                            c.ibc_mv_y, c.ibc_mv_x);
 
     /* Palette pixel application must run AFTER block_info (the callbacks
      * read the recon context's current block position) and before the
@@ -1551,6 +1662,26 @@ c.recon = recon;
         for (i = 0; i < bh4 && (unsigned)(by4 + i) < state->left_pal_n; i++)
             memcpy(state->left_pal[1] + (by4 + i) * 8, state->pal_u,
                    8 * sizeof(stbv_u16));
+    }
+
+    /* IBC MV neighbour splat (dav1d decode.c splat_intrabc_mv + set_ctx).
+     * For IBC blocks, store the decoded MV in the above/left arrays so
+     * subsequent IBC blocks can use it as a prediction candidate. */
+    if (!intra_flag) {
+        if (state->above_ibc_mv_y && state->above_ibc_valid) {
+            for (i = 0; i < bw4 && (unsigned)(bx4 + i) < state->above_ibc_mv_n; i++) {
+                state->above_ibc_mv_y[bx4 + i] = c.ibc_mv_y;
+                state->above_ibc_mv_x[bx4 + i] = c.ibc_mv_x;
+                state->above_ibc_valid[bx4 + i] = 1;
+            }
+        }
+        if (state->left_ibc_mv_y && state->left_ibc_valid) {
+            for (i = 0; i < bh4 && (unsigned)(by4 + i) < state->left_ibc_mv_n; i++) {
+                state->left_ibc_mv_y[by4 + i] = c.ibc_mv_y;
+                state->left_ibc_mv_x[by4 + i] = c.ibc_mv_x;
+                state->left_ibc_valid[by4 + i] = 1;
+            }
+        }
     }
     return 0;
 }
