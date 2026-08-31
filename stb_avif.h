@@ -1713,7 +1713,8 @@ static int stb_avif_decode_with_dav1d(const unsigned char *av1_data, size_t av1_
                                        unsigned char **u_plane, int *u_stride,
                                        unsigned char **v_plane, int *v_stride,
                                        int *bit_depth, int *monochrome,
-                                       int *subsampling_x, int *subsampling_y)
+                                       int *subsampling_x, int *subsampling_y,
+                                       int *color_range, int *matrix_coefficients)
 {
     Dav1dContext *ctx = NULL;
     Dav1dSettings s;
@@ -1758,6 +1759,15 @@ static int stb_avif_decode_with_dav1d(const unsigned char *av1_data, size_t av1_
     *height = pic.p.h;
     *bit_depth = pic.p.bpc;
     *monochrome = 0;
+
+    /* Extract colour properties from the decoded sequence header */
+    if (pic.seq_hdr) {
+        *color_range = pic.seq_hdr->color_range;
+        *matrix_coefficients = (int)pic.seq_hdr->mtrx;
+    } else {
+        *color_range = 0;
+        *matrix_coefficients = 1;
+    }
 
     /* Determine chroma subsampling from layout */
     if (pic.p.layout == DAV1D_PIXEL_LAYOUT_I420) {
@@ -3592,6 +3602,7 @@ ivf_decoded:
             /* Process based on type */
             switch (obu_type) {
                 case STB_AV1_OBU_SEQUENCE_HEADER: {
+#ifndef STB_AVIF_USE_DAV1D
                     /* Parse the sequence header with the authoritative
                      * raw-bit parser so sh is populated BEFORE the frame
                      * header parser runs (it reads sh->frame_width_bits,
@@ -3638,6 +3649,7 @@ ivf_decoded:
                         probe_seq_hbd  = sq.hbd;
                         probe_seq_mono = sq.monochrome ? 1 : 0;
                     }
+#endif
                     seq_header_found = 1;
                     break;
                 }
@@ -3905,6 +3917,7 @@ ivf_decoded:
     {
         int dav1d_w, dav1d_h;
         int dav1d_bd, dav1d_mono, dav1d_sx, dav1d_sy;
+        int dav1d_cr, dav1d_mc;
         unsigned char *dav1d_y = NULL, *dav1d_u = NULL, *dav1d_v = NULL;
         int dav1d_ys, dav1d_us, dav1d_vs;
         int dav1d_ok;
@@ -3915,7 +3928,8 @@ ivf_decoded:
             &dav1d_y, &dav1d_ys,
             &dav1d_u, &dav1d_us,
             &dav1d_v, &dav1d_vs,
-            &dav1d_bd, &dav1d_mono, &dav1d_sx, &dav1d_sy);
+            &dav1d_bd, &dav1d_mono, &dav1d_sx, &dav1d_sy,
+            &dav1d_cr, &dav1d_mc);
 
         if (dav1d_ok) {
             /* Replace internal planes with dav1d output */
@@ -3934,6 +3948,8 @@ ivf_decoded:
             sh.monochrome = dav1d_mono;
             sh.subsampling_x = dav1d_sx;
             sh.subsampling_y = dav1d_sy;
+            sh.color_range = dav1d_cr;
+            sh.matrix_coefficients = dav1d_mc;
         } else {
             stb_avif_error_msg = "dav1d decode failed";
             goto error_exit;
