@@ -409,6 +409,7 @@ typedef struct stbv_av1_leaf_decode_ctx {
     int reduced_txtp_set;
     int hbd;
     int is_intra;  /* 1 = intra block, 0 = IBC block */
+    int luma_txtp; /* stored luma txtp for inter/IBC chroma derivation */
     const stbv_av1_leaf_recon *recon;
 } stbv_av1_leaf_decode_ctx;
 
@@ -419,7 +420,7 @@ typedef struct stbv_av1_leaf_decode_ctx {
  * (luma) transform's results are recorded there. */
 static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
                                   stbv_av1_cdf *cdf,
-                                  const stbv_av1_leaf_decode_ctx *c,
+                                  stbv_av1_leaf_decode_ctx *c,
                                   int x4, int y4, int tx, int chroma,
                                   stbv_av1_res_state *rs,
                                   int bw4, int bh4,
@@ -447,8 +448,9 @@ skip = stb_av1_msac_bool_adapt(
             if (c->is_intra)
                 txtp = stbv_av1_txtp_from_uvmode[c->intra ? c->intra->uv_mode : 0];
             else
-                /* IBC/inter chroma txtp derived from luma txtp (see below) */
-                txtp = STBV_AV1_TX_DCT_DCT;
+                txtp = stbv_av1_get_uv_inter_txtp(
+                    stbv_av1_tx_dims[tx].min, stbv_av1_tx_dims[tx].max,
+                    c->luma_txtp);
         } else if (!c->qidx)
             txtp = STBV_AV1_TX_DCT_DCT;
         else if (c->is_intra)
@@ -463,6 +465,10 @@ skip = stb_av1_msac_bool_adapt(
         /* dav1d: *txtp = lossless * WHT_WHT */
         txtp = c->lossless ? STBV_AV1_TX_WHT_WHT : STBV_AV1_TX_DCT_DCT;
     }
+
+    /* Store luma txtp for inter/IBC chroma derivation */
+    if (!is_chroma)
+        c->luma_txtp = txtp;
 
     if (out) {
         out->x4 = x4;
@@ -1416,8 +1422,9 @@ c.recon = recon;
                                           (bw4_unc + ss_hor) >> ss_hor,
                                           (bh4_unc + ss_ver) >> ss_ver,
                                           (stbv_u8)0x40);
-            }
-            if (out) {
+    }
+
+    if (out) {
                 out->x4 = bx4;
                 out->y4 = by4;
                 out->tx = tx0;
