@@ -394,6 +394,7 @@ static void stbv_av1_leaf_state_reset_row(stbv_av1_leaf_state *s)
         if (s->cres[pl].left) memset(s->cres[pl].left, 0x40, s->cres[pl].left_n);
     if (s->left_skip) memset(s->left_skip, 0, s->left_skip_n);
     if (s->left_seg_id) memset(s->left_seg_id, 0, s->left_seg_id_n);
+    if (s->left_ibc_valid) memset(s->left_ibc_valid, 0, s->left_ibc_mv_n);
     if (s->intra.left_mode)
         memset(s->intra.left_mode, STBV_AV1_INTRA_DC,
                (size_t)s->intra.left_count);
@@ -491,8 +492,9 @@ skip = stb_av1_msac_bool_adapt(
                 stbv_av1_tx_dims[tx].min, c->y_mode_txtp,
                 c->reduced_txtp_set);
         else
-            txtp = stbv_av1_decode_inter_txtp(msac, cdf,
-                stbv_av1_tx_dims[tx].min, stbv_av1_tx_dims[tx].max,
+            /* IBC uses the intra transform-type syntax. */
+            txtp = stbv_av1_decode_intra_txtp(msac, cdf,
+                stbv_av1_tx_dims[tx].min, c->y_mode_txtp,
                 c->reduced_txtp_set);
     } else {
         /* dav1d: *txtp = lossless * WHT_WHT */
@@ -1603,8 +1605,9 @@ c.recon = recon;
             for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->tx.left_n; i++)
                 state->tx.left_tx[by4 + i] =
                     (stbv_u8)stbv_av1_tx_dims[txm].lh;
-            /* tx_intra: always stores MAX TX lw/lh (dav1d decode.c set_ctx). */
-            {
+            /* tx_intra is published for intra blocks only.  IBC is not an
+             * intra neighbour for get_tx_ctx(). */
+            if (intra_flag) {
                 int lw = stbv_av1_tx_dims[max_tx].lw;
                 int lh = stbv_av1_tx_dims[max_tx].lh;
                 if (state->tx.above_tx_intra) {
