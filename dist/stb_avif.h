@@ -8678,7 +8678,7 @@ c.recon = recon;
     sb_step = (seq && seq->sb128) ? 32 : 16;
     lossless = frame ? (int)frame->segmentation.lossless[0] : 0;
     qidx = state->last_qidx + (frame ? (int)frame->segmentation.d[seg_id].delta_q : 0);
-    if (qidx < 1) qidx = 1;
+    if (qidx < 0) qidx = 0;
     if (qidx > 255) qidx = 255;
     /* dav1d gates chroma presence on the UNCLIPPED block dims, then clips
      * the coefficient grids to the padded frame area ((w+7)&~7)>>2. */
@@ -8841,7 +8841,7 @@ c.recon = recon;
                 dq *= 1 << frame->delta_q_res_log2;
             }
             state->last_qidx = dq + state->last_qidx;
-            if (state->last_qidx < 1) state->last_qidx = 1;
+            if (state->last_qidx < 0) state->last_qidx = 0;
             if (state->last_qidx > 255) state->last_qidx = 255;
             if (frame->delta_lf_present) {
                 int nlfs = frame->delta_lf_multi ?
@@ -8877,7 +8877,7 @@ c.recon = recon;
     /* Recompute qidx using the SB-level last_qidx (may have been updated
      * by delta_q above). */
     qidx = state->last_qidx + (frame ? (int)frame->segmentation.d[seg_id].delta_q : 0);
-    if (qidx < 1) qidx = 1;
+    if (qidx < 0) qidx = 0;
     if (qidx > 255) qidx = 255;
 
     /* IBC MV residual decode (dav1d decode.c:1267-1290).
@@ -8893,8 +8893,8 @@ c.recon = recon;
         !!(STBV_AV1_CFL_ALLOWED_MASK & (1U << bs));
     if (intra_flag) {
         if (stb_av1_intra_state_decode_leaf(msac, cdf, &state->intra,
-                                            bx4, by4, bs, cfl_allowed,
-                                            has_chroma, &intra))
+                                             bx4, by4, bs, cfl_allowed,
+                                             has_chroma, &intra))
             return -3;
     } else {
         /* IBC: no intra mode decode; set defaults for ctx. */
