@@ -1144,8 +1144,8 @@ c.recon = recon;
         !!(STBV_AV1_CFL_ALLOWED_MASK & (1U << bs));
     if (intra_flag) {
         if (stb_av1_intra_state_decode_leaf(msac, cdf, &state->intra,
-                                            bx4, by4, bs, cfl_allowed,
-                                            has_chroma, &intra))
+                                             bx4, by4, bs, cfl_allowed,
+                                             has_chroma, &intra))
             return -3;
     } else {
         /* IBC: no intra mode decode; set defaults for ctx. */

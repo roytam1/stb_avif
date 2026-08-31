@@ -2396,7 +2396,7 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
     int txw4 = stbv_av1_tx_dims[tx].w;
     int txh4 = stbv_av1_tx_dims[tx].h;
     (void)eob;
-    rc = (struct stb_av1_scalar_recon *)ud;
+    rc = (struct stb_avif_scalar_recon *)ud;
     if (!rc) return;
     (void)txw4; (void)txh4;
 #ifdef STB_AVIF_PRED_ONLY
