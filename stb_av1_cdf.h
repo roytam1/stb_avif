@@ -1746,12 +1746,13 @@ static void stbv_av1_cdf_init(stbv_av1_cdf *c, unsigned qcat)
      * class0 CDF1(27648),
      * classN[0..9] = CDF1(17408..30720). All inverted (32768-val). */
     {
-        static const stbv_u16 mv_joint_def[3] = { 28672, 21504, 13440 };
+        /* Raw args to CDF macros; stored = 32768 - arg */
+        static const stbv_u16 mv_joint_def[3] = { 4096, 11264, 19328 };
         static const stbv_u16 mv_classes_def[10] = {
-            4096, 1792, 910, 448, 217, 112, 28, 11, 6, 1
+            28672, 30976, 31858, 32320, 32551, 32656, 32740, 32757, 32762, 32767
         };
         static const stbv_u16 mv_classN_def[10] = {
-            15360, 14848, 13824, 12288, 10240, 8192, 4096, 2816, 2816, 2048
+            17408, 17920, 18944, 20480, 22528, 24576, 28672, 29952, 29952, 30720
         };
         for (i = 0; i < 3; i++)
             c->mv_joint[i] = 32768U - mv_joint_def[i];

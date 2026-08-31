@@ -3179,10 +3179,15 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                 ntiles, stream.frame.tiling.cols, stream.frame.tiling.rows,
                 stream.seq.sb128, tc->frame_width, tc->frame_height,
                 (void*)stream.tile_data, stream.tile_size);
-        fprintf(stderr, "DBG framehdr: frame_type=%u show=%u allow_intrabc=%u width0=%u delta_q=%u yac=%u\n",
+        fprintf(stderr, "DBG framehdr: frame_type=%u show=%u allow_intrabc=%u width0=%u delta_q=%u delta_lf=%u delta_lf_multi=%u yac=%u seg_en=%u seg_preskip=%u seg_umap=%u\n",
                 stream.frame.frame_type, stream.frame.show_frame,
                 stream.frame.allow_intrabc, stream.frame.width[0],
-                stream.frame.delta_q_present, stream.frame.quant.yac);
+                stream.frame.delta_q_present, stream.frame.delta_lf_present,
+                stream.frame.delta_lf_multi,
+                stream.frame.quant.yac,
+                stream.frame.segmentation.enabled,
+                stream.frame.segmentation.preskip,
+                stream.frame.segmentation.update_map);
         if (stream.tile_data && stream.tile_size >= 4) {
             fprintf(stderr, "DBG tile_first_bytes: %02x %02x %02x %02x\n",
                     stream.tile_data[0], stream.tile_data[1],
