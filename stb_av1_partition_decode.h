@@ -5,8 +5,6 @@
 #ifndef STB_AV1_PARTITION_DECODE_H
 #define STB_AV1_PARTITION_DECODE_H
 
-#include <stdio.h>
-
 #ifndef STB_AV1_PARTITION_H
 #error "include stb_av1_partition.h first"
 #endif

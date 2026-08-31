@@ -425,6 +425,12 @@ struct stb_avif_avif_info {
     int av1c_all_ssy[4];          /* chroma_subsampling_y per av1C */
     int av1c_all_mono[4];         /* monochrome per av1C */
     int primary_av1c_prop_idx;    /* resolved 1-based index for primary item */
+    /* ispe: store dimensions per property index so we can resolve after ipma */
+    int ispe_prop_idx[8];         /* 1-based property indices of ispe in ipco */
+    int ispe_all_w[8];            /* width per ispe property */
+    int ispe_all_h[8];            /* height per ispe property */
+    int ispe_prop_count;          /* number of ispe properties found */
+    int primary_ispe_prop_idx;    /* resolved 1-based index for primary ispe */
     /* ipma: up to 16 items, each with up to 8 property associations */
     int ipma_item_count;
     int ipma_item_ids[16];
@@ -808,10 +814,13 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                     /* Item property container */
                     struct stb_avif_box ipco_box = iprp_sub;
                     stb_avif_enter_box(r, &ipco_box);
+                    {
+                    int ipco_prop_pos = 0; /* 1-based ipco position counter */
 
                     while (r->pos < (size_t)(ipco_box.data_start + ipco_box.data_size)) {
                         struct stb_avif_box prop;
                         size_t prop_start = r->pos;
+                        ipco_prop_pos++;
 
                         if (r->pos + 8 > r->size) break;
                         stb_avif_read_box_header(r, &prop);
@@ -846,13 +855,24 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                             info->av1c_seen = 1;
                         }
                         else if (prop.type == STB_AVIF_BOX_ISPE) {
-                            /* Image spatial extents */
+                            /* Image spatial extents: store per-property, resolve
+                             * to primary item later via ipma. */
+                            int si;
                             stb_avif_read_byte(r); /* version */
                             stb_avif_read_byte(r); /* flags */
                             stb_avif_read_byte(r);
                             stb_avif_read_byte(r);
-                            info->width = (int)stb_avif_read_be32(r);
-                            info->height = (int)stb_avif_read_be32(r);
+                            {
+                                int w = (int)stb_avif_read_be32(r);
+                                int h = (int)stb_avif_read_be32(r);
+                                si = info->ispe_prop_count;
+                                if (si < 8) {
+                                    info->ispe_prop_idx[si] = ipco_prop_pos;
+                                    info->ispe_all_w[si] = w;
+                                    info->ispe_all_h[si] = h;
+                                }
+                                info->ispe_prop_count++;
+                            }
                         }
                         else if (prop.type == STB_AVIF_BOX_PIXI) {
                             /* Pixel information (bit depth per channel) */
@@ -866,6 +886,7 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
 
                         r->pos = (size_t)(prop_start + prop.size);
                     }
+                    } /* end ipco_prop_pos block */
                 }
                 else if (iprp_sub.type == STB_AVIF_BOX_IPMA) {
                     /* Item Property Association box: maps item IDs to property indices.
@@ -938,6 +959,36 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                     break;
                 }
             }
+        }
+
+        /* Resolve the correct ispe (width/height) for the primary item using ipma.
+         * Multiple ispe properties may exist (main + thumbnails); we must pick
+         * the one associated with the primary item. */
+        if (info->primary_item_id > 0 && info->ispe_prop_count > 0) {
+            int pi, ai2;
+            for (pi = 0; pi < info->ipma_item_count; pi++) {
+                if (info->ipma_item_ids[pi] == info->primary_item_id) {
+                    for (ai2 = 0; ai2 < info->ipma_prop_count[pi]; ai2++) {
+                        int pidx = info->ipma_prop_idx[pi][ai2];
+                        int k;
+                        for (k = 0; k < info->ispe_prop_count && k < 8; k++) {
+                            if (info->ispe_prop_idx[k] == pidx) {
+                                info->width = info->ispe_all_w[k];
+                                info->height = info->ispe_all_h[k];
+                                info->primary_ispe_prop_idx = pidx;
+                                break;
+                            }
+                        }
+                        if (info->primary_ispe_prop_idx) break;
+                    }
+                    break;
+                }
+            }
+        }
+        /* Fallback: if no primary ispe found via ipma, use the first ispe */
+        if (!info->primary_ispe_prop_idx && info->ispe_prop_count > 0) {
+            info->width = info->ispe_all_w[0];
+            info->height = info->ispe_all_h[0];
         }
 
         r->pos = (size_t)(sub_start + sub.size);
