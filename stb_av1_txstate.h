@@ -21,23 +21,35 @@ typedef struct stbv_av1_tx_state {
     stbv_u8 *left_tx;
     unsigned int above_n;
     unsigned int left_n;
+    /* dav1d's tx_intra: stores the MAX transform size (lw/lh) per 4x4
+     * position, used by get_tx_ctx() for the next block's TX context.
+     * above_tx/left_tx store the decoded TX (updated by read_tx_tree at
+     * leaf nodes) and are used by the tree split decision. */
+    stbv_u8 *above_tx_intra;
+    stbv_u8 *left_tx_intra;
 } stbv_av1_tx_state;
 
 static void stbv_av1_tx_state_init(stbv_av1_tx_state *s,
                                    stbv_u8 *above_tx, unsigned int above_n,
-                                   stbv_u8 *left_tx, unsigned int left_n)
+                                   stbv_u8 *left_tx, unsigned int left_n,
+                                   stbv_u8 *above_tx_intra,
+                                   stbv_u8 *left_tx_intra)
 {
     if (!s) return;
     s->above_tx = above_tx;
     s->left_tx = left_tx;
     s->above_n = above_n;
     s->left_n = left_n;
+    s->above_tx_intra = above_tx_intra;
+    s->left_tx_intra = left_tx_intra;
     /* dav1d resets the above contexts once per frame (reset_context(&f->a));
      * a missing neighbour reads 0xff, compares "larger or equal" to any real
      * transform, and contributes 1 to the tx-size context.  The left context
      * is also reset at frame start; per row only the left is re-reset. */
     if (above_tx) memset(above_tx, 0xff, above_n);
     if (left_tx) memset(left_tx, 0xff, left_n);
+    if (above_tx_intra) memset(above_tx_intra, 0xff, above_n);
+    if (left_tx_intra) memset(left_tx_intra, 0xff, left_n);
 }
 
 static int stbv_av1_tx_is_smaller(const stbv_u8 *edge, int pos4, int tx_dim,
@@ -65,6 +77,7 @@ static void stbv_av1_tx_state_reset_row(stbv_av1_tx_state *s)
 {
     if (!s) return;
     if (s->left_tx) memset(s->left_tx, 0xff, s->left_n);
+    if (s->left_tx_intra) memset(s->left_tx_intra, 0xff, s->left_n);
 }
 
 /*

@@ -3042,6 +3042,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     int r;
     int frame_w4, frame_h4, frame_w8, frame_h8;
     stbv_u8 *above_mode = 0, *left_mode = 0, *above_tx = 0, *left_tx = 0;
+    stbv_u8 *above_tx_intra = 0, *left_tx_intra = 0;
     stbv_u8 *above_res = 0, *left_res = 0;
     int res_w4, res_h4;
     stbv_u32 *lf_blkid_map = 0, *lf_blkid_map_c = 0;
@@ -3103,6 +3104,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     left_mode = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
     above_tx = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
     left_tx = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
+    above_tx_intra = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
+    left_tx_intra = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
     /* Residual-context arrays must be superblock-padded like dav1d's
      * f->bw/f->lh row/col contexts: edge transforms write their full
      * extent (e.g. a 16x32 txb at the right frame edge marks columns
@@ -3174,13 +3177,16 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         !above_pal_uv || !left_pal_uv || !above_pal0 || !above_pal1 ||
         !left_pal0 || !left_pal1 || !above_seg_id || !left_seg_id ||
         !above_ibc_mv_y || !above_ibc_mv_x || !above_ibc_valid ||
-        !left_ibc_mv_y || !left_ibc_mv_x || !left_ibc_valid)
+        !left_ibc_mv_y || !left_ibc_mv_x || !left_ibc_valid ||
+        !above_tx_intra || !left_tx_intra)
         return -4;
     memset(&arrays, 0, sizeof(arrays));
     arrays.above_mode = above_mode; arrays.above_mode_n = frame_w4;
     arrays.left_mode = left_mode; arrays.left_mode_n = frame_h4;
     arrays.above_tx = above_tx; arrays.above_tx_n = frame_w4;
     arrays.left_tx = left_tx; arrays.left_tx_n = frame_h4;
+    arrays.above_tx_intra = above_tx_intra;
+    arrays.left_tx_intra = left_tx_intra;
     arrays.above_res = above_res; arrays.above_res_n = res_w4;
     arrays.left_res = left_res; arrays.left_res_n = res_h4;
     /* dav1d's f->bw/f->bh are SB-ALIGNED unit counts, so its write clip
@@ -3509,6 +3515,7 @@ oom16:
     if (pv16) stb_avif_free_internal(pv16);
     stb_avif_free_internal(above_mode); stb_avif_free_internal(left_mode);
     stb_avif_free_internal(above_tx); stb_avif_free_internal(left_tx);
+    stb_avif_free_internal(above_tx_intra); stb_avif_free_internal(left_tx_intra);
     stb_avif_free_internal(above_res); stb_avif_free_internal(left_res);
     stb_avif_free_internal(above_cre0); stb_avif_free_internal(above_cre1);
     stb_avif_free_internal(left_cre0); stb_avif_free_internal(left_cre1);

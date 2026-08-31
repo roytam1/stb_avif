@@ -197,6 +197,8 @@ typedef struct stbv_av1_leaf_state_arrays {
     unsigned int above_tx_n;
     stbv_u8 *left_tx;
     unsigned int left_tx_n;
+    stbv_u8 *above_tx_intra;
+    stbv_u8 *left_tx_intra;
     stbv_u8 *above_res;
     unsigned int above_res_n;
     stbv_u8 *left_res;
@@ -313,7 +315,8 @@ static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
     stb_av1_intra_state_init(&s->intra, a->above_mode, a->above_mode_n,
                              a->left_mode, a->left_mode_n);
     stbv_av1_tx_state_init(&s->tx, a->above_tx, a->above_tx_n,
-                           a->left_tx, a->left_tx_n);
+                           a->left_tx, a->left_tx_n,
+                           a->above_tx_intra, a->left_tx_intra);
     stbv_av1_res_state_init(&s->res, a->above_res, a->above_res_n,
                             a->left_res, a->left_res_n);
     for (pl = 0; pl < 2; pl++)
@@ -1263,7 +1266,6 @@ c.recon = recon;
         intra.y_mode = STBV_AV1_INTRA_DC;
         intra.uv_mode = STBV_AV1_INTRA_DC;
     }
-
     /* Palette, filter-intra, and palette indices: intra-only.
      * IBC blocks skip all of these (dav1d decode.c:1267). */
     state->pal_sz_y = 0;
@@ -1378,10 +1380,10 @@ c.recon = recon;
             frame && frame->txfm_mode == 1 &&
             stbv_av1_tx_dims[max_tx].max > STBV_AV1_TX_4X4) {
             tx0 = stbv_av1_decode_tx_size(msac, cdf, max_tx,
-                                          stbv_av1_tx_is_large(state->tx.above_tx, bx4,
+                                          stbv_av1_tx_is_large(state->tx.above_tx_intra, bx4,
                                                                stbv_av1_tx_dims[max_tx].lw,
                                                                state->tx.above_n) +
-                                          stbv_av1_tx_is_large(state->tx.left_tx, by4,
+                                          stbv_av1_tx_is_large(state->tx.left_tx_intra, by4,
                                                                stbv_av1_tx_dims[max_tx].lh,
                                                                state->tx.left_n));
         }
@@ -1590,7 +1592,9 @@ c.recon = recon;
 
         /* Tx neighbour map: dav1d sets it to the block tx dimensions over the
          * whole block edge after reconstruction; skipped blocks use the
-         * block's default tx size (dav1d b_dim[2+i], set_ctx skip path). */
+         * block's default tx size (dav1d b_dim[2+i], set_ctx skip path).
+         * dav1d also writes to tx_intra (MAX tx lw/lh) which is used by
+         * get_tx_ctx for the next block's TX context. */
         {
             int txm = (int)block_skip ? max_tx : tx0;
             for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->tx.above_n; i++)
@@ -1599,6 +1603,19 @@ c.recon = recon;
             for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->tx.left_n; i++)
                 state->tx.left_tx[by4 + i] =
                     (stbv_u8)stbv_av1_tx_dims[txm].lh;
+            /* tx_intra: always stores MAX TX lw/lh (dav1d decode.c set_ctx). */
+            {
+                int lw = stbv_av1_tx_dims[max_tx].lw;
+                int lh = stbv_av1_tx_dims[max_tx].lh;
+                if (state->tx.above_tx_intra) {
+                    for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->tx.above_n; i++)
+                        state->tx.above_tx_intra[bx4 + i] = (stbv_u8)lw;
+                }
+                if (state->tx.left_tx_intra) {
+                    for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->tx.left_n; i++)
+                        state->tx.left_tx_intra[by4 + i] = (stbv_u8)lh;
+                }
+            }
         }
     }
 
