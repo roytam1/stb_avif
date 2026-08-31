@@ -2618,8 +2618,6 @@ static void stbv_av1_partition_mark(stbv_u8 *grid, int stride,
 #ifndef STB_AV1_PARTITION_DECODE_H
 #define STB_AV1_PARTITION_DECODE_H
 
-#include <stdio.h>
-
 #ifndef STB_AV1_PARTITION_H
 #error "include stb_av1_partition.h first"
 #endif
@@ -4180,23 +4178,35 @@ typedef struct stbv_av1_tx_state {
     stbv_u8 *left_tx;
     unsigned int above_n;
     unsigned int left_n;
+    /* dav1d's tx_intra: stores the MAX transform size (lw/lh) per 4x4
+     * position, used by get_tx_ctx() for the next block's TX context.
+     * above_tx/left_tx store the decoded TX (updated by read_tx_tree at
+     * leaf nodes) and are used by the tree split decision. */
+    stbv_u8 *above_tx_intra;
+    stbv_u8 *left_tx_intra;
 } stbv_av1_tx_state;
 
 static void stbv_av1_tx_state_init(stbv_av1_tx_state *s,
                                    stbv_u8 *above_tx, unsigned int above_n,
-                                   stbv_u8 *left_tx, unsigned int left_n)
+                                   stbv_u8 *left_tx, unsigned int left_n,
+                                   stbv_u8 *above_tx_intra,
+                                   stbv_u8 *left_tx_intra)
 {
     if (!s) return;
     s->above_tx = above_tx;
     s->left_tx = left_tx;
     s->above_n = above_n;
     s->left_n = left_n;
+    s->above_tx_intra = above_tx_intra;
+    s->left_tx_intra = left_tx_intra;
     /* dav1d resets the above contexts once per frame (reset_context(&f->a));
      * a missing neighbour reads 0xff, compares "larger or equal" to any real
      * transform, and contributes 1 to the tx-size context.  The left context
      * is also reset at frame start; per row only the left is re-reset. */
     if (above_tx) memset(above_tx, 0xff, above_n);
     if (left_tx) memset(left_tx, 0xff, left_n);
+    if (above_tx_intra) memset(above_tx_intra, 0xff, above_n);
+    if (left_tx_intra) memset(left_tx_intra, 0xff, left_n);
 }
 
 static int stbv_av1_tx_is_smaller(const stbv_u8 *edge, int pos4, int tx_dim,
@@ -4224,6 +4234,7 @@ static void stbv_av1_tx_state_reset_row(stbv_av1_tx_state *s)
 {
     if (!s) return;
     if (s->left_tx) memset(s->left_tx, 0xff, s->left_n);
+    if (s->left_tx_intra) memset(s->left_tx_intra, 0xff, s->left_n);
 }
 
 /*
@@ -7797,7 +7808,7 @@ static const unsigned short stbv_av1_dq_tbl[3][STBV_AV1_QINDEX_RANGE][2] = {
 typedef struct stbv_av1_leaf_recon {
     void *ud;
     stbv_i32 *cf;
-    void (*block_info)(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode, int uv_angle, int cfl_alpha_u, int cfl_alpha_v);
+    void (*block_info)(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode, int uv_angle, int cfl_alpha_u, int cfl_alpha_v, int ibc_mv_y, int ibc_mv_x);
     void (*luma_txb)(void *ud, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf);
     void (*chroma_txb)(void *ud, int pl, int x4, int y4, int tx, int txtp, int eob, stbv_i32 *cf);
     void (*luma_pal)(void *ud, const stbv_u8 *idx, int sz, int bw4, int bh4, const stbv_u16 *pal);
@@ -7946,6 +7957,8 @@ typedef struct stbv_av1_leaf_state_arrays {
     unsigned int above_tx_n;
     stbv_u8 *left_tx;
     unsigned int left_tx_n;
+    stbv_u8 *above_tx_intra;
+    stbv_u8 *left_tx_intra;
     stbv_u8 *above_res;
     unsigned int above_res_n;
     stbv_u8 *left_res;
@@ -7979,6 +7992,15 @@ typedef struct stbv_av1_leaf_state_arrays {
     unsigned int above_seg_id_n;
     stbv_u8 *left_seg_id;
     unsigned int left_seg_id_n;
+    /* IBC MV neighbour arrays for MV prediction (dav1d refmvs_find). */
+    int *above_ibc_mv_y;
+    int *above_ibc_mv_x;
+    stbv_u8 *above_ibc_valid;
+    unsigned int above_ibc_mv_n;
+    int *left_ibc_mv_y;
+    int *left_ibc_mv_x;
+    stbv_u8 *left_ibc_valid;
+    unsigned int left_ibc_mv_n;
 } stbv_av1_leaf_state_arrays;
 
 typedef struct stbv_av1_leaf_state {
@@ -8027,6 +8049,15 @@ typedef struct stbv_av1_leaf_state {
     /* Per-SB quantizer/lf state (persists across leaf callbacks within a tile) */
     int last_qidx;
     int last_delta_lf[4];
+    /* IBC MV neighbour arrays for MV prediction. */
+    int *above_ibc_mv_y;
+    int *above_ibc_mv_x;
+    stbv_u8 *above_ibc_valid;
+    unsigned int above_ibc_mv_n;
+    int *left_ibc_mv_y;
+    int *left_ibc_mv_x;
+    stbv_u8 *left_ibc_valid;
+    unsigned int left_ibc_mv_n;
 } stbv_av1_leaf_state;
 
 static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
@@ -8044,7 +8075,8 @@ static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
     stb_av1_intra_state_init(&s->intra, a->above_mode, a->above_mode_n,
                              a->left_mode, a->left_mode_n);
     stbv_av1_tx_state_init(&s->tx, a->above_tx, a->above_tx_n,
-                           a->left_tx, a->left_tx_n);
+                           a->left_tx, a->left_tx_n,
+                           a->above_tx_intra, a->left_tx_intra);
     stbv_av1_res_state_init(&s->res, a->above_res, a->above_res_n,
                             a->left_res, a->left_res_n);
     for (pl = 0; pl < 2; pl++)
@@ -8079,6 +8111,14 @@ static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
     s->left_seg_id = a->left_seg_id;
     s->above_seg_id_n = a->above_seg_id_n;
     s->left_seg_id_n = a->left_seg_id_n;
+    s->above_ibc_mv_y = a->above_ibc_mv_y;
+    s->above_ibc_mv_x = a->above_ibc_mv_x;
+    s->above_ibc_valid = a->above_ibc_valid;
+    s->above_ibc_mv_n = a->above_ibc_mv_n;
+    s->left_ibc_mv_y = a->left_ibc_mv_y;
+    s->left_ibc_mv_x = a->left_ibc_mv_x;
+    s->left_ibc_valid = a->left_ibc_valid;
+    s->left_ibc_mv_n = a->left_ibc_mv_n;
     if (a->above_pal_sz) memset(a->above_pal_sz, 0, a->above_pal_sz_n);
     if (a->left_pal_sz) memset(a->left_pal_sz, 0, a->left_pal_sz_n);
     if (a->above_pal_uv) memset(a->above_pal_uv, 0, a->above_pal_uv_n);
@@ -8097,6 +8137,8 @@ static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
     if (a->above_skip) memset(a->above_skip, 0, a->above_skip_n);
     if (a->left_skip) memset(a->left_skip, 0, a->left_skip_n);
     if (a->above_seg_id) memset(a->above_seg_id, 0, a->above_seg_id_n);
+    if (a->above_ibc_valid) memset(a->above_ibc_valid, 0, a->above_ibc_mv_n);
+    if (a->left_ibc_valid) memset(a->left_ibc_valid, 0, a->left_ibc_mv_n);
 }
 
 /* dav1d reset_context() resets only the LEFT contexts at the start of each
@@ -8112,6 +8154,7 @@ static void stbv_av1_leaf_state_reset_row(stbv_av1_leaf_state *s)
         if (s->cres[pl].left) memset(s->cres[pl].left, 0x40, s->cres[pl].left_n);
     if (s->left_skip) memset(s->left_skip, 0, s->left_skip_n);
     if (s->left_seg_id) memset(s->left_seg_id, 0, s->left_seg_id_n);
+    if (s->left_ibc_valid) memset(s->left_ibc_valid, 0, s->left_ibc_mv_n);
     if (s->intra.left_mode)
         memset(s->intra.left_mode, STBV_AV1_INTRA_DC,
                (size_t)s->intra.left_count);
@@ -8159,6 +8202,8 @@ typedef struct stbv_av1_leaf_decode_ctx {
     int hbd;
     int is_intra;  /* 1 = intra block, 0 = IBC block */
     int luma_txtp; /* stored luma txtp for inter/IBC chroma derivation */
+    int ibc_mv_y;  /* decoded IBC MV, 1/8-pel luma units */
+    int ibc_mv_x;
     const stbv_av1_leaf_recon *recon;
 } stbv_av1_leaf_decode_ctx;
 
@@ -8630,6 +8675,74 @@ static void stbv_av1_read_mv_residual(struct stb_av1_msac *msac,
             cdf->mv_classN, mv_prec);
 }
 
+/* Find IBC MV prediction from spatial neighbours (dav1d refmvs_find with
+ * ref={0,-1}).  Searches above-right, above, above-left, left, below-left
+ * in that order; returns the first valid candidate.  If none found, returns
+ * a default MV: (-(512<<sb128)-2048, 0) if near top of frame, else
+ * (0, -(512<<sb128)).  These match dav1d decode.c:1279-1287. */
+static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
+                                       int bx4, int by4, int bw4, int bh4,
+                                       int frame_top4, int sb128,
+                                       int *pred_y, int *pred_x)
+{
+    int i;
+    /* Search above row (by4-1): right-to-left across block width. */
+    if (s->above_ibc_mv_y && s->above_ibc_valid && by4 > 0) {
+        for (i = bw4 - 1; i >= 0; i--) {
+            int col = bx4 + i;
+            if (col >= 0 && (unsigned)col < s->above_ibc_mv_n &&
+                s->above_ibc_valid[col]) {
+                *pred_y = s->above_ibc_mv_y[col];
+                *pred_x = s->above_ibc_mv_x[col];
+                return;
+            }
+        }
+    }
+    /* Search above-left. */
+    if (s->above_ibc_mv_y && s->above_ibc_valid && by4 > 0 && bx4 > 0) {
+        int col = bx4 - 1;
+        if (col >= 0 && (unsigned)col < s->above_ibc_mv_n &&
+            s->above_ibc_valid[col]) {
+            *pred_y = s->above_ibc_mv_y[col];
+            *pred_x = s->above_ibc_mv_x[col];
+            return;
+        }
+    }
+    /* Search left column (bx4-1): top-to-bottom across block height. */
+    if (s->left_ibc_mv_y && s->left_ibc_valid && bx4 > 0) {
+        for (i = 0; i < bh4; i++) {
+            int row = by4 + i;
+            if (row >= 0 && (unsigned)row < s->left_ibc_mv_n &&
+                s->left_ibc_valid[row]) {
+                *pred_y = s->left_ibc_mv_y[row];
+                *pred_x = s->left_ibc_mv_x[row];
+                return;
+            }
+        }
+    }
+    /* Search below-left. */
+    if (s->left_ibc_mv_y && s->left_ibc_valid && bx4 > 0) {
+        int row = by4 + bh4;
+        if (row >= 0 && (unsigned)row < s->left_ibc_mv_n &&
+            s->left_ibc_valid[row]) {
+            *pred_y = s->left_ibc_mv_y[row];
+            *pred_x = s->left_ibc_mv_x[row];
+            return;
+        }
+    }
+    /* No spatial candidate found: use dav1d default MV. */
+    {
+        int sb_step = 16 << sb128;
+        if (by4 - sb_step < frame_top4) {
+            *pred_y = 0;
+            *pred_x = -(512 << sb128) - 2048;
+        } else {
+            *pred_y = -(512 << sb128);
+            *pred_x = 0;
+        }
+    }
+}
+
 /* ---- IBC luma TX tree leaf callback ---- */
 /* Called by stbv_av1_decode_tx_tree for each luma TX leaf in an IBC block.
  * Decodes coefficients at the leaf's TX size. */
@@ -8880,13 +8993,25 @@ c.recon = recon;
     if (qidx < 0) qidx = 0;
     if (qidx > 255) qidx = 255;
 
-    /* IBC MV residual decode (dav1d decode.c:1267-1290).
-     * Prediction MV is (0,0) since we have no refmvs buffer;
-     * only the residual is decoded from MSAC. */
+    /* IBC MV residual decode (dav1d decode.c:1267-1340).
+     * Find spatial MV prediction from above/left IBC neighbours, then
+     * decode residual relative to that prediction. */
     if (!intra_flag) {
-        int mv_y = 0, mv_x = 0;
+        int pred_mv_y = 0, pred_mv_x = 0;
+        int mv_y, mv_x;
+        int sb128 = (seq && seq->sb128) ? 1 : 0;
+        int frame_top4 = 0;
+        stbv_av1_find_ibc_mv_pred(state, bx4, by4, bw4, bh4,
+                                   frame_top4, sb128,
+                                   &pred_mv_y, &pred_mv_x);
+        mv_y = pred_mv_y;
+        mv_x = pred_mv_x;
         stbv_av1_read_mv_residual(msac, cdf, &mv_y, &mv_x, -1);
-        (void)mv_y; (void)mv_x;
+        c.ibc_mv_y = mv_y;
+        c.ibc_mv_x = mv_x;
+    } else {
+        c.ibc_mv_y = 0;
+        c.ibc_mv_x = 0;
     }
 
     cfl_allowed = lossless ? (cbw4 == 1 && cbh4 == 1) :
@@ -8902,7 +9027,6 @@ c.recon = recon;
         intra.y_mode = STBV_AV1_INTRA_DC;
         intra.uv_mode = STBV_AV1_INTRA_DC;
     }
-
     /* Palette, filter-intra, and palette indices: intra-only.
      * IBC blocks skip all of these (dav1d decode.c:1267). */
     state->pal_sz_y = 0;
@@ -8973,13 +9097,14 @@ c.recon = recon;
      * For palette blocks this still fires but luma_pal/chroma_pal will
      * overwrite the prediction afterwards. */
     if (c.recon && c.recon->block_info)
-        c.recon->block_info(c.recon->ud, 1, bs, bx4, by4,
+        c.recon->block_info(c.recon->ud, intra_flag, bs, bx4, by4,
                             has_chroma, cbw4, cbh4, 0, 0,
                             state->pal_sz_y, state->pal_sz_uv,
                             (int)block_skip,
                             intra.y_mode, intra.y_angle, intra.uv_mode,
                             intra.uv_angle,
-                            intra.cfl_alpha_u, intra.cfl_alpha_v);
+                            intra.cfl_alpha_u, intra.cfl_alpha_v,
+                            c.ibc_mv_y, c.ibc_mv_x);
 
     /* Palette pixel application must run AFTER block_info (the callbacks
      * read the recon context's current block position) and before the
@@ -9016,10 +9141,10 @@ c.recon = recon;
             frame && frame->txfm_mode == 1 &&
             stbv_av1_tx_dims[max_tx].max > STBV_AV1_TX_4X4) {
             tx0 = stbv_av1_decode_tx_size(msac, cdf, max_tx,
-                                          stbv_av1_tx_is_large(state->tx.above_tx, bx4,
+                                          stbv_av1_tx_is_large(state->tx.above_tx_intra, bx4,
                                                                stbv_av1_tx_dims[max_tx].lw,
                                                                state->tx.above_n) +
-                                          stbv_av1_tx_is_large(state->tx.left_tx, by4,
+                                          stbv_av1_tx_is_large(state->tx.left_tx_intra, by4,
                                                                stbv_av1_tx_dims[max_tx].lh,
                                                                state->tx.left_n));
         }
@@ -9228,7 +9353,9 @@ c.recon = recon;
 
         /* Tx neighbour map: dav1d sets it to the block tx dimensions over the
          * whole block edge after reconstruction; skipped blocks use the
-         * block's default tx size (dav1d b_dim[2+i], set_ctx skip path). */
+         * block's default tx size (dav1d b_dim[2+i], set_ctx skip path).
+         * dav1d also writes to tx_intra (MAX tx lw/lh) which is used by
+         * get_tx_ctx for the next block's TX context. */
         {
             int txm = (int)block_skip ? max_tx : tx0;
             for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->tx.above_n; i++)
@@ -9237,6 +9364,29 @@ c.recon = recon;
             for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->tx.left_n; i++)
                 state->tx.left_tx[by4 + i] =
                     (stbv_u8)stbv_av1_tx_dims[txm].lh;
+            /* tx_intra: for intra blocks store decoded TX lw/lh; for IBC
+             * blocks store max TX (dav1d: intra set_ctx uses t_dim->lw/lh
+             * which is the decoded TX; IBC set_ctx uses b_dim[2+i] which
+             * is the max TX). get_tx_ctx() compares this against the next
+             * block's max TX to form the TX size context. */
+            {
+                int lw, lh;
+                if (intra_flag) {
+                    lw = stbv_av1_tx_dims[tx0].lw;
+                    lh = stbv_av1_tx_dims[tx0].lh;
+                } else {
+                    lw = stbv_av1_tx_dims[max_tx].lw;
+                    lh = stbv_av1_tx_dims[max_tx].lh;
+                }
+                if (state->tx.above_tx_intra) {
+                    for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->tx.above_n; i++)
+                        state->tx.above_tx_intra[bx4 + i] = (stbv_u8)lw;
+                }
+                if (state->tx.left_tx_intra) {
+                    for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->tx.left_n; i++)
+                        state->tx.left_tx_intra[by4 + i] = (stbv_u8)lh;
+                }
+            }
         }
     }
 
@@ -9300,6 +9450,26 @@ c.recon = recon;
         for (i = 0; i < bh4 && (unsigned)(by4 + i) < state->left_pal_n; i++)
             memcpy(state->left_pal[1] + (by4 + i) * 8, state->pal_u,
                    8 * sizeof(stbv_u16));
+    }
+
+    /* IBC MV neighbour splat (dav1d decode.c splat_intrabc_mv + set_ctx).
+     * For IBC blocks, store the decoded MV in the above/left arrays so
+     * subsequent IBC blocks can use it as a prediction candidate. */
+    if (!intra_flag) {
+        if (state->above_ibc_mv_y && state->above_ibc_valid) {
+            for (i = 0; i < bw4 && (unsigned)(bx4 + i) < state->above_ibc_mv_n; i++) {
+                state->above_ibc_mv_y[bx4 + i] = c.ibc_mv_y;
+                state->above_ibc_mv_x[bx4 + i] = c.ibc_mv_x;
+                state->above_ibc_valid[bx4 + i] = 1;
+            }
+        }
+        if (state->left_ibc_mv_y && state->left_ibc_valid) {
+            for (i = 0; i < bh4 && (unsigned)(by4 + i) < state->left_ibc_mv_n; i++) {
+                state->left_ibc_mv_y[by4 + i] = c.ibc_mv_y;
+                state->left_ibc_mv_x[by4 + i] = c.ibc_mv_x;
+                state->left_ibc_valid[by4 + i] = 1;
+            }
+        }
     }
     return 0;
 }
@@ -11741,6 +11911,12 @@ struct stb_avif_avif_info {
     int av1c_all_ssy[4];          /* chroma_subsampling_y per av1C */
     int av1c_all_mono[4];         /* monochrome per av1C */
     int primary_av1c_prop_idx;    /* resolved 1-based index for primary item */
+    /* ispe: store dimensions per property index so we can resolve after ipma */
+    int ispe_prop_idx[8];         /* 1-based property indices of ispe in ipco */
+    int ispe_all_w[8];            /* width per ispe property */
+    int ispe_all_h[8];            /* height per ispe property */
+    int ispe_prop_count;          /* number of ispe properties found */
+    int primary_ispe_prop_idx;    /* resolved 1-based index for primary ispe */
     /* ipma: up to 16 items, each with up to 8 property associations */
     int ipma_item_count;
     int ipma_item_ids[16];
@@ -12124,10 +12300,13 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                     /* Item property container */
                     struct stb_avif_box ipco_box = iprp_sub;
                     stb_avif_enter_box(r, &ipco_box);
+                    {
+                    int ipco_prop_pos = 0; /* 1-based ipco position counter */
 
                     while (r->pos < (size_t)(ipco_box.data_start + ipco_box.data_size)) {
                         struct stb_avif_box prop;
                         size_t prop_start = r->pos;
+                        ipco_prop_pos++;
 
                         if (r->pos + 8 > r->size) break;
                         stb_avif_read_box_header(r, &prop);
@@ -12162,13 +12341,24 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                             info->av1c_seen = 1;
                         }
                         else if (prop.type == STB_AVIF_BOX_ISPE) {
-                            /* Image spatial extents */
+                            /* Image spatial extents: store per-property, resolve
+                             * to primary item later via ipma. */
+                            int si;
                             stb_avif_read_byte(r); /* version */
                             stb_avif_read_byte(r); /* flags */
                             stb_avif_read_byte(r);
                             stb_avif_read_byte(r);
-                            info->width = (int)stb_avif_read_be32(r);
-                            info->height = (int)stb_avif_read_be32(r);
+                            {
+                                int w = (int)stb_avif_read_be32(r);
+                                int h = (int)stb_avif_read_be32(r);
+                                si = info->ispe_prop_count;
+                                if (si < 8) {
+                                    info->ispe_prop_idx[si] = ipco_prop_pos;
+                                    info->ispe_all_w[si] = w;
+                                    info->ispe_all_h[si] = h;
+                                }
+                                info->ispe_prop_count++;
+                            }
                         }
                         else if (prop.type == STB_AVIF_BOX_PIXI) {
                             /* Pixel information (bit depth per channel) */
@@ -12182,6 +12372,7 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
 
                         r->pos = (size_t)(prop_start + prop.size);
                     }
+                    } /* end ipco_prop_pos block */
                 }
                 else if (iprp_sub.type == STB_AVIF_BOX_IPMA) {
                     /* Item Property Association box: maps item IDs to property indices.
@@ -12254,6 +12445,36 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                     break;
                 }
             }
+        }
+
+        /* Resolve the correct ispe (width/height) for the primary item using ipma.
+         * Multiple ispe properties may exist (main + thumbnails); we must pick
+         * the one associated with the primary item. */
+        if (info->primary_item_id > 0 && info->ispe_prop_count > 0) {
+            int pi, ai2;
+            for (pi = 0; pi < info->ipma_item_count; pi++) {
+                if (info->ipma_item_ids[pi] == info->primary_item_id) {
+                    for (ai2 = 0; ai2 < info->ipma_prop_count[pi]; ai2++) {
+                        int pidx = info->ipma_prop_idx[pi][ai2];
+                        int k;
+                        for (k = 0; k < info->ispe_prop_count && k < 8; k++) {
+                            if (info->ispe_prop_idx[k] == pidx) {
+                                info->width = info->ispe_all_w[k];
+                                info->height = info->ispe_all_h[k];
+                                info->primary_ispe_prop_idx = pidx;
+                                break;
+                            }
+                        }
+                        if (info->primary_ispe_prop_idx) break;
+                    }
+                    break;
+                }
+            }
+        }
+        /* Fallback: if no primary ispe found via ipma, use the first ispe */
+        if (!info->primary_ispe_prop_idx && info->ispe_prop_count > 0) {
+            info->width = info->ispe_all_w[0];
+            info->height = info->ispe_all_h[0];
         }
 
         r->pos = (size_t)(sub_start + sub.size);
@@ -13223,6 +13444,9 @@ struct stb_avif_scalar_recon {
     int lf_mapw4, lf_maph4;
     ptrdiff_t lf_b4stride;
     int tile_x4, tile_y4, tile_w4, tile_h4;
+    /* IBC reconstruction state. */
+    int is_ibc;
+    int ibc_mv_y, ibc_mv_x;
 };
 
 /* Decoding-order key for availability checks: superblock row, then SB
@@ -13541,7 +13765,7 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
     }
 }
 
-static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode, int uv_angle, int cfl_alpha_u, int cfl_alpha_v)
+static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int by4, int has_chroma, int cbw4, int cbh4, int uv_tx, int tx0, int pal_sz_y, int pal_sz_uv, int skip, int y_mode, int y_angle, int uv_mode, int uv_angle, int cfl_alpha_u, int cfl_alpha_v, int ibc_mv_y, int ibc_mv_x)
 {
     struct stb_avif_scalar_recon *rc;
     int bw4, bh4;
@@ -13552,13 +13776,117 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
     /* Always record position so luma_txb/luma_pal can fill lf_blkid. */
     rc->cur_bx4 = bx4;
     rc->cur_by4 = by4;
-    if (!intra) return;
-    rc->cur_bw4 = stbv_av1_block_dimensions[bs][0];
-    rc->cur_bh4 = stbv_av1_block_dimensions[bs][1];
+    bw4 = stbv_av1_block_dimensions[bs][0];
+    bh4 = stbv_av1_block_dimensions[bs][1];
+    rc->cur_bw4 = bw4;
+    rc->cur_bh4 = bh4;
     rc->cur_ltw4 = stbv_av1_tx_dims[tx0 >= 0 && tx0 < STBV_AV1_N_TX_SIZES
                                    ? tx0 : 0].w;
     rc->cur_lth4 = stbv_av1_tx_dims[tx0 >= 0 && tx0 < STBV_AV1_N_TX_SIZES
                                    ? tx0 : 0].h;
+    rc->block_skip = skip;
+    rc->has_chroma = has_chroma;
+    if (!intra) {
+        /* IBC block: copy already-reconstructed pixels from the current
+         * frame at the reference position indicated by the MV.  MV is in
+         * 1/8-pel luma units; for IBC it is always integer-pixel aligned
+         * (mv_prec=-1). */
+        int src_luma_x, src_luma_y;
+        int src_px_x, src_px_y;
+        int dst_px_x, dst_px_y;
+        int pw, ph, cw, ch;
+        int ss_h = rc->ss_hor, ss_v = rc->ss_ver;
+        int i;
+        rc->is_ibc = 1;
+        rc->ibc_mv_y = ibc_mv_y;
+        rc->ibc_mv_x = ibc_mv_x;
+        rc->y_mode = STBV_AV1_INTRA_DC;
+        rc->y_angle = 0;
+        rc->uv_mode = STBV_AV1_INTRA_DC;
+        rc->uv_angle = 0;
+        rc->cfl_alpha_u = 0;
+        rc->cfl_alpha_v = 0;
+        rc->pal_y = 0;
+        rc->pal_uv = 0;
+        /* Source position in 4x4 luma units. */
+        src_luma_x = bx4 + (ibc_mv_x >> 3);
+        src_luma_y = by4 + (ibc_mv_y >> 3);
+        /* Convert to pixel coords. */
+        src_px_x = src_luma_x << 2;
+        src_px_y = src_luma_y << 2;
+        dst_px_x = bx4 << 2;
+        dst_px_y = by4 << 2;
+        pw = bw4 << 2;
+        ph = bh4 << 2;
+        /* Clamp to frame bounds. */
+        if (src_px_x < 0) { pw += src_px_x; src_px_x = 0; }
+        if (src_px_y < 0) { ph += src_px_y; src_px_y = 0; }
+        if (src_px_x + pw > rc->frame_w) pw = rc->frame_w - src_px_x;
+        if (src_px_y + ph > rc->frame_h) ph = rc->frame_h - src_px_y;
+        cw = rc->frame_w - dst_px_x; if (cw > pw) cw = pw;
+        ch = rc->frame_h - dst_px_y; if (ch > ph) ch = ph;
+        /* Reference-availability check: source must be within decoded
+         * region (above or to the left of current position).  AV1 decode
+         * order guarantees this when src is within the current tile. */
+        if (cw > 0 && ch > 0 && rc->plane_y) {
+            for (i = 0; i < ch; i++)
+                memcpy(rc->plane_y + (size_t)(dst_px_y + i) * rc->stride_y + dst_px_x,
+                       rc->plane_y + (size_t)(src_px_y + i) * rc->stride_y + src_px_x,
+                       (size_t)cw * sizeof(stbv_u16));
+        }
+        /* Copy chroma if present. */
+        if (has_chroma && rc->plane_u && rc->plane_v) {
+            int cx_src = src_px_x >> ss_h;
+            int cy_src = src_px_y >> ss_v;
+            int cx_dst = dst_px_x >> ss_h;
+            int cy_dst = dst_px_y >> ss_v;
+            int cw4 = (bw4 + ss_h) >> ss_h;
+            int ch4 = (bh4 + ss_v) >> ss_v;
+            int cpw = cw4 << 2;
+            int cph = ch4 << 2;
+            int ccw, cch, j;
+            if (cx_src < 0) { cpw += cx_src; cx_src = 0; }
+            if (cy_src < 0) { cph += cy_src; cy_src = 0; }
+            ccw = ((rc->frame_w + ss_h) >> ss_h) - cx_dst; if (ccw > cpw) ccw = cpw;
+            cch = ((rc->frame_h + ss_v) >> ss_v) - cy_dst; if (cch > cph) cch = cph;
+            for (j = 0; j < 2; j++) {
+                stbv_u16 *plane = j == 0 ? rc->plane_u : rc->plane_v;
+                int stride = j == 0 ? rc->stride_u : rc->stride_v;
+                if (!plane) continue;
+                for (i = 0; i < cch; i++)
+                    memcpy(plane + (size_t)(cy_dst + i) * stride + cx_dst,
+                           plane + (size_t)(cy_src + i) * stride + cx_src,
+                           (size_t)ccw * sizeof(stbv_u16));
+            }
+        }
+        /* Fill lf_blkid for IBC skip blocks (same logic as intra skip). */
+        if (skip && rc->lf_blkid && bw4 > 0 && bh4 > 0) {
+            stbv_u32 blkid = ((stbv_u32)bx4 << 16) | (stbv_u32)by4;
+            int ii, jj;
+            for (ii = 0; ii < bh4 && (by4 + ii) < rc->lf_maph4; ii++)
+                for (jj = 0; jj < bw4 && (bx4 + jj) < rc->lf_mapw4; jj++) {
+                    size_t off = (size_t)(by4 + ii) * rc->lf_b4stride + (bx4 + jj);
+                    rc->lf_blkid[off] = blkid;
+                    rc->lf_txlw[off] = rc->cur_ltw4;
+                    rc->lf_done[off] = 1;
+                }
+        }
+        if (skip && has_chroma && rc->lf_blkid_c && bw4 > 0 && bh4 > 0) {
+            int cbx4 = bx4 >> ss_h;
+            int cby4 = by4 >> ss_v;
+            int cbw4_u = (bw4 + ss_h) >> ss_h;
+            int cbh4_u = (bh4 + ss_v) >> ss_v;
+            int ii, jj;
+            for (ii = 0; ii < cbh4_u && (cby4 + ii) < rc->lf_maph4; ii++)
+                for (jj = 0; jj < cbw4_u && (cbx4 + jj) < rc->lf_mapw4; jj++) {
+                    size_t off = (size_t)(cby4 + ii) * rc->lf_b4stride + (cbx4 + jj);
+                    rc->lf_blkid_c[off] = ((stbv_u32)cbx4 << 16) | (stbv_u32)cby4;
+                    rc->lf_txlw_c[off] = rc->cur_ltw4;
+                }
+        }
+        return;
+    }
+    rc->is_ibc = 0;
     rc->y_mode = y_mode;
     rc->y_angle = y_angle;
     rc->uv_mode = uv_mode;
@@ -13722,8 +14050,10 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
     /* Per-transform prediction from currently reconstructed neighbours
      * (dav1d recon_b_intra: intra_pred -> coefs -> itxfm_add).
      * Intra-frame "skip" suppresses only the residual; the prediction
-     * itself must always be written. */
-    if (!rc->pal_y) {
+     * itself must always be written.
+     * For IBC blocks the reference pixels were already copied into the
+     * plane by block_info, so skip intra prediction. */
+    if (!rc->pal_y && !rc->is_ibc) {
         stb_avif_recon_predict_txb_luma(rc, x4, y4, tx);
         /* dav1d writes intra prediction directly into the plane, then
          * itxfm_add adds residual on top.  Our predict writes to rc->pred
@@ -13865,8 +14195,9 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
     /* Prediction always runs for intra; "skip" only suppresses the
      * residual (dav1d recon_b_intra semantics).  eob >= 0: DC-only
      * still carries a coefficient.  UV-palette blocks own the chroma
-     * planes instead. */
-    if (!rc->pal_uv) {
+     * planes instead.  IBC blocks already have reference pixels in the
+     * plane (copied by block_info), so skip intra prediction. */
+    if (!rc->pal_uv && !rc->is_ibc) {
         stb_avif_recon_predict_txb_chroma(rc, pl, x4, y4, tx);
         /* Copy prediction from rc->pred into the plane so add_res adds
          * residual on top of the prediction, not stale plane data. */
@@ -14189,14 +14520,15 @@ static int stb_avif_leaf_cb(struct stb_av1_tile_decoder *td, const struct stb_av
 
 static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const unsigned char *av1_data, size_t av1_size)
 {
-    struct stb_av1_internal_stream stream;
+    struct stb_av1_internal_stream *stream;
     struct stbv_av1_leaf_state_arrays arrays;
     stbv_av1_leaf_state state;
-    struct stb_avif_scalar_recon recon;
+    struct stb_avif_scalar_recon *recon;
     struct stb_av1_tile_decoder td;
     int r;
     int frame_w4, frame_h4, frame_w8, frame_h8;
     stbv_u8 *above_mode = 0, *left_mode = 0, *above_tx = 0, *left_tx = 0;
+    stbv_u8 *above_tx_intra = 0, *left_tx_intra = 0;
     stbv_u8 *above_res = 0, *left_res = 0;
     int res_w4, res_h4;
     stbv_u32 *lf_blkid_map = 0, *lf_blkid_map_c = 0;
@@ -14214,17 +14546,23 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     stbv_u16 *above_pal0 = 0, *above_pal1 = 0, *left_pal0 = 0, *left_pal1 = 0;
     stbv_u16 *py16 = 0, *pu16 = 0, *pv16 = 0;
     stbv_u8 *above_seg_id = 0, *left_seg_id = 0;
+    int *above_ibc_mv_y = 0, *above_ibc_mv_x = 0;
+    stbv_u8 *above_ibc_valid = 0;
+    int *left_ibc_mv_y = 0, *left_ibc_mv_x = 0;
+    stbv_u8 *left_ibc_valid = 0;
     int cframe_w8 = 0, cframe_h8 = 0;
     int i, j, h2, w2;
-    memset(&stream, 0, sizeof(stream));
-    r = stb_av1_parse_internal_stream(&stream, av1_data, av1_size);
-    if (r < 0 || !stream.have_seq || !stream.have_frame)
-        return -1;
-    if ((int)stream.frame.width[0] != tc->frame_width ||
-        (int)stream.frame.height != tc->frame_height)
-        return -2;
-    if (!stream.tile_data || !stream.tile_size)
-        return -3;
+    stream = (struct stb_av1_internal_stream *)stb_avif_calloc(1, sizeof(*stream));
+    recon = (struct stb_avif_scalar_recon *)stb_avif_calloc(1, sizeof(*recon));
+    if (!stream || !recon) { stb_avif_free(stream); stb_avif_free(recon); return -1; }
+    r = stb_av1_parse_internal_stream(stream, av1_data, av1_size);
+    if (r < 0 || !stream->have_seq || !stream->have_frame)
+        { stb_avif_free(stream); stb_avif_free(recon); return -1; }
+    if ((int)stream->frame.width[0] != tc->frame_width ||
+        (int)stream->frame.height != tc->frame_height)
+        { stb_avif_free(stream); stb_avif_free(recon); return -2; }
+    if (!stream->tile_data || !stream->tile_size)
+        { stb_avif_free(stream); stb_avif_free(recon); return -3; }
 
     /* grey safety net for regions the tile walk may not cover */
     for (i = 0; i < tc->frame_height; i++)
@@ -14254,13 +14592,15 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     left_mode = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
     above_tx = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
     left_tx = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
+    above_tx_intra = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
+    left_tx_intra = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
     /* Residual-context arrays must be superblock-padded like dav1d's
      * f->bw/f->lh row/col contexts: edge transforms write their full
      * extent (e.g. a 16x32 txb at the right frame edge marks columns
      * beyond the 8-aligned frame width) and later dc_sign/skip ctx
      * reads those positions. */
     {
-        int sbstep4 = stream.seq.sb128 ? 32 : 16;
+        int sbstep4 = stream->seq.sb128 ? 32 : 16;
         res_w4 = ((frame_w4 + sbstep4 - 1) / sbstep4) * sbstep4;
         res_h4 = ((frame_h4 + sbstep4 - 1) / sbstep4) * sbstep4;
         bw8al = (int)(((tc->frame_width + 7U) & ~7U) >> 2);
@@ -14272,15 +14612,15 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
      * (== luma extent for 4:4:4), SB-rounded like dav1d's f->bw arrays;
      * frame_w8 alone only fits the subsampled case. */
     {
-        int ss_h = stream.seq.ss_hor ? 1 : 0;
-        int ss_v = stream.seq.ss_ver ? 1 : 0;
+        int ss_h = stream->seq.ss_hor ? 1 : 0;
+        int ss_v = stream->seq.ss_ver ? 1 : 0;
         int cfw4 = (frame_w4 + ss_h) >> ss_h;
         int cfh4 = (frame_h4 + ss_v) >> ss_v;
         /* Chroma context arrays are SB-padded on the CHROMA grid
          * (sbstep4>>ss per superblock), matching dav1d whose f->bw-derived
          * write clip never rejects in-extent marks. */
-        int step_h = ((stream.seq.sb128 ? 32 : 16) >> ss_h);
-        int step_v = ((stream.seq.sb128 ? 32 : 16) >> ss_v);
+        int step_h = ((stream->seq.sb128 ? 32 : 16) >> ss_h);
+        int step_v = ((stream->seq.sb128 ? 32 : 16) >> ss_v);
         cframe_w8 = ((cfw4 + step_h - 1) / step_h) * step_h;
         cframe_h8 = ((cfh4 + step_v - 1) / step_v) * step_v;
     }
@@ -14303,26 +14643,38 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     above_pal_uv = (stbv_u8*)stb_avif_calloc(cframe_w8, 1);
     left_pal_uv = (stbv_u8*)stb_avif_calloc(cframe_h8, 1);
     above_uvmode = (stbv_u8*)stb_avif_calloc(
-        stream.seq.ss_hor ? ((frame_w4 + 1) >> 1) : frame_w4, 1);
+        stream->seq.ss_hor ? ((frame_w4 + 1) >> 1) : frame_w4, 1);
     left_uvmode = (stbv_u8*)stb_avif_calloc(
-        stream.seq.ss_ver ? ((frame_h4 + 1) >> 1) : frame_h4, 1);
+        stream->seq.ss_ver ? ((frame_h4 + 1) >> 1) : frame_h4, 1);
     above_pal0 = (stbv_u16*)stb_avif_calloc(frame_w4*8, 2);
     above_pal1 = (stbv_u16*)stb_avif_calloc(frame_w4*8, 2);
     left_pal0 = (stbv_u16*)stb_avif_calloc(frame_h4*8, 2);
     left_pal1 = (stbv_u16*)stb_avif_calloc(frame_h4*8, 2);
     above_seg_id = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
     left_seg_id = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
+    /* IBC MV neighbour arrays for spatial prediction. */
+    above_ibc_mv_y = (int*)stb_avif_calloc(frame_w4, sizeof(int));
+    above_ibc_mv_x = (int*)stb_avif_calloc(frame_w4, sizeof(int));
+    above_ibc_valid = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
+    left_ibc_mv_y = (int*)stb_avif_calloc(frame_h4, sizeof(int));
+    left_ibc_mv_x = (int*)stb_avif_calloc(frame_h4, sizeof(int));
+    left_ibc_valid = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
     if (!above_mode || !left_mode || !above_tx || !left_tx || !above_res ||
         !left_res || !above_cre0 || !above_cre1 || !left_cre0 || !left_cre1 ||
         !above_skip || !left_skip || !above_pal_sz || !left_pal_sz ||
         !above_pal_uv || !left_pal_uv || !above_pal0 || !above_pal1 ||
-        !left_pal0 || !left_pal1 || !above_seg_id || !left_seg_id)
-        return -4;
+        !left_pal0 || !left_pal1 || !above_seg_id || !left_seg_id ||
+        !above_ibc_mv_y || !above_ibc_mv_x || !above_ibc_valid ||
+        !left_ibc_mv_y || !left_ibc_mv_x || !left_ibc_valid ||
+        !above_tx_intra || !left_tx_intra)
+        { stb_avif_free(stream); stb_avif_free(recon); return -4; }
     memset(&arrays, 0, sizeof(arrays));
     arrays.above_mode = above_mode; arrays.above_mode_n = frame_w4;
     arrays.left_mode = left_mode; arrays.left_mode_n = frame_h4;
     arrays.above_tx = above_tx; arrays.above_tx_n = frame_w4;
     arrays.left_tx = left_tx; arrays.left_tx_n = frame_h4;
+    arrays.above_tx_intra = above_tx_intra;
+    arrays.left_tx_intra = left_tx_intra;
     arrays.above_res = above_res; arrays.above_res_n = res_w4;
     arrays.left_res = left_res; arrays.left_res_n = res_h4;
     /* dav1d's f->bw/f->bh are SB-ALIGNED unit counts, so its write clip
@@ -14341,14 +14693,14 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
      * imin(uvtx_w, (f->bw - bx + ss_hor) >> ss_hor).  Expressed as an
      * absolute column limit on our frame-wide arrays this is simply
      * bw8al (=f->bw) for luma and (bw8al+ss)>>ss for chroma. */
-    arrays.above_cre_mark_n[0] = (bw8al + (stream.seq.ss_hor ? 1 : 0)) >>
-                                 (stream.seq.ss_hor ? 1 : 0);
-    arrays.above_cre_mark_n[1] = (bw8al + (stream.seq.ss_hor ? 1 : 0)) >>
-                                 (stream.seq.ss_hor ? 1 : 0);
-    arrays.left_cre_mark_n[0] = (bh8al + (stream.seq.ss_ver ? 1 : 0)) >>
-                                 (stream.seq.ss_ver ? 1 : 0);
-    arrays.left_cre_mark_n[1] = (bh8al + (stream.seq.ss_ver ? 1 : 0)) >>
-                                 (stream.seq.ss_ver ? 1 : 0);
+    arrays.above_cre_mark_n[0] = (bw8al + (stream->seq.ss_hor ? 1 : 0)) >>
+                                 (stream->seq.ss_hor ? 1 : 0);
+    arrays.above_cre_mark_n[1] = (bw8al + (stream->seq.ss_hor ? 1 : 0)) >>
+                                 (stream->seq.ss_hor ? 1 : 0);
+    arrays.left_cre_mark_n[0] = (bh8al + (stream->seq.ss_ver ? 1 : 0)) >>
+                                 (stream->seq.ss_ver ? 1 : 0);
+    arrays.left_cre_mark_n[1] = (bh8al + (stream->seq.ss_ver ? 1 : 0)) >>
+                                 (stream->seq.ss_ver ? 1 : 0);
     arrays.above_cre[0] = above_cre0; arrays.above_cre_n[0] = cframe_w8;
     arrays.above_cre[1] = above_cre1; arrays.above_cre_n[1] = cframe_w8;
     arrays.left_cre[0] = left_cre0; arrays.left_cre_n[0] = cframe_h8;
@@ -14364,14 +14716,22 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     arrays.above_pal_n = frame_w4; arrays.left_pal_n = frame_h4;
     arrays.above_seg_id = above_seg_id; arrays.above_seg_id_n = frame_w4;
     arrays.left_seg_id = left_seg_id; arrays.left_seg_id_n = frame_h4;
+    arrays.above_ibc_mv_y = above_ibc_mv_y;
+    arrays.above_ibc_mv_x = above_ibc_mv_x;
+    arrays.above_ibc_valid = above_ibc_valid;
+    arrays.above_ibc_mv_n = frame_w4;
+    arrays.left_ibc_mv_y = left_ibc_mv_y;
+    arrays.left_ibc_mv_x = left_ibc_mv_x;
+    arrays.left_ibc_valid = left_ibc_valid;
+    arrays.left_ibc_mv_n = frame_h4;
     stbv_av1_leaf_state_init(&state, &arrays);
     state.cdef_idx_grid = NULL;
     state.cdef_grid_stride = 0;
     stb_av1_intra_state_set_uv(&state.intra, above_uvmode,
-                               stream.seq.ss_hor ? ((frame_w4 + 1) >> 1)
+                               stream->seq.ss_hor ? ((frame_w4 + 1) >> 1)
                                                   : frame_w4,
                                left_uvmode,
-                               stream.seq.ss_ver ? ((frame_h4 + 1) >> 1)
+                               stream->seq.ss_ver ? ((frame_h4 + 1) >> 1)
                                                   : frame_h4);
 
     /* Internal planes are stbv_u16 (bit-depth generic); converted back to
@@ -14380,7 +14740,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         (size_t)tc->stride_y * (tc->frame_height + 64), sizeof(stbv_u16));
     if (!py16) { r = -5; goto oom16; }
     if (tc->plane_u && tc->plane_v) {
-        int uvh2 = (stream.seq.ss_ver ? ((tc->frame_height + 1) >> 1)
+        int uvh2 = (stream->seq.ss_ver ? ((tc->frame_height + 1) >> 1)
                                       : tc->frame_height) + 32;
         pu16 = (stbv_u16*)stb_avif_calloc(
             (size_t)tc->stride_u * uvh2, sizeof(stbv_u16));
@@ -14402,7 +14762,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         memset(lf_blkid_map_c, 0xFF, (size_t)mw * mh * sizeof(stbv_u32));
     }
     /* CDEF index grid: one entry per 64x64 block. */
-    if (stream.seq.cdef) {
+    if (stream->seq.cdef) {
         cdef_grid_stride = (frame_w4 + 15) / 16;
         {
             int cdef_grid_rows = (frame_h4 + 15) / 16;
@@ -14423,48 +14783,48 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     state.cdef_grid_stride = cdef_grid_stride;
 
     /* Allocate LR mask for storing decoded restoration params. */
-    if (stream.seq.restoration && !stream.frame.allow_intrabc) {
+    if (stream->seq.restoration && !stream->frame.allow_intrabc) {
         int lr_usz[2];
-        lr_usz[0] = stream.frame.restoration.unit_size[0];
-        lr_usz[1] = stream.frame.restoration.unit_size[1];
+        lr_usz[0] = stream->frame.restoration.unit_size[0];
+        lr_usz[1] = stream->frame.restoration.unit_size[1];
         if (stbv_av1_lr_mask_alloc(&lr_mask, tc->frame_width, tc->frame_height,
-                                   lr_usz, stream.seq.ss_hor ? 1 : 0,
-                                   (stream.seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0) == 0) {
+                                   lr_usz, stream->seq.ss_hor ? 1 : 0,
+                                   (stream->seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0) == 0) {
             lr_mask_ok = 1;
         }
     }
-    memset(&recon, 0, sizeof(recon));
-    recon.lf_blkid = lf_blkid_map;
-    recon.lf_txlw = lf_txlw_map;
-    recon.lf_blkid_c = lf_blkid_map_c;
-    recon.lf_txlw_c = lf_txlw_map_c;
-    recon.lf_done = lf_done_map;
-    recon.lf_mapw4 = res_w4;
-    recon.lf_maph4 = res_h4;
-    recon.lf_b4stride = res_w4;
-    recon.plane_y = py16;
-    recon.plane_u = pu16;
-    recon.plane_v = pv16;
-    recon.stride_y = tc->stride_y;
-    recon.stride_u = tc->stride_u;
-    recon.stride_v = tc->stride_v;
-    recon.bit_depth = 8 + stream.seq.hbd * 2;
-    recon.ss_hor = stream.seq.ss_hor ? 1 : 0;
-    recon.ss_ver = (stream.seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0;
-    recon.frame_w = tc->frame_width;
-    recon.frame_h = tc->frame_height;
-    recon.tile_x4 = 0; recon.tile_y4 = 0;
-    recon.tile_w4 = (int)((stream.frame.width[0] + 3U) >> 2);
-    recon.tile_h4 = (int)((stream.frame.height + 3U) >> 2);
-    recon.intra_edge_filter = stream.seq.intra_edge_filter ? 1 : 0;
-    recon.sb_step4 = stream.seq.sb128 ? 32 : 16;
-    recon.above_mode = above_mode;
-    recon.left_mode = left_mode;
-    recon.above_n = frame_w4;
-    recon.left_n = frame_h4;
-    recon.above_uvmode = above_uvmode;
-    recon.left_uvmode = left_uvmode;
-    g_scalar_recon = recon;
+    memset(recon, 0, sizeof(*recon));
+    recon->lf_blkid = lf_blkid_map;
+    recon->lf_txlw = lf_txlw_map;
+    recon->lf_blkid_c = lf_blkid_map_c;
+    recon->lf_txlw_c = lf_txlw_map_c;
+    recon->lf_done = lf_done_map;
+    recon->lf_mapw4 = res_w4;
+    recon->lf_maph4 = res_h4;
+    recon->lf_b4stride = res_w4;
+    recon->plane_y = py16;
+    recon->plane_u = pu16;
+    recon->plane_v = pv16;
+    recon->stride_y = tc->stride_y;
+    recon->stride_u = tc->stride_u;
+    recon->stride_v = tc->stride_v;
+    recon->bit_depth = 8 + stream->seq.hbd * 2;
+    recon->ss_hor = stream->seq.ss_hor ? 1 : 0;
+    recon->ss_ver = (stream->seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0;
+    recon->frame_w = tc->frame_width;
+    recon->frame_h = tc->frame_height;
+    recon->tile_x4 = 0; recon->tile_y4 = 0;
+    recon->tile_w4 = (int)((stream->frame.width[0] + 3U) >> 2);
+    recon->tile_h4 = (int)((stream->frame.height + 3U) >> 2);
+    recon->intra_edge_filter = stream->seq.intra_edge_filter ? 1 : 0;
+    recon->sb_step4 = stream->seq.sb128 ? 32 : 16;
+    recon->above_mode = above_mode;
+    recon->left_mode = left_mode;
+    recon->above_n = frame_w4;
+    recon->left_n = frame_h4;
+    recon->above_uvmode = above_uvmode;
+    recon->left_uvmode = left_uvmode;
+    g_scalar_recon = *recon;
     g_scalar_recon_cb.ud = &g_scalar_recon;
     g_scalar_recon_cb.cf = g_scalar_recon.cf;
     g_scalar_recon_cb.block_info = stb_avif_recon_block_info;
@@ -14474,43 +14834,43 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     g_scalar_recon_cb.chroma_pal = stb_avif_recon_chroma_pal;
 
     memset(&td, 0, sizeof(td));
-    td.seq = &stream.seq;
-    td.frame = &stream.frame;
+    td.seq = &stream->seq;
+    td.frame = &stream->frame;
     r = 0;
     {
         unsigned int ti;
-        unsigned int ntiles = stream.frame.tiling.cols * stream.frame.tiling.rows;
-        unsigned int sb_log2 = 6U + stream.seq.sb128;
+        unsigned int ntiles = stream->frame.tiling.cols * stream->frame.tiling.rows;
+        unsigned int sb_log2 = 6U + stream->seq.sb128;
         unsigned int sb_size = 1U << sb_log2;
         for (ti = 0; ti < ntiles; ti++) {
             unsigned int tr, tcx;
-            if (!stream.tile_seen[ti]) { r = -1; break; }
-            tr = ti / stream.frame.tiling.cols;
-            tcx = ti - tr * stream.frame.tiling.cols;
-            recon.tile_x4 = (int)(stream.frame.tiling.col_start_sb[tcx] * (sb_size >> 2));
-            recon.tile_y4 = (int)(stream.frame.tiling.row_start_sb[tr] * (sb_size >> 2));
-            recon.tile_w4 = (int)((stream.frame.tiling.col_start_sb[tcx + 1] -
-                                   stream.frame.tiling.col_start_sb[tcx]) * (sb_size >> 2));
-            recon.tile_h4 = (int)((stream.frame.tiling.row_start_sb[tr + 1] -
-                                   stream.frame.tiling.row_start_sb[tr]) * (sb_size >> 2));
+            if (!stream->tile_seen[ti]) { r = -1; break; }
+            tr = ti / stream->frame.tiling.cols;
+            tcx = ti - tr * stream->frame.tiling.cols;
+            recon->tile_x4 = (int)(stream->frame.tiling.col_start_sb[tcx] * (sb_size >> 2));
+            recon->tile_y4 = (int)(stream->frame.tiling.row_start_sb[tr] * (sb_size >> 2));
+            recon->tile_w4 = (int)((stream->frame.tiling.col_start_sb[tcx + 1] -
+                                   stream->frame.tiling.col_start_sb[tcx]) * (sb_size >> 2));
+            recon->tile_h4 = (int)((stream->frame.tiling.row_start_sb[tr + 1] -
+                                   stream->frame.tiling.row_start_sb[tr]) * (sb_size >> 2));
             stbv_av1_leaf_state_init(&state, &arrays);
-            state.last_qidx = (int)stream.frame.quant.yac;
+            state.last_qidx = (int)stream->frame.quant.yac;
             memset(state.last_delta_lf, 0, sizeof(state.last_delta_lf));
             /* leaf_state_init NULLs above/left_uvmode via intra_state_init;
              * re-establish them so chroma intra mode decode has proper
              * above/left contexts for each tile (tiles are independent). */
             stb_av1_intra_state_set_uv(&state.intra, above_uvmode,
-                                       stream.seq.ss_hor ? ((frame_w4 + 1) >> 1)
+                                       stream->seq.ss_hor ? ((frame_w4 + 1) >> 1)
                                                           : frame_w4,
                                        left_uvmode,
-                                       stream.seq.ss_ver ? ((frame_h4 + 1) >> 1)
+                                       stream->seq.ss_ver ? ((frame_h4 + 1) >> 1)
                                                           : frame_h4);
             /* Recon callbacks point at g_scalar_recon, so publish the
              * current tile's bounds before decoding its first leaf. */
-            g_scalar_recon = recon;
+            g_scalar_recon = *recon;
             td.lr_mask = lr_mask_ok ? &lr_mask : 0;
-            r = stb_av1_decode_tile_at(&td, &stream.seq, &stream.frame,
-                                       stream.tiles[ti].data, stream.tiles[ti].size,
+            r = stb_av1_decode_tile_at(&td, &stream->seq, &stream->frame,
+                                       stream->tiles[ti].data, stream->tiles[ti].size,
                                        tcx, tr, stb_avif_leaf_cb, &state,
                                        stb_avif_row_reset_cb);
             if (r) { break; }
@@ -14519,58 +14879,58 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
 
 #ifdef STB_AVIF_DEBLOCK
     if (!r) {
-        const struct stb_av1_framehdr *fh = &stream.frame;
+        const struct stb_av1_framehdr *fh = &stream->frame;
         int lvl_yv = (int)fh->loopfilter.level_y[0];
         int lvl_yh = (int)fh->loopfilter.level_y[1];
         int lvl_u = (int)fh->loopfilter.level_u;
         int lvl_v = (int)fh->loopfilter.level_v;
         int sharp = (int)fh->loopfilter.sharpness;
-        int maxv = (1 << recon.bit_depth) - 1;
-        if (recon.ss_ver && !lvl_u) lvl_u = lvl_v;
+        int maxv = (1 << recon->bit_depth) - 1;
+        if (recon->ss_ver && !lvl_u) lvl_u = lvl_v;
         if (py16)
             stb_avif_deblock_plane_u16(py16, tc->stride_y,
                                        tc->frame_width, tc->frame_height,
                                        lvl_yv, lvl_yh, sharp, 0, maxv,
-                                       recon.bit_depth - 8,
+                                       recon->bit_depth - 8,
                                        lf_blkid_map, lf_txlw_map, res_w4,
                                        res_w4, res_h4, 0, 0,
-                                       stream.frame.tiling.col_start_sb,
-                                       (int)stream.frame.tiling.cols,
-                                       stream.frame.tiling.row_start_sb,
-                                       (int)stream.frame.tiling.rows,
-                                       (int)(1U << (6U + stream.seq.sb128)));
-        if (pu16 && !stream.seq.monochrome) {
-            int cw = (tc->frame_width + (recon.ss_hor ? 1 : 0)) >> recon.ss_hor;
-            int ch = (tc->frame_height + (recon.ss_ver ? 1 : 0)) >> recon.ss_ver;
+                                       stream->frame.tiling.col_start_sb,
+                                       (int)stream->frame.tiling.cols,
+                                       stream->frame.tiling.row_start_sb,
+                                       (int)stream->frame.tiling.rows,
+                                       (int)(1U << (6U + stream->seq.sb128)));
+        if (pu16 && !stream->seq.monochrome) {
+            int cw = (tc->frame_width + (recon->ss_hor ? 1 : 0)) >> recon->ss_hor;
+            int ch = (tc->frame_height + (recon->ss_ver ? 1 : 0)) >> recon->ss_ver;
             stb_avif_deblock_plane_u16(pu16, tc->stride_u, cw, ch,
                                        lvl_u, lvl_u, sharp, 1, maxv,
-                                       recon.bit_depth - 8,
+                                       recon->bit_depth - 8,
                                        lf_blkid_map_c, lf_txlw_map_c, res_w4,
                                        res_w4, res_h4,
-                                       recon.ss_hor, recon.ss_ver,
-                                       stream.frame.tiling.col_start_sb,
-                                       (int)stream.frame.tiling.cols,
-                                       stream.frame.tiling.row_start_sb,
-                                       (int)stream.frame.tiling.rows,
-                                       (int)(1U << (6U + stream.seq.sb128)));
+                                       recon->ss_hor, recon->ss_ver,
+                                       stream->frame.tiling.col_start_sb,
+                                       (int)stream->frame.tiling.cols,
+                                       stream->frame.tiling.row_start_sb,
+                                       (int)stream->frame.tiling.rows,
+                                       (int)(1U << (6U + stream->seq.sb128)));
             stb_avif_deblock_plane_u16(pv16, tc->stride_v, cw, ch,
                                        lvl_v ? lvl_v : lvl_u, lvl_v ? lvl_v : lvl_u,
-                                       sharp, 1, maxv, recon.bit_depth - 8,
+                                       sharp, 1, maxv, recon->bit_depth - 8,
                                        lf_blkid_map_c, lf_txlw_map_c, res_w4,
                                        res_w4, res_h4,
-                                       recon.ss_hor, recon.ss_ver,
-                                       stream.frame.tiling.col_start_sb,
-                                       (int)stream.frame.tiling.cols,
-                                       stream.frame.tiling.row_start_sb,
-                                       (int)stream.frame.tiling.rows,
-                                       (int)(1U << (6U + stream.seq.sb128)));
+                                       recon->ss_hor, recon->ss_ver,
+                                       stream->frame.tiling.col_start_sb,
+                                       (int)stream->frame.tiling.cols,
+                                       stream->frame.tiling.row_start_sb,
+                                       (int)stream->frame.tiling.rows,
+                                       (int)(1U << (6U + stream->seq.sb128)));
         }
     }
 #endif
 
     /* CDEF filtering (after deblocking, before loop restoration). */
-    if (!r && stream.seq.cdef && cdef_idx_grid) {
-        const struct stb_av1_framehdr *fh = &stream.frame;
+    if (!r && stream->seq.cdef && cdef_idx_grid) {
+        const struct stb_av1_framehdr *fh = &stream->frame;
         int y_pri_arr[8], y_sec_arr[8], uv_pri_arr[8], uv_sec_arr[8];
         int ci;
         for (ci = 0; ci < (1 << fh->cdef.n_bits); ci++) {
@@ -14582,8 +14942,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         stb_av1_cdef_frame(py16, pu16, pv16,
                            tc->stride_y, tc->stride_u, tc->stride_v,
                            tc->frame_width, tc->frame_height,
-                           recon.ss_hor, recon.ss_ver,
-                           recon.bit_depth,
+                           recon->ss_hor, recon->ss_ver,
+                           recon->bit_depth,
                            cdef_idx_grid, cdef_grid_stride,
                            y_pri_arr, y_sec_arr,
                            uv_pri_arr, uv_sec_arr,
@@ -14591,45 +14951,42 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     }
 
         /* Loop restoration filtering (after CDEF, before 8-bit conversion). */
-    if (!r && lr_mask_ok && stream.seq.restoration && !stream.frame.allow_intrabc) {
+    if (!r && lr_mask_ok && stream->seq.restoration && !stream->frame.allow_intrabc) {
         stb_av1_lr_frame(py16, pu16, pv16,
                          tc->stride_y, tc->stride_u, tc->stride_v,
                          tc->frame_width, tc->frame_height,
-                         stream.seq.ss_hor ? 1 : 0,
-                         (stream.seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0,
-                         8 + stream.seq.hbd * 2,
+                         stream->seq.ss_hor ? 1 : 0,
+                         (stream->seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0,
+                         8 + stream->seq.hbd * 2,
                           &lr_mask);
     }
 
-    /* Convert internal u16 planes to the caller's 8-bit planes. */
+    /* Convert internal u16 planes to the caller's 8-bit planes.
+     * Use truncating shift to match dav1d's u16->u8 conversion. */
     {
-        const int bd = 8 + stream.seq.hbd * 2;
+        const int bd = 8 + stream->seq.hbd * 2;
         const int sh = bd - 8;
-        const int rndv = (1 << sh) >> 1;
         int w, h, hh, y0, x0;
         w = tc->frame_width;
         h = tc->frame_height;
         for (y0 = 0; y0 < h; y0++)
             for (x0 = 0; x0 < w; x0++) {
                 unsigned v = (unsigned)py16[y0 * tc->stride_y + x0];
-                v = (v + (unsigned)rndv) >> sh;
+                v = v >> sh;
                 tc->plane_y[y0 * tc->stride_y + x0] =
                     (stbv_u8)(v > 255u ? 255u : v);
             }
         if (pu16 && pv16 && tc->plane_u && tc->plane_v) {
-            /* Chroma plane extent follows the ACTUAL subsampling
-             * (== full size for 4:4:4); hardcoding >>1 only works
-             * for 4:2:0. */
-            int ss_h = stream.seq.ss_hor ? 1 : 0;
-            int ss_v = stream.seq.ss_ver ? 1 : 0;
+            int ss_h = stream->seq.ss_hor ? 1 : 0;
+            int ss_v = stream->seq.ss_ver ? 1 : 0;
             w = (tc->frame_width + ss_h) >> ss_h;
             h = (tc->frame_height + ss_v) >> ss_v;
             for (hh = 0; hh < h; hh++)
                 for (x0 = 0; x0 < w; x0++) {
                     unsigned vu = (unsigned)pu16[hh * tc->stride_u + x0];
                     unsigned vv = (unsigned)pv16[hh * tc->stride_v + x0];
-                    vu = (vu + (unsigned)rndv) >> sh;
-                    vv = (vv + (unsigned)rndv) >> sh;
+                    vu = vu >> sh;
+                    vv = vv >> sh;
                     tc->plane_u[hh * tc->stride_u + x0] =
                         (stbv_u8)(vu > 255u ? 255u : vu);
                     tc->plane_v[hh * tc->stride_v + x0] =
@@ -14643,11 +15000,16 @@ oom16:
     if (pv16) stb_avif_free_internal(pv16);
     stb_avif_free_internal(above_mode); stb_avif_free_internal(left_mode);
     stb_avif_free_internal(above_tx); stb_avif_free_internal(left_tx);
+    stb_avif_free_internal(above_tx_intra); stb_avif_free_internal(left_tx_intra);
     stb_avif_free_internal(above_res); stb_avif_free_internal(left_res);
     stb_avif_free_internal(above_cre0); stb_avif_free_internal(above_cre1);
     stb_avif_free_internal(left_cre0); stb_avif_free_internal(left_cre1);
     stb_avif_free_internal(above_skip); stb_avif_free_internal(left_skip);
     stb_avif_free_internal(above_seg_id); stb_avif_free_internal(left_seg_id);
+    stb_avif_free_internal(above_ibc_mv_y); stb_avif_free_internal(above_ibc_mv_x);
+    stb_avif_free_internal(above_ibc_valid);
+    stb_avif_free_internal(left_ibc_mv_y); stb_avif_free_internal(left_ibc_mv_x);
+    stb_avif_free_internal(left_ibc_valid);
     stb_avif_free_internal(above_pal_sz); stb_avif_free_internal(left_pal_sz);
     stb_avif_free_internal(above_pal_uv);
     stb_avif_free_internal(above_uvmode);
@@ -14659,6 +15021,8 @@ oom16:
     stb_avif_free_internal(lf_blkid_map); stb_avif_free_internal(lf_blkid_map_c);
     stb_avif_free_internal(lf_txlw_map); stb_avif_free_internal(lf_txlw_map_c);
     stb_avif_free_internal(lf_done_map);
+    stb_avif_free(stream);
+    stb_avif_free(recon);
     return r;
 }
 
@@ -15407,7 +15771,10 @@ ivf_decoded:
                 {
                     int mc = sh.matrix_coefficients;
                     if (mc == 0) {
-                        r = y_val + v_val + 128;
+                        /* AV1/H.273 matrix 0 is GBR: Y=G, Cb=B, Cr=R.
+                         * u_val/v_val were centered above, so restore the
+                         * unsigned plane values here. */
+                        r = v_val + 128;
                         g = y_val;
                         b = u_val + 128;
                     } else if (mc >= 8 && mc <= 10) {
