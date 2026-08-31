@@ -2345,21 +2345,25 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
                        rc->plane_y + (size_t)(src_px_y + i) * rc->stride_y + src_px_x,
                        (size_t)cw * sizeof(stbv_u16));
         }
-        /* Copy chroma if present. */
+        /* Copy chroma if present.
+         * Match dav1d mc(): chroma dst position = (bx >> ss_hor) * 4,
+         * MV converted to chroma units = mvx >> (3 + ss_hor). */
         if (has_chroma && rc->plane_u && rc->plane_v) {
-            int cx_src = src_px_x >> ss_h;
-            int cy_src = src_px_y >> ss_v;
-            int cx_dst = dst_px_x >> ss_h;
-            int cy_dst = dst_px_y >> ss_v;
-            int cw4 = (bw4 + ss_h) >> ss_h;
-            int ch4 = (bh4 + ss_v) >> ss_v;
-            int cpw = cw4 << 2;
-            int cph = ch4 << 2;
+            int cx_dst = (bx4 >> ss_h) << 2;
+            int cy_dst = (by4 >> ss_v) << 2;
+            int cx_src = cx_dst + (ibc_mv_x >> (3 + ss_h));
+            int cy_src = cy_dst + (ibc_mv_y >> (3 + ss_v));
+            int cw4 = bw4 << (bw4 == ss_h);
+            int ch4 = bh4 << (bh4 == ss_v);
+            int cpw = cw4 * (4 >> ss_h);
+            int cph = ch4 * (4 >> ss_v);
             int ccw, cch, j;
             if (cx_src < 0) { cpw += cx_src; cx_src = 0; }
             if (cy_src < 0) { cph += cy_src; cy_src = 0; }
+            if (cpw <= 0 || cph <= 0) goto ibc_chroma_done;
             ccw = ((rc->frame_w + ss_h) >> ss_h) - cx_dst; if (ccw > cpw) ccw = cpw;
             cch = ((rc->frame_h + ss_v) >> ss_v) - cy_dst; if (cch > cph) cch = cph;
+            if (ccw <= 0 || cch <= 0) goto ibc_chroma_done;
             for (j = 0; j < 2; j++) {
                 stbv_u16 *plane = j == 0 ? rc->plane_u : rc->plane_v;
                 int stride = j == 0 ? rc->stride_u : rc->stride_v;
@@ -2369,6 +2373,7 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
                            plane + (size_t)(cy_src + i) * stride + cx_src,
                            (size_t)ccw * sizeof(stbv_u16));
             }
+            ibc_chroma_done:;
         }
         /* Fill lf_blkid for IBC skip blocks (same logic as intra skip). */
         if (skip && rc->lf_blkid && bw4 > 0 && bh4 > 0) {
