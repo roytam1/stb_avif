@@ -4285,7 +4285,10 @@ ivf_decoded:
                 {
                     int mc = sh.matrix_coefficients;
                     if (mc == 0) {
-                        r = y_val + v_val + 128;
+                        /* AV1/H.273 matrix 0 is GBR: Y=G, Cb=B, Cr=R.
+                         * u_val/v_val were centered above, so restore the
+                         * unsigned plane values here. */
+                        r = v_val + 128;
                         g = y_val;
                         b = u_val + 128;
                     } else if (mc >= 8 && mc <= 10) {
