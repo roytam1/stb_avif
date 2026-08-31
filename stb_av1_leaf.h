@@ -492,9 +492,8 @@ skip = stb_av1_msac_bool_adapt(
                 stbv_av1_tx_dims[tx].min, c->y_mode_txtp,
                 c->reduced_txtp_set);
         else
-            /* IBC uses the intra transform-type syntax. */
-            txtp = stbv_av1_decode_intra_txtp(msac, cdf,
-                stbv_av1_tx_dims[tx].min, c->y_mode_txtp,
+            txtp = stbv_av1_decode_inter_txtp(msac, cdf,
+                stbv_av1_tx_dims[tx].min, stbv_av1_tx_dims[tx].max,
                 c->reduced_txtp_set);
     } else {
         /* dav1d: *txtp = lossless * WHT_WHT */
@@ -1605,11 +1604,20 @@ c.recon = recon;
             for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->tx.left_n; i++)
                 state->tx.left_tx[by4 + i] =
                     (stbv_u8)stbv_av1_tx_dims[txm].lh;
-            /* tx_intra is published for intra blocks only.  IBC is not an
-             * intra neighbour for get_tx_ctx(). */
-            if (intra_flag) {
-                int lw = stbv_av1_tx_dims[max_tx].lw;
-                int lh = stbv_av1_tx_dims[max_tx].lh;
+            /* tx_intra: for intra blocks store decoded TX lw/lh; for IBC
+             * blocks store max TX (dav1d: intra set_ctx uses t_dim->lw/lh
+             * which is the decoded TX; IBC set_ctx uses b_dim[2+i] which
+             * is the max TX). get_tx_ctx() compares this against the next
+             * block's max TX to form the TX size context. */
+            {
+                int lw, lh;
+                if (intra_flag) {
+                    lw = stbv_av1_tx_dims[tx0].lw;
+                    lh = stbv_av1_tx_dims[tx0].lh;
+                } else {
+                    lw = stbv_av1_tx_dims[max_tx].lw;
+                    lh = stbv_av1_tx_dims[max_tx].lh;
+                }
                 if (state->tx.above_tx_intra) {
                     for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->tx.above_n; i++)
                         state->tx.above_tx_intra[bx4 + i] = (stbv_u8)lw;
