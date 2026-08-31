@@ -3307,7 +3307,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
             lr_mask_ok = 1;
         }
     }
-    memset(recon, 0, sizeof(recon));
+    memset(recon, 0, sizeof(*recon));
     recon->lf_blkid = lf_blkid_map;
     recon->lf_txlw = lf_txlw_map;
     recon->lf_blkid_c = lf_blkid_map_c;
@@ -3338,7 +3338,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     recon->left_n = frame_h4;
     recon->above_uvmode = above_uvmode;
     recon->left_uvmode = left_uvmode;
-    g_scalar_recon = recon;
+    g_scalar_recon = *recon;
     g_scalar_recon_cb.ud = &g_scalar_recon;
     g_scalar_recon_cb.cf = g_scalar_recon.cf;
     g_scalar_recon_cb.block_info = stb_avif_recon_block_info;
@@ -3381,7 +3381,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                                                           : frame_h4);
             /* Recon callbacks point at g_scalar_recon, so publish the
              * current tile's bounds before decoding its first leaf. */
-            g_scalar_recon = recon;
+            g_scalar_recon = *recon;
             td.lr_mask = lr_mask_ok ? &lr_mask : 0;
             r = stb_av1_decode_tile_at(&td, &stream->seq, &stream->frame,
                                        stream->tiles[ti].data, stream->tiles[ti].size,
