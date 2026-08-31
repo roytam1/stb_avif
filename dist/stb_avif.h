@@ -25,7 +25,7 @@
  *      // ... use img ...
  *      stb_avif_free(img);
  *
- *   Example (with dav1d — correct output):
+ *   Example (with dav1d - correct output):
  *      #define STB_AVIF_USE_DAV1D
  *      #define STB_AVIF_IMPLEMENTATION
  *      #include "stb_avif.h"
@@ -2186,6 +2186,19 @@ typedef struct stbv_av1_cdf {
     stbv_u16 restore_switchable[4];
     stbv_u16 restore_wiener[2];
     stbv_u16 restore_sgrproj[2];
+    stbv_u16 intrabc[2];
+    stbv_u16 delta_q[8];   /* 4 symbols x 2 ctx */
+    stbv_u16 delta_lf[16]; /* 4 symbols x 4 ctx */
+    /* MV CDFs for IBC (intra block copy) */
+    stbv_u16 mv_joint[4];     /* 4 symbols (ZERO/H/V/HV) */
+    stbv_u16 mv_sign[2];      /* 2 symbols */
+    stbv_u16 mv_classes[11];  /* 11 symbols */
+    stbv_u16 mv_class0[2];    /* 2 symbols */
+    stbv_u16 mv_classN[10][2]; /* 10 entries, each 2 symbols */
+    /* Inter txtp CDFs */
+    stbv_u16 txtp_inter1[2][16]; /* 2 entries, 15 symbols each + count */
+    stbv_u16 txtp_inter2[12];    /* 11 symbols + count */
+    stbv_u16 txtp_inter3[8];     /* 4 bools, each 2 (val + count) */
 } stbv_av1_cdf;
 
 #define STBV_AV1_COEF_SKIP_OFF       0
@@ -2309,6 +2322,99 @@ static void stbv_av1_cdf_init(stbv_av1_cdf *c, unsigned qcat)
     stbv_av1_cdf_inv(c->restore_wiener, stb_av1_cdf_restore_wiener, 1, 2, 1);
     memcpy(c->restore_sgrproj, stb_av1_cdf_restore_sgrproj, sizeof(c->restore_sgrproj));
     stbv_av1_cdf_inv(c->restore_sgrproj, stb_av1_cdf_restore_sgrproj, 1, 2, 1);
+    /* intrabc: 2-symbol CDF, default = { 30531, 32768 } */
+    c->intrabc[0] = 32768U - 30531;
+    c->intrabc[1] = 0;
+    /* delta_q: 4-symbol CDF, default = { 28160, 32120, 32677, 32768 } */
+    c->delta_q[0] = 32768U - 28160;
+    c->delta_q[1] = 32768U - 32120;
+    c->delta_q[2] = 32768U - 32677;
+    c->delta_q[3] = 0;
+    /* delta_lf: same default as delta_q, 4 contexts x 4 symbols */
+    for (i = 0; i < 4; i++) {
+        c->delta_lf[i*4+0] = 32768U - 28160;
+        c->delta_lf[i*4+1] = 32768U - 32120;
+        c->delta_lf[i*4+2] = 32768U - 32677;
+        c->delta_lf[i*4+3] = 0;
+    }
+    /* MV CDFs: joint CDF3(4096,11264,19328), sign CDF1(16384),
+     * classes CDF10(28672,30976,31858,32320,32551,32656,32740,32757,32762,32767),
+     * class0 CDF1(27648),
+     * classN[0..9] = CDF1(17408..30720). All inverted (32768-val). */
+    {
+        /* Raw args to CDF macros; stored = 32768 - arg */
+        static const stbv_u16 mv_joint_def[3] = { 4096, 11264, 19328 };
+        static const stbv_u16 mv_classes_def[10] = {
+            28672, 30976, 31858, 32320, 32551, 32656, 32740, 32757, 32762, 32767
+        };
+        static const stbv_u16 mv_classN_def[10] = {
+            17408, 17920, 18944, 20480, 22528, 24576, 28672, 29952, 29952, 30720
+        };
+        for (i = 0; i < 3; i++)
+            c->mv_joint[i] = 32768U - mv_joint_def[i];
+        c->mv_joint[3] = 0;
+        c->mv_sign[0] = 32768U - 16384;
+        c->mv_sign[1] = 0;
+        for (i = 0; i < 10; i++)
+            c->mv_classes[i] = 32768U - mv_classes_def[i];
+        c->mv_classes[10] = 0;
+        c->mv_class0[0] = 32768U - 27648;
+        c->mv_class0[1] = 0;
+        for (i = 0; i < 10; i++) {
+            c->mv_classN[i][0] = 32768U - mv_classN_def[i];
+            c->mv_classN[i][1] = 0;
+        }
+    }
+    /* TX partition CDF: 7 categories x 3 contexts (each bool CDF = 2 entries) */
+    {
+        static const stbv_u16 txpart_def[7][3] = {
+            { 28581, 23846, 20847 },
+            { 24315, 18196, 12133 },
+            { 18791, 10887, 11005 },
+            { 27179, 20004, 11281 },
+            { 26549, 19308, 14224 },
+            { 28015, 21546, 14400 },
+            { 28165, 22401, 16088 }
+        };
+        int r, cl;
+        for (r = 0; r < 7; r++)
+            for (cl = 0; cl < 3; cl++) {
+                c->txpart[(r * 3 + cl) * 2] = 32768U - txpart_def[r][cl];
+                c->txpart[(r * 3 + cl) * 2 + 1] = 0;
+            }
+    }
+    /* Inter txtp CDFs: dav1d default values inverted. */
+    {
+        /* txtp_inter1: 2 entries x 15 symbols + count each = 32 entries */
+        static const stbv_u16 inter1_def[2][15] = {
+            { 4458, 5560, 7695, 9709, 13330, 14789, 17537, 20266,
+              21504, 22848, 23934, 25474, 27727, 28915, 30631 },
+            { 1645, 2573, 4778, 5711, 7807, 8622, 10522, 15357,
+              17674, 20408, 22517, 25010, 27116, 28856, 30749 }
+        };
+        /* txtp_inter2: 11 symbols + count = 12 entries */
+        static const stbv_u16 inter2_def[11] = {
+            770, 2421, 5225, 12907, 15819, 18927,
+            21561, 24089, 26595, 28526, 30529
+        };
+        /* txtp_inter3: 4 bool CDFs (val + count each) */
+        static const stbv_u16 inter3_def[4] = {
+            16384, 4167, 1998, 748
+        };
+        int j;
+        for (i = 0; i < 2; i++) {
+            for (j = 0; j < 15; j++)
+                c->txtp_inter1[i][j] = 32768U - inter1_def[i][j];
+            c->txtp_inter1[i][15] = 0; /* count */
+        }
+        for (j = 0; j < 11; j++)
+            c->txtp_inter2[j] = 32768U - inter2_def[j];
+        c->txtp_inter2[11] = 0; /* count */
+        for (i = 0; i < 4; i++) {
+            c->txtp_inter3[i * 2] = 32768U - inter3_def[i];
+            c->txtp_inter3[i * 2 + 1] = 0; /* count */
+        }
+    }
     if (qcat > 3) qcat = 3;
     switch (qcat) {
     case 0: stbv_av1_cdf_copy_coef(c->coef, 0); break;
@@ -3102,12 +3208,15 @@ static int stb_av1_parse_seqhdr(struct stb_av1_seqhdr *h,
         h->layout = STB_AV1_LAYOUT_I400;
         h->ss_hor = h->ss_ver = 1;
         h->chr = STB_AV1_CHR_UNKNOWN;
-    } else if (h->pri == 1 && h->trc == 13 && h->mtrx == 0) {
-        /* BT.709 / sRGB / identity matrix special case. */
+    } else if (h->pri == 1 && h->trc == 13 && h->mtrx == 0
+               && (h->profile == 1
+                   || (h->profile == 2 && h->hbd == 2))) {
+        /* BT.709 / sRGB / identity matrix special case.
+         * Only valid for profile 1 or profile 2 with hbd==2 per spec.
+         * For other profiles (e.g. profile 0), fall through to the
+         * normal path so we read color_range and subsampling correctly. */
         h->layout = STB_AV1_LAYOUT_I444;
         h->color_range = 1;
-        if (h->profile != 1 && !(h->profile == 2 && h->hbd == 2))
-            return -1;
     } else {
         h->color_range = stb_av1_get_bit(gb);
         switch (h->profile) {
@@ -3767,6 +3876,26 @@ static const unsigned char stbv_av1_tx_set_intra1[7] = {
     STBV_AV1_TX_DCT_ADST
 };
 
+/* Inter tx type mapping tables from dav1d tables.c tx_types_per_set[]. */
+static const unsigned char stbv_av1_tx_set_inter1[15] = {
+    STBV_AV1_TX_IDTX, STBV_AV1_TX_V_DCT, STBV_AV1_TX_H_DCT,
+    STBV_AV1_TX_V_ADST, STBV_AV1_TX_H_ADST, STBV_AV1_TX_V_FLIPADST,
+    STBV_AV1_TX_H_FLIPADST, STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_ADST_DCT,
+    STBV_AV1_TX_DCT_ADST, STBV_AV1_TX_FLIPADST_DCT,
+    STBV_AV1_TX_DCT_FLIPADST, STBV_AV1_TX_ADST_ADST,
+    STBV_AV1_TX_FLIPADST_FLIPADST, STBV_AV1_TX_ADST_FLIPADST
+};
+static const unsigned char stbv_av1_tx_set_inter2[11] = {
+    STBV_AV1_TX_IDTX, STBV_AV1_TX_V_DCT, STBV_AV1_TX_H_DCT,
+    STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_ADST_DCT, STBV_AV1_TX_DCT_ADST,
+    STBV_AV1_TX_FLIPADST_DCT, STBV_AV1_TX_DCT_FLIPADST,
+    STBV_AV1_TX_ADST_ADST, STBV_AV1_TX_FLIPADST_FLIPADST,
+    STBV_AV1_TX_ADST_FLIPADST
+};
+static const unsigned char stbv_av1_tx_set_inter3[2] = {
+    STBV_AV1_TX_IDTX, STBV_AV1_TX_DCT_DCT
+};
+
 /* Transform dimensions use 4x4 units. */
 typedef struct stbv_av1_tx_dim {
     unsigned char w;
@@ -3970,6 +4099,59 @@ static int stbv_av1_decode_intra_txtp(struct stb_av1_msac *msac,
     if (idx < 7)
         return stbv_av1_tx_set_intra1[idx];
     return STBV_AV1_TX_DCT_DCT;
+}
+
+/*
+ * Decode the chroma txtp for inter blocks (including IBC).
+ * uvt_dim is the chroma transform dimension; ytxtp is the already-decoded
+ * luma txtp.  No MSAC consumption.
+ */
+static int stbv_av1_get_uv_inter_txtp(int uvt_dim_min, int uvt_dim_max,
+                                      int ytxtp)
+{
+    if (uvt_dim_max == 3) /* TX_32X32 */
+        return ytxtp == STBV_AV1_TX_IDTX ? STBV_AV1_TX_IDTX
+                                          : STBV_AV1_TX_DCT_DCT;
+    if (uvt_dim_min == 2) { /* TX_16X16 */
+        /* H_FLIPADST=15, V_FLIPADST=14, H_ADST=13, V_ADST=12 */
+        if ((1 << ytxtp) & ((1 << 15) | (1 << 14) | (1 << 13) | (1 << 12)))
+            return STBV_AV1_TX_DCT_DCT;
+    }
+    return ytxtp;
+}
+
+/*
+ * Decode the transform type for an inter block (including IBC).
+ *
+ * t_dim_min is the smaller dimension of the luma transform.
+ * t_dim_max is the larger dimension.
+ * reduced_txtp_set selects the restricted inter set.
+ *
+ * Returns the decoded transform type.  The caller must NOT be in an intra
+ * block (use stbv_av1_decode_intra_txtp for intra).
+ */
+static int stbv_av1_decode_inter_txtp(struct stb_av1_msac *msac,
+                                      stbv_av1_cdf *cdf,
+                                      int t_dim_min, int t_dim_max,
+                                      int reduced_txtp_set)
+{
+    unsigned int idx;
+
+    if (reduced_txtp_set || t_dim_max == 3 /* TX_32X32 */) {
+        /* txtp_inter3[t_dim_min]: single bool CDF, DCT_DCT vs IDTX */
+        int min2 = t_dim_min > 3 ? 3 : (t_dim_min < 0 ? 0 : t_dim_min);
+        idx = stb_av1_msac_bool_adapt(msac,
+                  &cdf->txtp_inter3[min2 * 2]);
+        return stbv_av1_tx_set_inter3[idx];
+    } else if (t_dim_min == 2 /* TX_16X16 */) {
+        idx = stb_av1_msac_symbol(msac, cdf->txtp_inter2, 10);
+        return stbv_av1_tx_set_inter2[idx < 11 ? idx : 0];
+    } else {
+        /* t_dim_min is 0 or 1 */
+        int min2 = t_dim_min > 1 ? 1 : (t_dim_min < 0 ? 0 : t_dim_min);
+        idx = stb_av1_msac_symbol(msac, cdf->txtp_inter1[min2], 14);
+        return stbv_av1_tx_set_inter1[idx < 15 ? idx : 0];
+    }
 }
 
 #endif /* STB_AV1_TX_H */
@@ -7842,6 +8024,9 @@ typedef struct stbv_av1_leaf_state {
     /* CDEF index output grid (per-64x64 block) */
     int *cdef_idx_grid;
     int cdef_grid_stride;
+    /* Per-SB quantizer/lf state (persists across leaf callbacks within a tile) */
+    int last_qidx;
+    int last_delta_lf[4];
 } stbv_av1_leaf_state;
 
 static void stbv_av1_leaf_state_init(stbv_av1_leaf_state *s,
@@ -7972,6 +8157,8 @@ typedef struct stbv_av1_leaf_decode_ctx {
     int block_skip;
     int reduced_txtp_set;
     int hbd;
+    int is_intra;  /* 1 = intra block, 0 = IBC block */
+    int luma_txtp; /* stored luma txtp for inter/IBC chroma derivation */
     const stbv_av1_leaf_recon *recon;
 } stbv_av1_leaf_decode_ctx;
 
@@ -7982,7 +8169,7 @@ typedef struct stbv_av1_leaf_decode_ctx {
  * (luma) transform's results are recorded there. */
 static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
                                   stbv_av1_cdf *cdf,
-                                  const stbv_av1_leaf_decode_ctx *c,
+                                  stbv_av1_leaf_decode_ctx *c,
                                   int x4, int y4, int tx, int chroma,
                                   stbv_av1_res_state *rs,
                                   int bw4, int bh4,
@@ -8006,19 +8193,31 @@ skip = stb_av1_msac_bool_adapt(
             txtp = STBV_AV1_TX_WHT_WHT;
         else if (max + 1 >= STBV_AV1_TX_64X64) /* max + intra >= TX_64X64 */
             txtp = STBV_AV1_TX_DCT_DCT;
-        else if (is_chroma)
-            /* inferred from the intra UV mode, never coded */
-            txtp = stbv_av1_txtp_from_uvmode[c->intra ? c->intra->uv_mode : 0];
-        else if (!c->qidx)
+        else if (is_chroma) {
+            if (c->is_intra)
+                txtp = stbv_av1_txtp_from_uvmode[c->intra ? c->intra->uv_mode : 0];
+            else
+                txtp = stbv_av1_get_uv_inter_txtp(
+                    stbv_av1_tx_dims[tx].min, stbv_av1_tx_dims[tx].max,
+                    c->luma_txtp);
+        } else if (!c->qidx)
             txtp = STBV_AV1_TX_DCT_DCT;
-        else
+        else if (c->is_intra)
             txtp = stbv_av1_decode_intra_txtp(msac, cdf,
                 stbv_av1_tx_dims[tx].min, c->y_mode_txtp,
+                c->reduced_txtp_set);
+        else
+            txtp = stbv_av1_decode_inter_txtp(msac, cdf,
+                stbv_av1_tx_dims[tx].min, stbv_av1_tx_dims[tx].max,
                 c->reduced_txtp_set);
     } else {
         /* dav1d: *txtp = lossless * WHT_WHT */
         txtp = c->lossless ? STBV_AV1_TX_WHT_WHT : STBV_AV1_TX_DCT_DCT;
     }
+
+    /* Store luma txtp for inter/IBC chroma derivation */
+    if (!is_chroma)
+        c->luma_txtp = txtp;
 
     if (out) {
         out->x4 = x4;
@@ -8374,6 +8573,76 @@ static int stbv_av1_palette_indices(struct stb_av1_msac *msac,
     return 0;
 }
 
+/* ---- MV residual decode for IBC (dav1d decode.c:76-117) ---- */
+
+/* Decode the diff for one MV component. For IBC, mv_prec=-1 so fp and hp
+ * are never decoded (only sign + class + class bits). */
+static int stbv_av1_read_mv_component_diff(struct stb_av1_msac *msac,
+                                            stbv_u16 *mv_comp_sign,
+                                            stbv_u16 *mv_comp_classes,
+                                            stbv_u16 *mv_comp_class0,
+                                            stbv_u16 mv_comp_classN[10][2],
+                                            int mv_prec)
+{
+    int sign, cl, up, fp = 3, hp = 1;
+    sign = (int)stb_av1_msac_bool_adapt(msac, mv_comp_sign);
+    cl = (int)stb_av1_msac_symbol(msac, mv_comp_classes, 10);
+    if (!cl) {
+        up = (int)stb_av1_msac_bool_adapt(msac, mv_comp_class0);
+        if (mv_prec >= 0) {
+            fp = (int)stb_av1_msac_symbol(msac,
+                mv_comp_class0 + up * 4, 3);
+            if (mv_prec > 0)
+                hp = (int)stb_av1_msac_bool_adapt(msac,
+                    mv_comp_class0 + up * 4 + 2);
+        }
+    } else {
+        up = 1 << cl;
+        { int n; for (n = 0; n < cl; n++)
+            up |= (int)stb_av1_msac_bool_adapt(msac, mv_comp_classN[n]) << n;
+        }
+        if (mv_prec >= 0) {
+            fp = (int)stb_av1_msac_symbol(msac, mv_comp_classN[0] + 10, 3);
+            if (mv_prec > 0)
+                hp = (int)stb_av1_msac_bool_adapt(msac, mv_comp_classN[0] + 12);
+        }
+    }
+    { int diff = ((up << 3) | (fp << 1) | hp) + 1;
+      return sign ? -diff : diff;
+    }
+}
+
+/* Decode MV joint + component residuals. mv_prec=-1 for IBC. */
+static void stbv_av1_read_mv_residual(struct stb_av1_msac *msac,
+                                       stbv_av1_cdf *cdf,
+                                       int *mv_y, int *mv_x,
+                                       int mv_prec)
+{
+    int joint;
+    joint = (int)stb_av1_msac_symbol(msac, cdf->mv_joint, 3);
+    if (joint & 2) /* MV_JOINT_V */
+        *mv_y += stbv_av1_read_mv_component_diff(msac,
+            cdf->mv_sign, cdf->mv_classes, cdf->mv_class0,
+            cdf->mv_classN, mv_prec);
+    if (joint & 1) /* MV_JOINT_H */
+        *mv_x += stbv_av1_read_mv_component_diff(msac,
+            cdf->mv_sign, cdf->mv_classes, cdf->mv_class0,
+            cdf->mv_classN, mv_prec);
+}
+
+/* ---- IBC luma TX tree leaf callback ---- */
+/* Called by stbv_av1_decode_tx_tree for each luma TX leaf in an IBC block.
+ * Decodes coefficients at the leaf's TX size. */
+static int stbv_av1_ibc_luma_leaf(int x4, int y4, int tx, void *opaque)
+{
+    stbv_av1_leaf_decode_ctx *c = (stbv_av1_leaf_decode_ctx *)opaque;
+    int r;
+    if (!c) return -1;
+    r = stbv_av1_leaf_tx_plane(c->msac, c->cdf, c, x4, y4, tx, 0,
+                               &c->state->res, c->bw4, c->bh4, NULL);
+    return r ? -1 : 0;
+}
+
 static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                        stbv_av1_cdf *cdf,
                                        stbv_av1_leaf_state *state,
@@ -8394,6 +8663,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     int seg_id = 0, seg_pred = 0;
     unsigned block_skip = 0;
     unsigned int n;
+    int intra_flag = 1; /* 1 = intra, 0 = IBC */
 c.recon = recon;
     if (!msac || !cdf || !state || bs < 0 || bs >= STBV_AV1_N_BS_SIZES)
         return -1;
@@ -8407,7 +8677,9 @@ c.recon = recon;
     ss_ver = layout == STB_AV1_LAYOUT_I420;
     sb_step = (seq && seq->sb128) ? 32 : 16;
     lossless = frame ? (int)frame->segmentation.lossless[0] : 0;
-    qidx = frame ? (int)frame->segmentation.qidx[seg_id] : 0;
+    qidx = state->last_qidx + (frame ? (int)frame->segmentation.d[seg_id].delta_q : 0);
+    if (qidx < 1) qidx = 1;
+    if (qidx > 255) qidx = 255;
     /* dav1d gates chroma presence on the UNCLIPPED block dims, then clips
      * the coefficient grids to the padded frame area ((w+7)&~7)>>2. */
     has_chroma = layout != STB_AV1_LAYOUT_I400 &&
@@ -8488,7 +8760,9 @@ c.recon = recon;
         }
     }
 
-    /* Block-level skip, decoded before intra modes (dav1d decode_b). */
+    /* Block-level skip, decoded before intra modes (dav1d decode_b).
+     * When skip_mode or segment skip is already set, skip=1 without
+     * reading from MSAC (dav1d decode.c:888-895). */
     {
         int sctx = 0;
         if (state->above_skip && (unsigned int)bx4 < state->above_skip_n &&
@@ -8497,7 +8771,9 @@ c.recon = recon;
         if (state->left_skip && (unsigned int)by4 < state->left_skip_n &&
             state->left_skip[by4])
             sctx += 1;
-block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
+        if (!block_skip) {
+            block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
+        }
         for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->above_skip_n; i++)
             state->above_skip[bx4 + i] = (stbv_u8)block_skip;
         for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->left_skip_n; i++)
@@ -8549,87 +8825,148 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
         }
     }
 
-    /* delta-q/lf at superblock origin; needs the delta_q CDFs which are not
-     * part of this integration pass. */
+    /* delta-q/lf at superblock origin (dav1d decode.c:962-1028). */
     if (frame && frame->delta_q_present &&
         !((bx4 | by4) & (sb_step - 1)))
-        return -6;
+    {
+        int have_delta_q = (bs != (int)(seq && seq->sb128 ? STBV_AV1_BS_128x128 : STBV_AV1_BS_64x64) || !block_skip);
+        if (have_delta_q) {
+            int dq = (int)stb_av1_msac_symbol(msac, cdf->delta_q, 3);
+            if (dq == 3) {
+                int nb = 1 + (int)stb_av1_msac_bools(msac, 3);
+                dq = (int)stb_av1_msac_bools(msac, (unsigned)nb) + 1 + (1 << nb);
+            }
+            if (dq) {
+                if (stb_av1_msac_bool_equi(msac)) dq = -dq;
+                dq *= 1 << frame->delta_q_res_log2;
+            }
+            state->last_qidx = dq + state->last_qidx;
+            if (state->last_qidx < 1) state->last_qidx = 1;
+            if (state->last_qidx > 255) state->last_qidx = 255;
+            if (frame->delta_lf_present) {
+                int nlfs = frame->delta_lf_multi ?
+                    (seq && seq->layout != STB_AV1_LAYOUT_I400 ? 4 : 2) : 1;
+                int i;
+                for (i = 0; i < nlfs; i++) {
+                    int dl = (int)stb_av1_msac_symbol(msac,
+                        cdf->delta_lf + (i + (int)frame->delta_lf_multi) * 4, 3);
+                    if (dl == 3) {
+                        int nb = 1 + (int)stb_av1_msac_bools(msac, 3);
+                        dl = (int)stb_av1_msac_bools(msac, (unsigned)nb) + 1 + (1 << nb);
+                    }
+                    if (dl) {
+                        if (stb_av1_msac_bool_equi(msac)) dl = -dl;
+                        dl *= 1 << frame->delta_lf_res_log2;
+                    }
+                    state->last_delta_lf[i] += dl;
+                    if (state->last_delta_lf[i] < -63) state->last_delta_lf[i] = -63;
+                    if (state->last_delta_lf[i] > 63) state->last_delta_lf[i] = 63;
+                }
+            }
+        }
+        qidx = state->last_qidx;
+    }
 
-    /* Intra flag: key frames without intrabc need no symbol. */
-    if (frame && frame->allow_intrabc)
-        return -6;
+    /* Intra flag: for key frames with allow_intrabc, decode the intrabc
+     * flag (dav1d decode.c:1043-1044).  For key frames without intrabc,
+     * all blocks are implicitly intra. */
+    if (frame && frame->allow_intrabc) {
+        intra_flag = !stb_av1_msac_bool_adapt(msac, cdf->intrabc);
+    }
+
+    /* Recompute qidx using the SB-level last_qidx (may have been updated
+     * by delta_q above). */
+    qidx = state->last_qidx + (frame ? (int)frame->segmentation.d[seg_id].delta_q : 0);
+    if (qidx < 1) qidx = 1;
+    if (qidx > 255) qidx = 255;
+
+    /* IBC MV residual decode (dav1d decode.c:1267-1290).
+     * Prediction MV is (0,0) since we have no refmvs buffer;
+     * only the residual is decoded from MSAC. */
+    if (!intra_flag) {
+        int mv_y = 0, mv_x = 0;
+        stbv_av1_read_mv_residual(msac, cdf, &mv_y, &mv_x, -1);
+        (void)mv_y; (void)mv_x;
+    }
 
     cfl_allowed = lossless ? (cbw4 == 1 && cbh4 == 1) :
         !!(STBV_AV1_CFL_ALLOWED_MASK & (1U << bs));
-    if (stb_av1_intra_state_decode_leaf(msac, cdf, &state->intra,
-                                        bx4, by4, bs, cfl_allowed,
-                                        has_chroma, &intra))
-        return -3;
+    if (intra_flag) {
+        if (stb_av1_intra_state_decode_leaf(msac, cdf, &state->intra,
+                                            bx4, by4, bs, cfl_allowed,
+                                            has_chroma, &intra))
+            return -3;
+    } else {
+        /* IBC: no intra mode decode; set defaults for ctx. */
+        memset(&intra, 0, sizeof(intra));
+        intra.y_mode = STBV_AV1_INTRA_DC;
+        intra.uv_mode = STBV_AV1_INTRA_DC;
+    }
 
-    /* Palette: presence bools, size, colors and index map (dav1d decode.c
-     * 1126-1193 + recon_tmpl read_pal_plane/read_pal_uv/read_pal_indices). */
+    /* Palette, filter-intra, and palette indices: intra-only.
+     * IBC blocks skip all of these (dav1d decode.c:1267). */
     state->pal_sz_y = 0;
     state->pal_sz_uv = 0;
-    if (frame && frame->allow_screen_content_tools &&
-        (bw4 > bh4 ? bw4 : bh4) <= 16 && bw4 + bh4 >= 4) {
-        int sz_ctx = stbv_av1_block_dimensions[bs][2] +
-                     stbv_av1_block_dimensions[bs][3] - 2;
-        int bpc = 8 + (seq ? seq->hbd : 0) * 2;
-        if (intra.y_mode == STBV_AV1_INTRA_DC) {
-            int pal_ctx = 0;
-            if (state->above_pal_sz && (unsigned)bx4 < state->above_pal_sz_n &&
-                state->above_pal_sz[bx4] > 0)
-                pal_ctx++;
-            if (state->left_pal_sz && (unsigned)by4 < state->left_pal_sz_n &&
-                state->left_pal_sz[by4] > 0)
-                pal_ctx++;
-            if (stb_av1_msac_bool_adapt(msac,
-                                        cdf->pal_y + sz_ctx * 6 + pal_ctx * 2)) {
-                if (stbv_av1_palette_read_plane(msac, cdf, state, 0, sz_ctx,
-                                                bx4, by4, bpc, state->pal_y,
-                                                &state->pal_sz_y))
-                    return -7;
+    if (intra_flag) {
+        if (frame && frame->allow_screen_content_tools &&
+            (bw4 > bh4 ? bw4 : bh4) <= 16 && bw4 + bh4 >= 4) {
+            int sz_ctx = stbv_av1_block_dimensions[bs][2] +
+                         stbv_av1_block_dimensions[bs][3] - 2;
+            int bpc = 8 + (seq ? seq->hbd : 0) * 2;
+            if (intra.y_mode == STBV_AV1_INTRA_DC) {
+                int pal_ctx = 0;
+                if (state->above_pal_sz && (unsigned)bx4 < state->above_pal_sz_n &&
+                    state->above_pal_sz[bx4] > 0)
+                    pal_ctx++;
+                if (state->left_pal_sz && (unsigned)by4 < state->left_pal_sz_n &&
+                    state->left_pal_sz[by4] > 0)
+                    pal_ctx++;
+                if (stb_av1_msac_bool_adapt(msac,
+                                            cdf->pal_y + sz_ctx * 6 + pal_ctx * 2)) {
+                    if (stbv_av1_palette_read_plane(msac, cdf, state, 0, sz_ctx,
+                                                    bx4, by4, bpc, state->pal_y,
+                                                    &state->pal_sz_y))
+                        return -7;
+                }
+            }
+            if (has_chroma && intra.uv_mode == STBV_AV1_INTRA_DC) {
+                int pal_ctx = state->pal_sz_y > 0;
+                if (stb_av1_msac_bool_adapt(msac, cdf->pal_uv + pal_ctx * 2)) {
+                    if (stbv_av1_palette_read_plane(msac, cdf, state, 1, sz_ctx,
+                                                    bx4, by4, bpc, state->pal_u,
+                                                    &state->pal_sz_uv))
+                        return -8;
+                    stbv_av1_palette_read_uv_v(msac, bpc, state->pal_sz_uv,
+                                               state->pal_v);
+                }
             }
         }
-        if (has_chroma && intra.uv_mode == STBV_AV1_INTRA_DC) {
-            int pal_ctx = state->pal_sz_y > 0;
-            if (stb_av1_msac_bool_adapt(msac, cdf->pal_uv + pal_ctx * 2)) {
-                if (stbv_av1_palette_read_plane(msac, cdf, state, 1, sz_ctx,
-                                                bx4, by4, bpc, state->pal_u,
-                                                &state->pal_sz_uv))
-                    return -8;
-                stbv_av1_palette_read_uv_v(msac, bpc, state->pal_sz_uv,
-                                           state->pal_v);
+
+        /* Filter-intra bool (dav1d decode.c, after the palette bools). */
+        if (seq && seq->filter_intra && intra.y_mode == STBV_AV1_INTRA_DC &&
+            !state->pal_sz_y &&
+            stbv_av1_block_dimensions[bs][2] <= 3 &&
+            stbv_av1_block_dimensions[bs][3] <= 3) {
+            if (stb_av1_msac_bool_adapt(msac, cdf->use_filter_intra + bs * 2)) {
+                intra.y_mode = STBV_AV1_INTRA_FILTER;
+                intra.y_angle = (int)stb_av1_msac_symbol(msac, cdf->filter_intra, 4);
             }
         }
-    }
 
-    /* Filter-intra bool (dav1d decode.c, after the palette bools). */
-    if (seq && seq->filter_intra && intra.y_mode == STBV_AV1_INTRA_DC &&
-        !state->pal_sz_y &&
-        stbv_av1_block_dimensions[bs][2] <= 3 &&
-        stbv_av1_block_dimensions[bs][3] <= 3) {
-        if (stb_av1_msac_bool_adapt(msac, cdf->use_filter_intra + bs * 2)) {
-            intra.y_mode = STBV_AV1_INTRA_FILTER;
-            intra.y_angle = (int)stb_av1_msac_symbol(msac, cdf->filter_intra, 4);
-        } else {
+        /* Palette index maps come after filter-intra. */
+        if (state->pal_sz_y) {
+            if (stbv_av1_palette_indices(msac, cdf, 0, state->pal_sz_y,
+                                         bw4, bh4, state->pal_tmp_y,
+                                         state->pal_order, state->pal_ctxs))
+                return -7;
         }
-    }
-
-    /* Palette index maps come after filter-intra (dav1d read_pal_indices
-     * is called after the filter-intra bool in decode.c). */
-    if (state->pal_sz_y) {
-        if (stbv_av1_palette_indices(msac, cdf, 0, state->pal_sz_y,
-                                     bw4, bh4, state->pal_tmp_y,
-                                     state->pal_order, state->pal_ctxs))
-            return -7;
-    }
-    if (state->pal_sz_uv) {
-        if (stbv_av1_palette_indices(msac, cdf, 1, state->pal_sz_uv,
-                                     cbw4, cbh4, state->pal_tmp,
-                                     state->pal_order, state->pal_ctxs))
-            return -8;
-    }
+        if (state->pal_sz_uv) {
+            if (stbv_av1_palette_indices(msac, cdf, 1, state->pal_sz_uv,
+                                         cbw4, cbh4, state->pal_tmp,
+                                         state->pal_order, state->pal_ctxs))
+                return -8;
+        }
+    } /* end intra-only palette/filter-intra */
 
     /* block_info hook: fires AFTER all mode decisions are final (including
      * filter_intra override), so reconstruction uses the correct mode.
@@ -8662,7 +8999,11 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
 
     /* Transform size.  dav1d: lossless blocks are forced to TX_4X4; the
      * maximum otherwise comes from max_txfm_size_for_bs[bs][plane]; with
-     * TX_SWITCHABLE a tx-size symbol is coded when max > TX_4X4. */
+     * TX_SWITCHABLE a tx-size symbol is coded when max > TX_4X4.
+     *
+     * For IBC blocks, the TX tree bools are decoded separately via
+     * read_vartx_tree/read_tx_tree (dav1d decode.c:1352).  No single
+     * tx-size symbol is decoded for IBC. */
     if (lossless) {
         tx0 = STBV_AV1_TX_4X4;
         uv_tx = STBV_AV1_TX_4X4;
@@ -8671,20 +9012,18 @@ block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
         tx0 = stbv_av1_max_tx_for_bs[bs][0];
         uv_tx = stbv_av1_max_tx_for_bs[bs][layout];
         max_tx = tx0;
-if (frame && frame->txfm_mode == 1 &&
-    stbv_av1_tx_dims[max_tx].max > STBV_AV1_TX_4X4) {
-    tx0 = stbv_av1_decode_tx_size(msac, cdf, max_tx,
-                                  stbv_av1_tx_is_large(state->tx.above_tx, bx4,
-                                                       stbv_av1_tx_dims[max_tx].lw,
-                                                       state->tx.above_n) +
-                                  stbv_av1_tx_is_large(state->tx.left_tx, by4,
-                                                       stbv_av1_tx_dims[max_tx].lh,
-                                                       state->tx.left_n));
-    /* NOTE: no size-based clamp here — dav1d derives b->tx purely from
-     * max_txfm_size_for_bs[bs] and the sub-chain; the tx-size symbol
-     * semantics do not depend on frame-edge clipping of bw4/bh4. */
+        if (intra_flag &&
+            frame && frame->txfm_mode == 1 &&
+            stbv_av1_tx_dims[max_tx].max > STBV_AV1_TX_4X4) {
+            tx0 = stbv_av1_decode_tx_size(msac, cdf, max_tx,
+                                          stbv_av1_tx_is_large(state->tx.above_tx, bx4,
+                                                               stbv_av1_tx_dims[max_tx].lw,
+                                                               state->tx.above_n) +
+                                          stbv_av1_tx_is_large(state->tx.left_tx, by4,
+                                                               stbv_av1_tx_dims[max_tx].lh,
+                                                               state->tx.left_n));
+        }
     }
-}
 
     c.msac = msac;
     c.cdf = cdf;
@@ -8710,6 +9049,7 @@ if (frame && frame->txfm_mode == 1 &&
     c.reduced_txtp_set = frame ? (int)frame->reduced_txtp_set : 0;
     c.hbd = seq ? (int)seq->hbd : 0;
     c.block_skip = (int)block_skip;
+    c.is_intra = intra_flag;
     /* TXTP mode: dav1d maps FILTER_PRED to the filter angle's directional
      * mode (dav1d_filter_mode_to_y_mode), unlike the neighbour-mode map
      * which uses DC_PRED. */
@@ -8726,11 +9066,8 @@ if (frame && frame->txfm_mode == 1 &&
     }
 
     /* Coefficients: intra blocks use one transform size across the whole
-     * block.  dav1d recon_b_intra walks 64x64-pixel QUADRANTS (init_y/x
-     * stepping 16 units); inside each quadrant it decodes that band's luma
-     * transforms followed immediately by that band's chroma transforms.
-     * The MSAC symbol order therefore interleaves per-quadrant, which we
-     * replicate here exactly. */
+     * block.  IBC blocks use a variable TX tree for luma and fixed uv_tx
+     * for chroma (dav1d decode.c:1352 read_vartx_tree). */
     {
         int txw4 = stbv_av1_tx_dims[tx0].w;
         int txh4 = stbv_av1_tx_dims[tx0].h;
@@ -8750,18 +9087,55 @@ if (frame && frame->txfm_mode == 1 &&
                     if (qw4 > 16) qw4 = 16;
                     scw4 = (qw4 + ss_hor) >> ss_hor;
 
-                    for (y4 = qy4; y4 < qy4 + qh4; y4 += txh4) {
-                        for (x4 = qx4; x4 < qx4 + qw4; x4 += txw4) {
-                            r = stbv_av1_leaf_tx_plane(msac, cdf, &c,
-                                                       x4, y4,
-                                                       tx0, 0, &state->res,
-                                                       bw4, bh4,
-                                                       first ? out : NULL);
-                            first = 0;
-                            if (r) return -4;
+                    if (intra_flag) {
+                        /* Intra: fixed tx0 luma + fixed uv_tx chroma */
+                        for (y4 = qy4; y4 < qy4 + qh4; y4 += txh4) {
+                            for (x4 = qx4; x4 < qx4 + qw4; x4 += txw4) {
+                                r = stbv_av1_leaf_tx_plane(msac, cdf, &c,
+                                                           x4, y4,
+                                                           tx0, 0, &state->res,
+                                                           bw4, bh4,
+                                                           first ? out : NULL);
+                                first = 0;
+                                if (r) return -4;
+                            }
+                        }
+                    } else {
+                        /* IBC: variable TX tree for luma (dav1d read_vartx_tree +
+                         * read_coef_tree).  Chroma uses fixed uv_tx. */
+                        int ytxw = stbv_av1_tx_dims[max_tx].w;
+                        int ytxh = stbv_av1_tx_dims[max_tx].h;
+                        if (stbv_av1_tx_dims[max_tx].max > STBV_AV1_TX_4X4 &&
+                            frame && frame->txfm_mode == 1) {
+                            /* Variable TX: recursively read split bools from MSAC
+                             * and decode coefficients at each leaf. */
+                            int ty4, tx4;
+                            for (ty4 = qy4; ty4 < qy4 + qh4; ty4 += ytxh) {
+                                for (tx4 = qx4; tx4 < qx4 + qw4; tx4 += ytxw) {
+                                    r = stbv_av1_decode_tx_tree(msac, cdf,
+                                        &state->tx, max_tx, tx4, ty4,
+                                        stbv_av1_ibc_luma_leaf, &c);
+                                    if (r) return -4;
+                                }
+                            }
+                        } else {
+                            /* Fixed max_tx luma (non-switchable or lossless) */
+                            for (y4 = qy4; y4 < qy4 + qh4; y4 += txh4) {
+                                for (x4 = qx4; x4 < qx4 + qw4; x4 += txw4) {
+                                    r = stbv_av1_leaf_tx_plane(msac, cdf, &c,
+                                                               x4, y4,
+                                                               max_tx, 0,
+                                                               &state->res,
+                                                               bw4, bh4,
+                                                               first ? out : NULL);
+                                    first = 0;
+                                    if (r) return -4;
+                                }
+                            }
                         }
                     }
 
+                    /* Chroma: fixed uv_tx (both intra and IBC). */
                     if (!has_chroma) continue;
                     {
                         int cbx4 = qx4 >> ss_hor;
@@ -8797,8 +9171,9 @@ if (frame && frame->txfm_mode == 1 &&
                                           (bw4_unc + ss_hor) >> ss_hor,
                                           (bh4_unc + ss_ver) >> ss_ver,
                                           (stbv_u8)0x40);
-            }
-            if (out) {
+    }
+
+    if (out) {
                 out->x4 = bx4;
                 out->y4 = by4;
                 out->tx = tx0;
@@ -12139,7 +12514,7 @@ static int stb_av1_decode_nsym(struct stb_av1_bool_reader *br, int n)
 }
 
 /* -------------------------------------------------------------------------- */
-/* AV1 SEQUENCE HEADER PARSER                                                */
+/* AV1 SEQUENCE HEADER STRUCT                                                 */
 /* -------------------------------------------------------------------------- */
 
 struct stb_av1_sequence_header {
@@ -12178,182 +12553,6 @@ struct stb_av1_sequence_header {
     int subsampling_x;
     int subsampling_y;
 };
-
-static void stb_av1_parse_sequence_header_obu(struct stb_avif_reader *r,
-                                               struct stb_av1_sequence_header *sh,
-                                               struct stb_av1_bool_reader *br)
-{
-    /* AV1 spec section 5.5: Sequence Header OBU syntax */
-    sh->seq_profile = (int)stb_av1_bool_decode_literal(br, 3);
-    sh->still_picture = stb_av1_bool_decode(br, 128);
-    sh->reduced_still_picture_header = stb_av1_bool_decode(br, 128);
-
-    if (sh->reduced_still_picture_header) {
-        sh->timing_info_present = 0;
-        sh->decoder_model_info_present = 0;
-        sh->display_model_info_present = 0;
-        sh->operating_points_cnt = 1;
-        /* operating_point_idc[0] = 0 implicitly */
-        sh->frame_width_bits = 4;
-        sh->frame_height_bits = 4;
-        sh->max_frame_width = 16;
-        sh->max_frame_height = 16;
-        sh->enable_order_hint = 0;
-        sh->enable_dist_wtd_comp = 0;
-        sh->enable_masked_comp = 0;
-        sh->enable_intra_edge_filter = 1; /* default 1 */
-        sh->enable_interintra_comp = 0;
-        sh->enable_dual_filter = 0;
-        sh->enable_jnt_comp = 0;
-        sh->enable_superres = 0;
-        sh->enable_cdef = 1; /* default 1 for still picture? */
-        sh->enable_restoration = 0; /* default */
-        sh->film_grain_params_present = 0;
-    } else {
-        int op;
-        sh->operating_points_cnt = (int)stb_av1_bool_decode_literal(br, 5) + 1;
-        for (op = 0; op < sh->operating_points_cnt; op++) {
-            /* operating_point_idc */
-            stb_av1_bool_decode_literal(br, 12);
-            /* seq_level_idx */
-            stb_av1_bool_decode_literal(br, 5);
-            if (stb_av1_bool_decode(br, 128)) { /* seq_tier */
-                stb_av1_bool_decode(br, 128);
-            }
-            if (op == 0) {
-                /* decoder_model_present_for_this_op */
-                if (stb_av1_bool_decode(br, 128)) {
-                    /* decoder_buffer_delay */
-                    stb_av1_bool_decode_literal(br, 8);
-                    /* encoder_buffer_delay */
-                    stb_av1_bool_decode_literal(br, 8);
-                    stb_av1_bool_decode(br, 128); /* low_delay_mode */
-                }
-            }
-        }
-
-        /* frame_width_bits */
-        sh->frame_width_bits = (int)stb_av1_bool_decode_literal(br, 4) + 1;
-        /* frame_height_bits */
-        sh->frame_height_bits = (int)stb_av1_bool_decode_literal(br, 4) + 1;
-        /* max_frame_width */
-        sh->max_frame_width = (int)stb_av1_bool_decode_literal(br, sh->frame_width_bits) + 1;
-        /* max_frame_height */
-        sh->max_frame_height = (int)stb_av1_bool_decode_literal(br, sh->frame_height_bits) + 1;
-
-        /* Frame ID numbers */
-        if (stb_av1_bool_decode(br, 128)) {
-            stb_av1_bool_decode_literal(br, 4); /* delta_frame_id_length */
-            stb_av1_bool_decode_literal(br, 3); /* additional_frame_id_length */
-        }
-
-        /* Use 124th order hint */
-        sh->enable_order_hint = stb_av1_bool_decode(br, 128);
-        if (sh->enable_order_hint) {
-            stb_av1_bool_decode_literal(br, 2); /* order_hint_bits_minus_1 */
-        }
-        sh->enable_dist_wtd_comp = stb_av1_bool_decode(br, 128);
-        sh->enable_masked_comp = stb_av1_bool_decode(br, 128);
-
-        sh->enable_intra_edge_filter = stb_av1_bool_decode(br, 128);
-        sh->enable_interintra_comp = stb_av1_bool_decode(br, 128);
-        sh->enable_dual_filter = stb_av1_bool_decode(br, 128);
-        sh->enable_jnt_comp = stb_av1_bool_decode(br, 128);
-        sh->enable_superres = stb_av1_bool_decode(br, 128);
-
-        /* Timing info */
-        sh->timing_info_present = stb_av1_bool_decode(br, 128);
-        if (sh->timing_info_present) {
-            stb_av1_bool_decode_literal(br, 32); /* num_units_in_tick */
-            stb_av1_bool_decode_literal(br, 32); /* time_scale */
-            if (stb_av1_bool_decode(br, 128)) { /* equal_picture_interval */
-                stb_av1_bool_decode_literal(br, 32); /* num_ticks_per_picture */
-            }
-
-            /* decoder_model_info */
-            sh->decoder_model_info_present = stb_av1_bool_decode(br, 128);
-            if (sh->decoder_model_info_present) {
-                stb_av1_bool_decode_literal(br, 5); /* buffer_delay_length_minus_1 */
-                stb_av1_bool_decode_literal(br, 4); /* num_units_in_decoding_tick */
-                sh->buffer_removal_time_length_minus_1 = (int)stb_av1_bool_decode_literal(br, 5);
-                stb_av1_bool_decode_literal(br, 5); /* frame_presentation_time_length_minus_1 */
-            }
-
-            sh->display_model_info_present = stb_av1_bool_decode(br, 128);
-        }
-    }
-
-    /* Initial display delay */
-    if (!sh->reduced_still_picture_header) {
-        sh->initial_display_delay_present = stb_av1_bool_decode(br, 128);
-        if (sh->initial_display_delay_present) {
-            stb_av1_bool_decode_literal(br, 4); /* initial_display_delay */
-        }
-    }
-
-    /* Color config -- always present in AV1 spec, even for reduced_still_picture */
-    {
-        int high_bitdepth;
-        high_bitdepth = stb_av1_bool_decode(br, 128); /* high_bitdepth */
-        if (high_bitdepth) {
-            sh->bit_depth = stb_av1_bool_decode(br, 128) ? 12 : 10;
-        } else {
-            sh->bit_depth = 8;
-        }
-
-        if (sh->seq_profile == 0 && sh->bit_depth > 8) {
-            sh->monochrome = 0;
-        } else {
-            sh->monochrome = stb_av1_bool_decode(br, 128);
-        }
-
-        if (stb_av1_bool_decode(br, 128)) {
-            sh->color_description_present = 1;
-            sh->color_primaries = (int)stb_av1_bool_decode_literal(br, 8);
-            sh->transfer_characteristics = (int)stb_av1_bool_decode_literal(br, 8);
-            sh->matrix_coefficients = (int)stb_av1_bool_decode_literal(br, 8);
-        } else {
-            sh->color_description_present = 0;
-            sh->color_primaries = 2;
-            sh->transfer_characteristics = 2;
-            sh->matrix_coefficients = 2;
-        }
-
-        if (sh->monochrome) {
-            sh->color_range = stb_av1_bool_decode(br, 128);
-            sh->subsampling_x = 1;
-            sh->subsampling_y = 1;
-            sh->chroma_sample_position = 0;
-        } else if (sh->color_primaries == 1
-                   && sh->transfer_characteristics == 13
-                   && sh->matrix_coefficients == 0) {
-            sh->color_range = 1;
-            sh->subsampling_x = 0;
-            sh->subsampling_y = 0;
-            sh->chroma_sample_position = 0;
-        } else {
-            sh->color_range = stb_av1_bool_decode(br, 128);
-            sh->subsampling_x = stb_av1_bool_decode(br, 128);
-            sh->subsampling_y = stb_av1_bool_decode(br, 128);
-            if (sh->subsampling_x && sh->subsampling_y) {
-                sh->chroma_sample_position = (int)stb_av1_bool_decode_literal(br, 2);
-            }
-        }
-
-        sh->film_grain_params_present = stb_av1_bool_decode(br, 128);
-    }
-
-    /* Separator: always 1 for valid sequence headers */
-    if (!stb_av1_bool_decode(br, 128)) {
-        STB_AVIF_ERROR("Invalid AV1 sequence header");
-    }
-
-    /* CDEF and restoration filtering */
-    if (!sh->reduced_still_picture_header) {
-        sh->enable_cdef = stb_av1_bool_decode(br, 128);
-        sh->enable_restoration = stb_av1_bool_decode(br, 128);
-    }
-}
 
 /* -------------------------------------------------------------------------- */
 /* AV1 FRAME HEADER PARSER                                                   */
@@ -12830,7 +13029,8 @@ static int stb_avif_decode_with_dav1d(const unsigned char *av1_data, size_t av1_
                                        unsigned char **u_plane, int *u_stride,
                                        unsigned char **v_plane, int *v_stride,
                                        int *bit_depth, int *monochrome,
-                                       int *subsampling_x, int *subsampling_y)
+                                       int *subsampling_x, int *subsampling_y,
+                                       int *color_range, int *matrix_coefficients)
 {
     Dav1dContext *ctx = NULL;
     Dav1dSettings s;
@@ -12875,6 +13075,15 @@ static int stb_avif_decode_with_dav1d(const unsigned char *av1_data, size_t av1_
     *height = pic.p.h;
     *bit_depth = pic.p.bpc;
     *monochrome = 0;
+
+    /* Extract colour properties from the decoded sequence header */
+    if (pic.seq_hdr) {
+        *color_range = pic.seq_hdr->color_range;
+        *matrix_coefficients = (int)pic.seq_hdr->mtrx;
+    } else {
+        *color_range = 0;
+        *matrix_coefficients = 1;
+    }
 
     /* Determine chroma subsampling from layout */
     if (pic.p.layout == DAV1D_PIXEL_LAYOUT_I420) {
@@ -13503,7 +13712,7 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
     int txw4 = stbv_av1_tx_dims[tx].w;
     int txh4 = stbv_av1_tx_dims[tx].h;
     (void)eob;
-    rc = (struct stb_avif_scalar_recon *)ud;
+    rc = (struct stb_av1_scalar_recon *)ud;
     if (!rc) return;
     (void)txw4; (void)txh4;
 #ifdef STB_AVIF_PRED_ONLY
@@ -14007,7 +14216,6 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     stbv_u8 *above_seg_id = 0, *left_seg_id = 0;
     int cframe_w8 = 0, cframe_h8 = 0;
     int i, j, h2, w2;
-
     memset(&stream, 0, sizeof(stream));
     r = stb_av1_parse_internal_stream(&stream, av1_data, av1_size);
     if (r < 0 || !stream.have_seq || !stream.have_frame)
@@ -14286,6 +14494,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
             recon.tile_h4 = (int)((stream.frame.tiling.row_start_sb[tr + 1] -
                                    stream.frame.tiling.row_start_sb[tr]) * (sb_size >> 2));
             stbv_av1_leaf_state_init(&state, &arrays);
+            state.last_qidx = (int)stream.frame.quant.yac;
+            memset(state.last_delta_lf, 0, sizeof(state.last_delta_lf));
             /* leaf_state_init NULLs above/left_uvmode via intra_state_init;
              * re-establish them so chroma intra mode decode has proper
              * above/left contexts for each tile (tiles are independent). */
@@ -14303,7 +14513,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                                        stream.tiles[ti].data, stream.tiles[ti].size,
                                        tcx, tr, stb_avif_leaf_cb, &state,
                                        stb_avif_row_reset_cb);
-            if (r) break;
+            if (r) { break; }
         }
     }
 
@@ -14449,8 +14659,7 @@ oom16:
     stb_avif_free_internal(lf_blkid_map); stb_avif_free_internal(lf_blkid_map_c);
     stb_avif_free_internal(lf_txlw_map); stb_avif_free_internal(lf_txlw_map_c);
     stb_avif_free_internal(lf_done_map);
-    (void)r;
-    return 0;
+    return r;
 }
 
 #endif /* !STB_AVIF_USE_DAV1D */
@@ -14657,18 +14866,54 @@ ivf_decoded:
             /* Process based on type */
             switch (obu_type) {
                 case STB_AV1_OBU_SEQUENCE_HEADER: {
-                    struct stb_avif_reader seq_r;
-                    struct stb_av1_bool_reader seq_br;
-
-                    /* Initialize a reader for this OBU's data */
-                    stb_avif_reader_init(&seq_r,
-                                          obu_reader.data + obu_reader.pos,
-                                          (size_t)obu_size);
-                    stb_av1_bool_reader_init(&seq_br,
-                                               obu_reader.data + obu_reader.pos,
-                                               (size_t)obu_size);
-
-                    stb_av1_parse_sequence_header_obu(&seq_r, &sh, &seq_br);
+#ifndef STB_AVIF_USE_DAV1D
+                    /* Parse the sequence header with the authoritative
+                     * raw-bit parser so sh is populated BEFORE the frame
+                     * header parser runs (it reads sh->frame_width_bits,
+                     * sh->enable_cdef, etc.). */
+                    struct stb_av1_seqhdr sq;
+                    struct stb_av1_getbits sq_gb;
+                    const stbv_u8 *sq_data = obu_reader.data + obu_reader.pos;
+                    size_t sq_sz = (size_t)obu_size;
+                    memset(&sq, 0, sizeof(sq));
+                    stb_av1_getbits_init(&sq_gb, sq_data, sq_sz);
+                    if (stb_av1_parse_seqhdr(&sq, &sq_gb) == 0) {
+                        sh.frame_width_bits  = (int)sq.width_n_bits;
+                        sh.frame_height_bits = (int)sq.height_n_bits;
+                        sh.max_frame_width   = (int)sq.max_width;
+                        sh.max_frame_height  = (int)sq.max_height;
+                        sh.seq_profile                = (int)sq.profile;
+                        sh.still_picture              = (int)sq.still_picture;
+                        sh.reduced_still_picture_header = (int)sq.reduced_still_picture_header;
+                        sh.enable_order_hint        = (int)sq.order_hint;
+                        sh.enable_dist_wtd_comp     = 0;
+                        sh.enable_masked_comp       = (int)sq.masked_compound;
+                        sh.enable_intra_edge_filter = (int)sq.intra_edge_filter;
+                        sh.enable_interintra_comp   = (int)sq.inter_intra;
+                        sh.enable_dual_filter       = (int)sq.dual_filter;
+                        sh.enable_jnt_comp          = (int)sq.jnt_comp;
+                        sh.enable_superres          = (int)sq.super_res;
+                        sh.enable_cdef              = (int)sq.cdef;
+                        sh.enable_restoration       = (int)sq.restoration;
+                        sh.film_grain_params_present = (int)sq.film_grain_present;
+                        sh.timing_info_present         = (int)sq.timing_info_present;
+                        sh.decoder_model_info_present  = (int)sq.decoder_model_info_present;
+                        sh.display_model_info_present  = (int)sq.display_model_info_present;
+                        sh.operating_points_cnt        = (int)sq.num_operating_points;
+                        sh.color_description_present = (int)sq.color_description_present;
+                        sh.color_primaries           = (int)sq.pri;
+                        sh.transfer_characteristics  = (int)sq.trc;
+                        sh.matrix_coefficients       = (int)sq.mtrx;
+                        sh.color_range               = (int)sq.color_range;
+                        sh.chroma_sample_position     = (int)sq.chr;
+                        sh.monochrome    = sq.monochrome ? 1 : 0;
+                        sh.bit_depth     = 8 + (int)sq.hbd * 2;
+                        sh.subsampling_x = sq.ss_hor ? 1 : 0;
+                        sh.subsampling_y = sq.ss_ver ? 1 : 0;
+                        probe_seq_hbd  = sq.hbd;
+                        probe_seq_mono = sq.monochrome ? 1 : 0;
+                    }
+#endif
                     seq_header_found = 1;
                     break;
                 }
@@ -14766,7 +15011,7 @@ ivf_decoded:
 
         /* Fallback: no sequence-header OBU in the item stream (AVIF
          * encoders often put it only inside av1C).  Parse the config
-         * OBU from av1C now — AFTER the stream walk, so the stream's
+         * OBU from av1C now - AFTER the stream walk, so the stream's
          * own seq header always wins. */
         if (!seq_header_found && info.av1c_size > 0) {
             struct stb_avif_reader config_r;
@@ -14782,15 +15027,6 @@ ivf_decoded:
                 config_obu_sz = (stbv_u32)(info.av1c_size - (size_t)(config_r.pos));
 
             if (config_obu_type == STB_AV1_OBU_SEQUENCE_HEADER && config_obu_sz > 0) {
-                struct stb_avif_reader seq_config_r;
-                struct stb_av1_bool_reader seq_config_br;
-                stb_avif_reader_init(&seq_config_r,
-                                      config_r.data + config_r.pos,
-                                      (size_t)config_obu_sz);
-                stb_av1_bool_reader_init(&seq_config_br,
-                                           config_r.data + config_r.pos,
-                                           (size_t)config_obu_sz);
-                stb_av1_parse_sequence_header_obu(&seq_config_r, &sh, &seq_config_br);
                 seq_header_found = 1;
             }
         }
@@ -14805,29 +15041,64 @@ ivf_decoded:
     }
 
 #ifndef STB_AVIF_USE_DAV1D
-    /* Authoritative re-parse: the legacy bool-reader based sequence
-     * decode above mis-reads real streams (it arithmetic-decodes what
-     * is actually plain f(n) bit syntax).  stb_av1_parse_internal_stream
-     * uses the raw-bit seqhdr parser that matches dav1d bit-for-bit on
-     * the whole sample set; let it own colour/geometry description. */
+    /* Authoritative sequence-header parse: stb_av1_parse_internal_stream
+     * uses raw-bit f(n) parsing that matches dav1d bit-for-bit.  It owns
+     * ALL geometry/colour/filtering fields so we no longer need the
+     * legacy bool-reader based parser above. */
     {
         struct stb_av1_internal_stream probe;
         if (stb_av1_parse_internal_stream(&probe, info.av1_data,
                                           info.av1_size) == 0 &&
             probe.have_seq) {
-            sh.monochrome = probe.seq.monochrome ? 1 : 0;
-            sh.bit_depth = 8 + (int)probe.seq.hbd * 2;
-            sh.subsampling_x = probe.seq.ss_hor ? 1 : 0;
-            sh.subsampling_y = probe.seq.ss_ver ? 1 : 0;
-#ifdef STB_AVIF_TEST_NO_MC_OVERRIDE
-            /* A/B test hook */
-#else
-            sh.matrix_coefficients = probe.seq.mtrx;
-            sh.color_range = probe.seq.color_range;
-#endif
-            probe_seq_hbd = probe.seq.hbd;
-            probe_seq_mono = probe.seq.monochrome ? 1 : 0;
-            sh_parsed_ok = 1;
+            const struct stb_av1_seqhdr *sq = &probe.seq;
+
+            /* Geometry */
+            sh.frame_width_bits  = (int)sq->width_n_bits;
+            sh.frame_height_bits = (int)sq->height_n_bits;
+            sh.max_frame_width   = (int)sq->max_width;
+            sh.max_frame_height  = (int)sq->max_height;
+
+            /* Profile / picture type */
+            sh.seq_profile                = (int)sq->profile;
+            sh.still_picture              = (int)sq->still_picture;
+            sh.reduced_still_picture_header = (int)sq->reduced_still_picture_header;
+
+            /* Tool flags (consumed by frame header parser) */
+            sh.enable_order_hint        = (int)sq->order_hint;
+            sh.enable_dist_wtd_comp     = 0;
+            sh.enable_masked_comp       = (int)sq->masked_compound;
+            sh.enable_intra_edge_filter = (int)sq->intra_edge_filter;
+            sh.enable_interintra_comp   = (int)sq->inter_intra;
+            sh.enable_dual_filter       = (int)sq->dual_filter;
+            sh.enable_jnt_comp          = (int)sq->jnt_comp;
+            sh.enable_superres          = (int)sq->super_res;
+            sh.enable_cdef              = (int)sq->cdef;
+            sh.enable_restoration       = (int)sq->restoration;
+            sh.film_grain_params_present = (int)sq->film_grain_present;
+
+            /* Timing / decoder model */
+            sh.timing_info_present         = (int)sq->timing_info_present;
+            sh.decoder_model_info_present  = (int)sq->decoder_model_info_present;
+            sh.display_model_info_present  = (int)sq->display_model_info_present;
+            sh.operating_points_cnt        = (int)sq->num_operating_points;
+
+            /* Colour */
+            sh.color_description_present = (int)sq->color_description_present;
+            sh.color_primaries           = (int)sq->pri;
+            sh.transfer_characteristics  = (int)sq->trc;
+            sh.matrix_coefficients       = (int)sq->mtrx;
+            sh.color_range               = (int)sq->color_range;
+            sh.chroma_sample_position     = (int)sq->chr;
+
+            /* Pixel format */
+            sh.monochrome    = sq->monochrome ? 1 : 0;
+            sh.bit_depth     = 8 + (int)sq->hbd * 2;
+            sh.subsampling_x = sq->ss_hor ? 1 : 0;
+            sh.subsampling_y = sq->ss_ver ? 1 : 0;
+
+            probe_seq_hbd  = sq->hbd;
+            probe_seq_mono = sq->monochrome ? 1 : 0;
+            sh_parsed_ok   = 1;
         }
     }
 #endif /* !STB_AVIF_USE_DAV1D */
@@ -14910,6 +15181,7 @@ ivf_decoded:
     {
         int dav1d_w, dav1d_h;
         int dav1d_bd, dav1d_mono, dav1d_sx, dav1d_sy;
+        int dav1d_cr, dav1d_mc;
         unsigned char *dav1d_y = NULL, *dav1d_u = NULL, *dav1d_v = NULL;
         int dav1d_ys, dav1d_us, dav1d_vs;
         int dav1d_ok;
@@ -14920,7 +15192,8 @@ ivf_decoded:
             &dav1d_y, &dav1d_ys,
             &dav1d_u, &dav1d_us,
             &dav1d_v, &dav1d_vs,
-            &dav1d_bd, &dav1d_mono, &dav1d_sx, &dav1d_sy);
+            &dav1d_bd, &dav1d_mono, &dav1d_sx, &dav1d_sy,
+            &dav1d_cr, &dav1d_mc);
 
         if (dav1d_ok) {
             /* Replace internal planes with dav1d output */
@@ -14939,6 +15212,8 @@ ivf_decoded:
             sh.monochrome = dav1d_mono;
             sh.subsampling_x = dav1d_sx;
             sh.subsampling_y = dav1d_sy;
+            sh.color_range = dav1d_cr;
+            sh.matrix_coefficients = dav1d_mc;
         } else {
             stb_avif_error_msg = "dav1d decode failed";
             goto error_exit;
@@ -15116,7 +15391,7 @@ ivf_decoded:
                 }
 
                 /* NOTE: planes are already scaled to 8-bit in the
-                 * u16→u8 conversion above (lines ~3662-3745).
+                 * u16 -> u8 conversion above (lines ~3662-3745).
                  * Do NOT apply a second bit-depth shift here. */
 
                 /* Range expansion for limited range (color_range=0) */
