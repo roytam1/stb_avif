@@ -2823,7 +2823,7 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
 
 /* Per-txb chroma prediction (UV mode; CFL currently falls back to DC). */
 static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
-                                              int pl, int x4, int y4, int tx)
+                                               int pl, int x4, int y4, int tx)
 {
     stbv_u16 tl[640];
     stbv_u16 *edge = tl + 320;
@@ -2880,9 +2880,9 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
      * pred = edge-DC + alpha*ac with symmetric rounding; a plane with
      * zero alpha keeps its plain DC prediction. */
 #ifdef STB_AVIF_TEST_NO_CFL
-    if (0 && !rc->block_skip) {
+    if (0) {
 #else
-    if (rc->uv_mode == STBV_AV1_INTRA_CFL && !rc->block_skip) {
+    if (rc->uv_mode == STBV_AV1_INTRA_CFL) {
 #endif
         const int alpha = pl == 0 ? rc->cfl_alpha_u : rc->cfl_alpha_v;
         const int ss_h = rc->ss_hor, ss_v = rc->ss_ver;
