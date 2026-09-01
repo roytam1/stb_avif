@@ -919,9 +919,9 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                                         info->ipma_prop_idx[info->ipma_item_count][info->ipma_prop_count[info->ipma_item_count]++] = prop_idx;
                                 }
                                 info->ipma_item_count++;
-                            }
-                        }
-                    }
+            }
+        }
+    }
                 }
 
                 r->pos = (size_t)(iprp_sub_start + iprp_sub.size);
@@ -2300,12 +2300,24 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
                                    ? tx0 : 0].h;
     rc->block_skip = skip;
     rc->has_chroma = has_chroma;
+#ifdef STB_AV1_IBC_DEBUG
+    if (by4 == 0 && bx4 >= 156 && rc->plane_y) {
+        static FILE *dbg_fp = NULL;
+        if (!dbg_fp) dbg_fp = fopen("ibc_debug.txt", "a");
+        if (dbg_fp) {
+            fprintf(dbg_fp, "BLK bx4=%d by4=%d bw4=%d bh4=%d intra=%d skip=%d "
+                    "mv=(%d,%d) has_chroma=%d y_mode=%d uv_mode=%d pal_sz_y=%d\n",
+                    bx4, by4, bw4, bh4, intra, skip,
+                    ibc_mv_x, ibc_mv_y, has_chroma, y_mode, uv_mode, pal_sz_y);
+            fflush(dbg_fp);
+        }
+    }
+#endif
     if (!intra) {
         /* IBC block: copy already-reconstructed pixels from the current
          * frame at the reference position indicated by the MV.  MV is in
          * 1/8-pel luma units; for IBC it is always integer-pixel aligned
          * (mv_prec=-1). */
-        int src_luma_x, src_luma_y;
         int src_px_x, src_px_y;
         int dst_px_x, dst_px_y;
         int pw, ph, cw, ch;
@@ -2345,36 +2357,56 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
                        rc->plane_y + (size_t)(src_px_y + i) * rc->stride_y + src_px_x,
                        (size_t)cw * sizeof(stbv_u16));
         }
-        /* Copy chroma if present.
-         * Match dav1d mc(): chroma dst position = (bx >> ss_hor) * 4,
-         * MV converted to chroma units = mvx >> (3 + ss_hor). */
+        /* Copy chroma if present. */
         if (has_chroma && rc->plane_u && rc->plane_v) {
-            int cx_dst = (bx4 >> ss_h) << 2;
-            int cy_dst = (by4 >> ss_v) << 2;
-            int cx_src = cx_dst + (ibc_mv_x >> (3 + ss_h));
-            int cy_src = cy_dst + (ibc_mv_y >> (3 + ss_v));
-            int cw4 = bw4 << (bw4 == ss_h);
-            int ch4 = bh4 << (bh4 == ss_v);
-            int cpw = cw4 * (4 >> ss_h);
-            int cph = ch4 * (4 >> ss_v);
+            int cx_src = src_px_x >> ss_h;
+            int cy_src = src_px_y >> ss_v;
+            int cx_dst = dst_px_x >> ss_h;
+            int cy_dst = dst_px_y >> ss_v;
+            int cw4 = (bw4 + ss_h) >> ss_h;
+            int ch4 = (bh4 + ss_v) >> ss_v;
+            int cpw = cw4 << 2;
+            int cph = ch4 << 2;
             int ccw, cch, j;
             if (cx_src < 0) { cpw += cx_src; cx_src = 0; }
             if (cy_src < 0) { cph += cy_src; cy_src = 0; }
-            if (cpw <= 0 || cph <= 0) goto ibc_chroma_done;
             ccw = ((rc->frame_w + ss_h) >> ss_h) - cx_dst; if (ccw > cpw) ccw = cpw;
             cch = ((rc->frame_h + ss_v) >> ss_v) - cy_dst; if (cch > cph) cch = cph;
-            if (ccw <= 0 || cch <= 0) goto ibc_chroma_done;
-            for (j = 0; j < 2; j++) {
-                stbv_u16 *plane = j == 0 ? rc->plane_u : rc->plane_v;
-                int stride = j == 0 ? rc->stride_u : rc->stride_v;
-                if (!plane) continue;
-                for (i = 0; i < cch; i++)
-                    memmove(plane + (size_t)(cy_dst + i) * stride + cx_dst,
-                           plane + (size_t)(cy_src + i) * stride + cx_src,
-                           (size_t)ccw * sizeof(stbv_u16));
+            if (ccw > 0 && cch > 0) {
+                for (j = 0; j < 2; j++) {
+                    stbv_u16 *plane = j == 0 ? rc->plane_u : rc->plane_v;
+                    int stride = j == 0 ? rc->stride_u : rc->stride_v;
+                    if (!plane) continue;
+                    for (i = 0; i < cch; i++)
+                        memmove(plane + (size_t)(cy_dst + i) * stride + cx_dst,
+                               plane + (size_t)(cy_src + i) * stride + cx_src,
+                               (size_t)ccw * sizeof(stbv_u16));
+                }
             }
-            ibc_chroma_done:;
         }
+#ifdef STB_AV1_IBC_DEBUG
+        if (bx4 >= 168 && by4 < 2 && rc->plane_y) {
+            static FILE *dbg_fp = NULL;
+        if (!dbg_fp) dbg_fp = fopen("ibc_debug.txt", "a");
+            if (dbg_fp) {
+                fprintf(dbg_fp, "BLK bx4=%d by4=%d bw4=%d bh4=%d intra=%d skip=%d "
+                        "mv=(%d,%d) dst=(%d,%d) has_chroma=%d\n",
+                        bx4, by4, bw4, bh4, intra, skip,
+                        ibc_mv_x, ibc_mv_y, dst_px_x, dst_px_y, has_chroma);
+                if (dst_px_x <= 678 && dst_px_x + bw4 * 4 > 678 && rc->plane_y) {
+                    fprintf(dbg_fp, "  LUMA[678,%d]=%d\n", dst_px_y,
+                        (int)rc->plane_y[(size_t)dst_px_y * rc->stride_y + 678]);
+                }
+                if (has_chroma && rc->plane_u) {
+                    int csy = dst_px_y >> ss_v;
+                    fprintf(dbg_fp, "  CHR[339,%d]=U:%d V:%d\n", csy,
+                        (int)rc->plane_u[(size_t)csy * rc->stride_u + 339],
+                        (int)rc->plane_v[(size_t)csy * rc->stride_v + 339]);
+                }
+                fflush(dbg_fp);
+            }
+        }
+#endif
         /* Fill lf_blkid for IBC skip blocks (same logic as intra skip). */
         if (skip && rc->lf_blkid && bw4 > 0 && bh4 > 0) {
             stbv_u32 blkid = ((stbv_u32)bx4 << 16) | (stbv_u32)by4;
@@ -2597,6 +2629,29 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
                                x4 << 2, y4 << 2, rc->frame_w,
                                rc->frame_h + 64,
                                tx, txtp, eob, cf);
+#ifdef STB_AV1_IBC_DEBUG
+    if (x4 >= 160 && x4 < 176 && y4 == 0) {
+        static FILE *dbg_fp = NULL;
+        if (!dbg_fp) dbg_fp = fopen("ibc_debug.txt", "a");
+        if (dbg_fp) {
+            int _dbg_tw = stbv_av1_tx_dims[tx].w;
+            int _dbg_x0 = x4 << 2;
+            int _dbg_cw = rc->stride_y - _dbg_x0;
+            if (_dbg_cw > _dbg_tw * 4) _dbg_cw = _dbg_tw * 4;
+            fprintf(dbg_fp, "LUMA-TXB x4=%d y4=%d tx=%d txtp=%d eob=%d is_ibc=%d skip=%d stride_y=%d frame_w=%d tw4=%d\n",
+                    x4, y4, tx, txtp, eob, rc->is_ibc, rc->block_skip, rc->stride_y, rc->frame_w, _dbg_tw);
+            fprintf(dbg_fp, "  x0=%d copy_w=%d\n", _dbg_x0, _dbg_cw);
+            fprintf(dbg_fp, "  LUMA[678,%d]=%d  LUMA[676..679,%d]=%d %d %d %d\n",
+                y4, (int)rc->plane_y[(size_t)y4 * rc->stride_y + 678],
+                y4,
+                (int)rc->plane_y[(size_t)y4 * rc->stride_y + 676],
+                (int)rc->plane_y[(size_t)y4 * rc->stride_y + 677],
+                (int)rc->plane_y[(size_t)y4 * rc->stride_y + 678],
+                (int)rc->plane_y[(size_t)y4 * rc->stride_y + 679]);
+            fflush(dbg_fp);
+        }
+    }
+#endif
     {
         /* record transform coverage for the deblocking pass */
         if (rc->lf_blkid) {
@@ -2942,6 +2997,22 @@ static void stb_avif_recon_luma_pal(void *ud, const stbv_u8 *idx, int sz, int bw
     h = bh4 << 2;
     cw = rc->frame_w - x; if (cw > w) cw = w;
     ch = rc->frame_h - y; if (ch > h) ch = h;
+#ifdef STB_AV1_IBC_DEBUG
+    if (rc->cur_by4 == 0 && rc->cur_bx4 >= 156) {
+        static FILE *dbg_fp = NULL;
+        if (!dbg_fp) dbg_fp = fopen("ibc_debug.txt", "a");
+        if (dbg_fp) {
+            fprintf(dbg_fp, "LUMA-PAL x=%d y=%d w=%d h=%d cw=%d ch=%d sz=%d\n",
+                    x, y, w, h, cw, ch, sz);
+            fprintf(dbg_fp, "  pal[]=");
+            for (i = 0; i < sz; i++) fprintf(dbg_fp, "%d ", (int)pal[i]);
+            fprintf(dbg_fp, "\n  idx[0..7]=");
+            for (i = 0; i < 8 && i < w * h; i++) fprintf(dbg_fp, "%d ", (int)idx[i]);
+            fprintf(dbg_fp, "\n  idx[6] idx[7]=%d %d\n", (int)idx[6], (int)idx[7]);
+            fflush(dbg_fp);
+        }
+    }
+#endif
     for (i = 0; i < ch; i++)
         for (j = 0; j < cw; j++) {
             int id = idx[i * w + j];

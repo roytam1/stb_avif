@@ -1024,6 +1024,17 @@ c.recon = recon;
     bh4 = stbv_av1_block_dimensions[bs][1];
     if (!bw4 || !bh4)
         return -2;
+#ifdef STB_AV1_IBC_DEBUG
+    if (by4 == 0 && bx4 >= 140) {
+        static FILE *fp = NULL;
+        if (!fp) fp = fopen("ibc_debug.txt", "a");
+        if (fp) {
+            fprintf(fp, "ENTER bx4=%d by4=%d bw4=%d bh4=%d bs=%d\n",
+                    bx4, by4, bw4, bh4, bs);
+            fflush(fp);
+        }
+    }
+#endif
 
     layout = seq ? (int)seq->layout : STB_AV1_LAYOUT_I444;
     ss_hor = layout == STB_AV1_LAYOUT_I420 || layout == STB_AV1_LAYOUT_I422;
@@ -1342,12 +1353,27 @@ c.recon = recon;
             int bpc = 8 + (seq ? seq->hbd : 0) * 2;
             if (intra.y_mode == STBV_AV1_INTRA_DC) {
                 int pal_ctx = 0;
+                int above_palsz = 0, left_palsz = 0;
                 if (state->above_pal_sz && (unsigned)bx4 < state->above_pal_sz_n &&
-                    state->above_pal_sz[bx4] > 0)
+                    state->above_pal_sz[bx4] > 0) {
                     pal_ctx++;
+                    above_palsz = state->above_pal_sz[bx4];
+                }
                 if (state->left_pal_sz && (unsigned)by4 < state->left_pal_sz_n &&
-                    state->left_pal_sz[by4] > 0)
+                    state->left_pal_sz[by4] > 0) {
                     pal_ctx++;
+                    left_palsz = state->left_pal_sz[by4];
+                }
+                if (by4 == 0 && bx4 >= 156) {
+                    static FILE *fp = NULL;
+                    if (!fp) fp = fopen("ibc_debug.txt", "a");
+                    if (fp) {
+                        fprintf(fp, "PAL-BOOL bx4=%d by4=%d bw4=%d bh4=%d sz_ctx=%d pal_ctx=%d above=%d left=%d y_mode=%d uv_mode=%d has_chroma=%d\n",
+                                bx4, by4, bw4, bh4, sz_ctx, pal_ctx, above_palsz, left_palsz,
+                                intra.y_mode, intra.uv_mode, has_chroma);
+                        fflush(fp);
+                    }
+                }
                 if (stb_av1_msac_bool_adapt(msac,
                                             cdf->pal_y + sz_ctx * 6 + pal_ctx * 2)) {
                     if (stbv_av1_palette_read_plane(msac, cdf, state, 0, sz_ctx,
@@ -1399,7 +1425,16 @@ c.recon = recon;
      * filter_intra override), so reconstruction uses the correct mode.
      * For palette blocks this still fires but luma_pal/chroma_pal will
      * overwrite the prediction afterwards. */
-    if (c.recon && c.recon->block_info)
+    if (c.recon && c.recon->block_info) {
+        if (by4 == 0 && bx4 >= 140) {
+            static FILE *fp = NULL;
+            if (!fp) fp = fopen("ibc_debug.txt", "a");
+            if (fp) {
+                fprintf(fp, "LEAF-CALL bx4=%d by4=%d bw4=%d bh4=%d bs=%d intra=%d pal_sz_y=%d pal_sz_uv=%d\n",
+                        bx4, by4, bw4, bh4, bs, intra_flag, state->pal_sz_y, state->pal_sz_uv);
+                fflush(fp);
+            }
+        }
         c.recon->block_info(c.recon->ud, intra_flag, bs, bx4, by4,
                             has_chroma, cbw4, cbh4, 0, 0,
                             state->pal_sz_y, state->pal_sz_uv,
@@ -1408,6 +1443,7 @@ c.recon = recon;
                             intra.uv_angle,
                             intra.cfl_alpha_u, intra.cfl_alpha_v,
                             c.ibc_mv_y, c.ibc_mv_x);
+    }
 
     /* Palette pixel application must run AFTER block_info (the callbacks
      * read the recon context's current block position) and before the
