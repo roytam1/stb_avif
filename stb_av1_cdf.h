@@ -1595,10 +1595,14 @@ typedef struct stbv_av1_cdf {
     stbv_u16 delta_lf[16]; /* 4 symbols x 4 ctx */
     /* MV CDFs for IBC (intra block copy) */
     stbv_u16 mv_joint[4];     /* 4 symbols (ZERO/H/V/HV) */
-    stbv_u16 mv_sign[2];      /* 2 symbols */
-    stbv_u16 mv_classes[11];  /* 11 symbols */
-    stbv_u16 mv_class0[2];    /* 2 symbols */
-    stbv_u16 mv_classN[10][2]; /* 10 entries, each 2 symbols */
+    stbv_u16 mv_sign[2];      /* 2 symbols (Y component) */
+    stbv_u16 mv_classes[11];  /* 11 symbols (Y component) */
+    stbv_u16 mv_class0[2];    /* 2 symbols (Y component) */
+    stbv_u16 mv_classN[10][2]; /* 10 entries, each 2 symbols (Y component) */
+    stbv_u16 mv_sign_x[2];      /* 2 symbols (X component) */
+    stbv_u16 mv_classes_x[11];  /* 11 symbols (X component) */
+    stbv_u16 mv_class0_x[2];    /* 2 symbols (X component) */
+    stbv_u16 mv_classN_x[10][2]; /* 10 entries, each 2 symbols (X component) */
     /* Inter txtp CDFs */
     stbv_u16 txtp_inter1[2][16]; /* 2 entries, 15 symbols each + count */
     stbv_u16 txtp_inter2[12];    /* 11 symbols + count */
@@ -1767,6 +1771,17 @@ static void stbv_av1_cdf_init(stbv_av1_cdf *c, unsigned qcat)
         for (i = 0; i < 10; i++) {
             c->mv_classN[i][0] = 32768U - mv_classN_def[i];
             c->mv_classN[i][1] = 0;
+        }
+        c->mv_sign_x[0] = 32768U - 16384;
+        c->mv_sign_x[1] = 0;
+        for (i = 0; i < 10; i++)
+            c->mv_classes_x[i] = 32768U - mv_classes_def[i];
+        c->mv_classes_x[10] = 0;
+        c->mv_class0_x[0] = 32768U - 27648;
+        c->mv_class0_x[1] = 0;
+        for (i = 0; i < 10; i++) {
+            c->mv_classN_x[i][0] = 32768U - mv_classN_def[i];
+            c->mv_classN_x[i][1] = 0;
         }
     }
     /* TX partition CDF: 7 categories x 3 contexts (each bool CDF = 2 entries) */

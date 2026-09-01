@@ -901,7 +901,8 @@ static int stbv_av1_read_mv_component_diff(struct stb_av1_msac *msac,
 static void stbv_av1_read_mv_residual(struct stb_av1_msac *msac,
                                        stbv_av1_cdf *cdf,
                                        int *mv_y, int *mv_x,
-                                       int mv_prec)
+                                       int mv_prec,
+                                       int bx4, int by4)
 {
     int joint;
     joint = (int)stb_av1_msac_symbol(msac, cdf->mv_joint, 3);
@@ -911,8 +912,8 @@ static void stbv_av1_read_mv_residual(struct stb_av1_msac *msac,
             cdf->mv_classN, mv_prec);
     if (joint & 1) /* MV_JOINT_H */
         *mv_x += stbv_av1_read_mv_component_diff(msac,
-            cdf->mv_sign, cdf->mv_classes, cdf->mv_class0,
-            cdf->mv_classN, mv_prec);
+            cdf->mv_sign_x, cdf->mv_classes_x, cdf->mv_class0_x,
+            cdf->mv_classN_x, mv_prec);
 }
 
 /* Find IBC MV prediction from spatial neighbours (dav1d refmvs_find with
@@ -1257,7 +1258,7 @@ c.recon = recon;
                                    &pred_mv_y, &pred_mv_x);
         mv_y = pred_mv_y;
         mv_x = pred_mv_x;
-        stbv_av1_read_mv_residual(msac, cdf, &mv_y, &mv_x, -1);
+        stbv_av1_read_mv_residual(msac, cdf, &mv_y, &mv_x, -1, bx4, by4);
 
         /* Clip IBC MV to decoded parts of the current tile/SB
          * (dav1d decode.c:1292-1346).  All values in pixel units. */
@@ -1374,12 +1375,16 @@ c.recon = recon;
                         fflush(fp);
                     }
                 }
-                if (stb_av1_msac_bool_adapt(msac,
-                                            cdf->pal_y + sz_ctx * 6 + pal_ctx * 2)) {
-                    if (stbv_av1_palette_read_plane(msac, cdf, state, 0, sz_ctx,
-                                                    bx4, by4, bpc, state->pal_y,
-                                                    &state->pal_sz_y))
-                        return -7;
+                {
+                    unsigned rng_before = msac ? (unsigned)msac->rng : 0;
+                    int pal_result = stb_av1_msac_bool_adapt(msac,
+                                                cdf->pal_y + sz_ctx * 6 + pal_ctx * 2);
+                    if (pal_result) {
+                        if (stbv_av1_palette_read_plane(msac, cdf, state, 0, sz_ctx,
+                                                        bx4, by4, bpc, state->pal_y,
+                                                        &state->pal_sz_y))
+                            return -7;
+                    }
                 }
             }
             if (has_chroma && intra.uv_mode == STBV_AV1_INTRA_DC) {
@@ -1442,8 +1447,9 @@ c.recon = recon;
                             intra.y_mode, intra.y_angle, intra.uv_mode,
                             intra.uv_angle,
                             intra.cfl_alpha_u, intra.cfl_alpha_v,
-                            c.ibc_mv_y, c.ibc_mv_x);
+                             c.ibc_mv_y, c.ibc_mv_x);
     }
+
 
     /* Palette pixel application must run AFTER block_info (the callbacks
      * read the recon context's current block position) and before the
