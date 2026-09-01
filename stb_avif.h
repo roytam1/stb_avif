@@ -2257,25 +2257,31 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
         cw = ((rc->frame_w + ss_hor) >> ss_hor) - x; if (cw > w) cw = w;
         ch = ((rc->frame_h + ss_ver) >> ss_ver) - y; if (ch > h) ch = h;
         if (cw <= 0 || ch <= 0) return;
-    cimpl = stbv_av1_prepare_intra_edges_16(cx4, stb_avif_recon_have_left(rc, 0, cx4),
-                                           cy4, stb_avif_recon_have_top(rc, 0, cy4),
-                                               cfw4, cfh4,
-                                               stb_avif_recon_block_edge_flags(rc, 0, cx4, cy4, cbw4, cbh4),
-                                               rc->plane_u + y * rc->stride_u + x,
-                                               rc->stride_u, NULL,
-                                               cm, &cangle,
-                                               cbw4, cbh4,
-                                               rc->intra_edge_filter,
-                                               edge, rc->bit_depth);
-    stbv_av1_ipred_run_16(cimpl, rc->pred, w, edge, w, h,
-                          cangle | stb_avif_recon_edge_flags(rc, 0, bx4, by4),
-                          0, (cfw4 - cx4) << 2, (cfh4 - cy4) << 2, rc->bit_depth);
-        for (i = 0; i < ch; i++) {
-            memcpy(rc->plane_u + (y + i) * rc->stride_u + x,
-                   rc->pred + i * w, (size_t)(cw * sizeof(stbv_u16)));
-            memcpy(rc->plane_v + (y + i) * rc->stride_v + x,
-                   rc->pred + i * w, (size_t)(cw * sizeof(stbv_u16)));
+    /* Predict U and V separately: each plane has different reference edges. */
+    {
+        int pl_idx;
+        for (pl_idx = 0; pl_idx < 2; pl_idx++) {
+            stbv_u16 *cur_plane = pl_idx == 0 ? rc->plane_u : rc->plane_v;
+            int cur_stride = pl_idx == 0 ? rc->stride_u : rc->stride_v;
+            cimpl = stbv_av1_prepare_intra_edges_16(cx4, stb_avif_recon_have_left(rc, 0, cx4),
+                                                   cy4, stb_avif_recon_have_top(rc, 0, cy4),
+                                                   cfw4, cfh4,
+                                                   stb_avif_recon_block_edge_flags(rc, 0, cx4, cy4, cbw4, cbh4),
+                                                   cur_plane + y * cur_stride + x,
+                                                   cur_stride, NULL,
+                                                   cm, &cangle,
+                                                   cbw4, cbh4,
+                                                   rc->intra_edge_filter,
+                                                   edge, rc->bit_depth);
+            stbv_av1_ipred_run_16(cimpl, rc->pred, w, edge, w, h,
+                                  cangle | stb_avif_recon_edge_flags(rc, 0, bx4, by4),
+                                  0, (cfw4 - cx4) << 2, (cfh4 - cy4) << 2, rc->bit_depth);
+            for (i = 0; i < ch; i++) {
+                memcpy(cur_plane + (y + i) * cur_stride + x,
+                       rc->pred + i * w, (size_t)(cw * sizeof(stbv_u16)));
+            }
         }
+    }
     }
 }
 
