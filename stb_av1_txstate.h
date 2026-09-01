@@ -106,7 +106,7 @@ static int stbv_av1_tx_tree_rec(struct stb_av1_msac *msac,
     int sub, subw, subh;
 
     if (!msac || !cdf || !s || from < STBV_AV1_TX_4X4 ||
-        from > STBV_AV1_TX_64X64)
+        from >= STBV_AV1_N_TX_SIZES)
         return -1;
 
     txw = stbv_av1_tx_dims[from].lw;

@@ -465,13 +465,14 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
     int sctx, txtp, max;
     unsigned skip;
     int is_chroma = chroma != 0; /* dav1d: chroma = !!plane */
-
     sctx = stbv_av1_get_skip_ctx(rs, x4, y4,
                                  is_chroma ? c->cbw4_unc : c->bw4_unc,
                                  is_chroma ? c->cbh4_unc : c->bh4_unc,
                                  txw4, txh4, is_chroma);
-skip = stb_av1_msac_bool_adapt(
-    msac, cdf->coef + stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2);
+    {
+        stbv_u16 *_csk = cdf->coef + stbv_av1_tx_dims[tx].ctx * 26 + sctx * 2;
+        skip = stb_av1_msac_bool_adapt(msac, _csk);
+    }
     if (!skip) {
         max = stbv_av1_tx_dims[tx].max;
         if (c->lossless)
@@ -1237,6 +1238,11 @@ c.recon = recon;
      * all blocks are implicitly intra. */
     if (frame && frame->allow_intrabc) {
         intra_flag = !stb_av1_msac_bool_adapt(msac, cdf->intrabc);
+    } else {
+        /* IBC: no intra mode decode; set defaults for ctx. */
+        memset(&intra, 0, sizeof(intra));
+        intra.y_mode = STBV_AV1_INTRA_DC;
+        intra.uv_mode = STBV_AV1_INTRA_DC;
     }
 
     /* Recompute qidx using the SB-level last_qidx (may have been updated
@@ -1376,7 +1382,6 @@ c.recon = recon;
                     }
                 }
                 {
-                    unsigned rng_before = msac ? (unsigned)msac->rng : 0;
                     int pal_result = stb_av1_msac_bool_adapt(msac,
                                                 cdf->pal_y + sz_ctx * 6 + pal_ctx * 2);
                     if (pal_result) {
@@ -1585,7 +1590,9 @@ c.recon = recon;
                                     r = stbv_av1_decode_tx_tree(msac, cdf,
                                         &state->tx, max_tx, tx4, ty4,
                                         stbv_av1_ibc_luma_leaf, &c);
-                                    if (r) return -4;
+                                    if (r) {
+                                        return -4;
+                                    }
                                 }
                             }
                         } else {
@@ -1599,7 +1606,9 @@ c.recon = recon;
                                                                bw4, bh4,
                                                                first ? out : NULL);
                                     first = 0;
-                                    if (r) return -4;
+                                    if (r) {
+                                        return -4;
+                                    }
                                 }
                             }
                         }

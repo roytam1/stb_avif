@@ -378,7 +378,6 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
     stbv_u16 *dc_sign_cdf;
 unsigned stride, shift, shift2, mask;
 unsigned char *level;
-unsigned int dbg_pre;
 /* Large enough for any bit depth; final pixel clipping happens
  * in itxfm_add (iclip_pixel). */
 int cf_max = 1048575;
@@ -415,12 +414,10 @@ int cf_max = 1048575;
 area = (4U << slw) * (4U << slh);
 szctx = slw + slh;
 is1d = tx_class != 0;
-dbg_pre = msac->rng;
     memset(cf, 0, area * sizeof(*cf));
     memset(levels, 0, sizeof(levels));
 
-    /* Coefficient skip is decoded by the leaf-syntax layer immediately before
-       entering this function.  Do not consume it twice here. */
+    /* Coefficient skip is decoded by the caller.  Do not consume it here. */
     (void)skip_ctx;
 
     /* eob_bin_{16..1024}.  The first two dimensions are chroma and 1-D. */
