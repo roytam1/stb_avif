@@ -347,12 +347,12 @@ static int stbv_av1_decode_inter_txtp(struct stb_av1_msac *msac,
                   &cdf->txtp_inter3[min2 * 2]);
         return stbv_av1_tx_set_inter3[idx];
     } else if (t_dim_min == 2 /* TX_16X16 */) {
-        idx = stb_av1_msac_symbol(msac, cdf->txtp_inter2, 10);
+        idx = stb_av1_msac_symbol(msac, cdf->txtp_inter2, 11);
         return stbv_av1_tx_set_inter2[idx < 11 ? idx : 0];
     } else {
         /* t_dim_min is 0 or 1 */
         int min2 = t_dim_min > 1 ? 1 : (t_dim_min < 0 ? 0 : t_dim_min);
-        idx = stb_av1_msac_symbol(msac, cdf->txtp_inter1[min2], 14);
+        idx = stb_av1_msac_symbol(msac, cdf->txtp_inter1[min2], 15);
         return stbv_av1_tx_set_inter1[idx < 15 ? idx : 0];
     }
 }
