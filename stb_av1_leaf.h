@@ -626,7 +626,7 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
             eob = stbv_av1_decode_coeffs_square(msac, cdf, tx, is_chroma,
                                     txclass,
                                     dq_dc, dq_ac, dq_shift,
-                                    sctx, dc_sign_ctx, cf,
+                                    sctx, dc_sign_ctx, 8 + c->hbd * 2, cf,
                                     &res_ctx);
         }
         if (eob < 0)

@@ -360,6 +360,7 @@ static int stbv_av1_decode_coeffs_square(struct stb_av1_msac *msac,
                                           int tx, int chroma, int tx_class,
                                           int dq_dc, int dq_ac,
                                           int dq_shift, int skip_ctx, int dc_sign_ctx,
+                                          int bpc,
                                           stbv_i32 *cf,
                                           stbv_u8 *res_ctx_out)
 {
@@ -380,7 +381,7 @@ unsigned stride, shift, shift2, mask;
 unsigned char *level;
 /* Large enough for any bit depth; final pixel clipping happens
  * in itxfm_add (iclip_pixel). */
-int cf_max = 1048575;
+int cf_max = ~(~127U << bpc);
 
     if (tx < 0 || tx >= STBV_AV1_N_TX_SIZES)
         return -1;
