@@ -199,6 +199,27 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
     qcat = (frame->quant.yac > 20) + (frame->quant.yac > 60) + (frame->quant.yac > 120);
     stbv_av1_cdf_init(&td->cdf, (unsigned)qcat);
     stb_av1_msac_init(&td->msac, data, size, (int)frame->disable_cdf_update);
+#ifdef STB_AV1_MSB_DEBUG
+    { extern FILE *_msac_dbg_fp;
+    fprintf(stderr, "TILE_INIT_DEBUG col=%u row=%u size=%zu\n", tile_col, tile_row, size);
+    if (!_msac_dbg_fp) _msac_dbg_fp = fopen("msac_block_debug.txt", "w");
+    if (_msac_dbg_fp) {
+        fprintf(_msac_dbg_fp, "TILE_INIT col=%u row=%u data_off=%d size=%zu cols=%u rows=%u "
+                "col_start=[", tile_col, tile_row,
+                (int)(data - (data - size)), size,
+                frame->tiling.cols, frame->tiling.rows);
+        { unsigned int _i;
+          for (_i = 0; _i <= frame->tiling.cols; _i++)
+              fprintf(_msac_dbg_fp, "%s%u", _i?",":"", frame->tiling.col_start_sb[_i]); }
+        fprintf(_msac_dbg_fp, "] row_start=[");
+        { unsigned int _i;
+          for (_i = 0; _i <= frame->tiling.rows; _i++)
+              fprintf(_msac_dbg_fp, "%s%u", _i?",":"", frame->tiling.row_start_sb[_i]); }
+        fprintf(_msac_dbg_fp, "] rng=%u cnt=%d dif=%llu\n",
+                td->msac.rng, td->msac.cnt, (unsigned long long)td->msac.dif);
+        fflush(_msac_dbg_fp);
+    } }
+#endif
     sb_log2 = 6U + seq->sb128; sb_size = 1U << sb_log2;
     sx0 = frame->tiling.col_start_sb[tile_col]; sx1 = frame->tiling.col_start_sb[tile_col + 1];
     sy0 = frame->tiling.row_start_sb[tile_row]; sy1 = frame->tiling.row_start_sb[tile_row + 1];
@@ -253,7 +274,17 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
           for (sx = sx0; sx < sx1; sx++) {
             int bl = seq->sb128 ? STBV_AV1_BL_128X128 : STBV_AV1_BL_64X64;
             int bx = (int)(sx * (sb_size >> 2)); int by = (int)(sy * (sb_size >> 2));
-
+#ifdef STB_AV1_MSB_DEBUG
+            {
+                extern FILE *_msac_dbg_fp;
+                if (_msac_dbg_fp) {
+                    fprintf(_msac_dbg_fp, "SB_STATE sx=%u sy=%u bx=%d by=%d rng=%u cnt=%d dif=%llu\n",
+                            sx, sy, bx, by, td->msac.rng, td->msac.cnt,
+                            (unsigned long long)td->msac.dif);
+                    fflush(_msac_dbg_fp);
+                }
+            }
+#endif
             if (restore_planes) {
                 for (p = 0; p < 3; p++) {
                     int ss_ver, ss_hor, unit_size_log2, unit_size, mask, half_unit;
@@ -300,7 +331,9 @@ static int stb_av1_decode_tile_at(struct stb_av1_tile_decoder *td,
                     }
                 }
             }
-            if (stbv_av1_partition_decode_sb(&pd, bl, bx, by)) { td->error = 1; rc = -1; goto done; }
+            {
+                if (stbv_av1_partition_decode_sb(&pd, bl, bx, by)) { td->error = 1; rc = -1; goto done; }
+            }
           }
         }
     }

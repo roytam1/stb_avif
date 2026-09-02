@@ -299,6 +299,18 @@ static void stbv_av1_inv_txfm_add16(stbv_u16 *dst, const int stride,
                 dst[x] = (stbv_u16)STBV_AV1_ITX_CLIP(v, 0, max_pix);
             }
     }
+#ifdef STB_AV1_MSB_DEBUG
+    {
+        extern FILE *_msac_dbg_fp;
+        if (_msac_dbg_fp && tx == 2 && txtp == STBV_AV1_TX_IDTX && eob < 300) {
+            fprintf(_msac_dbg_fp, "  ITX_CORE tx=%d txtp=%d eob=%d tmp[0..3]=%d,%d,%d,%d\n",
+                    tx, txtp, eob, tmp[0], tmp[1], tmp[2], tmp[3]);
+            fprintf(_msac_dbg_fp, "  ITX_CORE tmp[4..7]=%d,%d,%d,%d tmp[16..19]=%d,%d,%d,%d\n",
+                    tmp[4], tmp[5], tmp[6], tmp[7], tmp[16], tmp[17], tmp[18], tmp[19]);
+            fflush(_msac_dbg_fp);
+        }
+    }
+#endif
 }
 
 #undef STBV_AV1_ITX_CLIP

@@ -505,6 +505,21 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
     if (!is_chroma)
         c->luma_txtp = txtp;
 
+#ifdef STB_AV1_MSB_DEBUG
+    {
+        int _msac_dbg_roi = (x4 >= 16 && x4 < 20 && y4 >= 64 && y4 < 68);
+        if (_msac_dbg_roi && !is_chroma && !skip) {
+            extern FILE *_msac_dbg_fp;
+            if (_msac_dbg_fp) {
+                fprintf(_msac_dbg_fp, "  TXTP x4=%d y4=%d tx=%d txtp=%d min=%d max=%d is_intra=%d reduced=%d rng=%u cnt=%d\n",
+                        x4, y4, tx, txtp, stbv_av1_tx_dims[tx].min, stbv_av1_tx_dims[tx].max,
+                        c->is_intra, c->reduced_txtp_set, msac->rng, msac->cnt);
+                fflush(_msac_dbg_fp);
+            }
+        }
+    }
+#endif
+
     if (out) {
         out->x4 = x4;
         out->y4 = y4;
@@ -531,9 +546,9 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
                 if (c->recon->luma_txb)
                     c->recon->luma_txb(c->recon->ud, x4, y4,
                                        tx, txtp, 0, c->recon->cf);
-            }
         }
-        return 0;
+    }
+    return 0;
     }
 
     {
@@ -559,6 +574,22 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
         s -= txw4;
         s -= txh4;
         dc_sign_ctx = (s != 0) + (s > 0);
+
+#ifdef STB_AV1_MSB_DEBUG
+        {
+            extern FILE *_msac_dbg_fp;
+            extern int _msac_dbg_bx4, _msac_dbg_by4;
+            if (_msac_dbg_fp && (x4 >= 16 && x4 < 20 && y4 >= 64 && y4 < 68) && !is_chroma) {
+                fprintf(_msac_dbg_fp, "  CTX x4=%d y4=%d sctx=%d dc_sign_ctx=%d s=%d txw4=%d txh4=%d above_n=%d left_n=%d res_ctx_above=",
+                        x4, y4, sctx, dc_sign_ctx, s, txw4, txh4, rs->above_n, rs->left_n);
+                { int _i; for (_i = 0; _i < txw4 && _i < 8; _i++) fprintf(_msac_dbg_fp, "%s0x%02x", _i?",":"", (unsigned)(x4+_i) < rs->above_n ? rs->above[x4+_i] : 0xFF); }
+                fprintf(_msac_dbg_fp, " res_ctx_left=");
+                { int _i; for (_i = 0; _i < txh4 && _i < 8; _i++) fprintf(_msac_dbg_fp, "%s0x%02x", _i?",":"", (unsigned)(y4+_i) < rs->left_n ? rs->left[y4+_i] : 0xFF); }
+                fprintf(_msac_dbg_fp, " is_intra=%d base_q=%d\n", c->is_intra, c->qidx);
+                fflush(_msac_dbg_fp);
+            }
+        }
+#endif
 
         /* This first integration pass validates coefficient syntax and MSAC
            consumption.  Quantization/reconstruction is still supplied by
@@ -600,6 +631,23 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
         }
         if (eob < 0)
             return -2;
+#ifdef STB_AV1_MSB_DEBUG
+        {
+            int _msac_dbg_roi = (x4 >= 16 && x4 < 20 && y4 >= 64 && y4 < 68);
+            if (_msac_dbg_roi && !is_chroma) {
+                extern FILE *_msac_dbg_fp;
+                if (_msac_dbg_fp) {
+                    fprintf(_msac_dbg_fp, "  COEF x4=%d y4=%d tx=%d txtp=%d eob=%d txclass=%d rng=%u cnt=%d cf[0..7]=%d,%d,%d,%d,%d,%d,%d,%d\n",
+                            x4, y4, tx, txtp, eob, txclass, msac->rng, msac->cnt,
+                            eob > 0 ? cf[0] : 0, eob > 1 ? cf[1] : 0,
+                            eob > 2 ? cf[2] : 0, eob > 3 ? cf[3] : 0,
+                            eob > 4 ? cf[4] : 0, eob > 5 ? cf[5] : 0,
+                            eob > 6 ? cf[6] : 0, eob > 7 ? cf[7] : 0);
+                    fflush(_msac_dbg_fp);
+                }
+            }
+        }
+#endif
         if (out)
             out->eob = eob;
         if (c->recon && c->recon->cf) {
@@ -928,6 +976,8 @@ static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
                                        int *pred_y, int *pred_x)
 {
     int i;
+    *pred_y = 0;
+    *pred_x = 0;
     /* Search above row (by4-1): left-to-right across block width (dav1d scan_row). */
     if (s->above_ibc_mv_y && s->above_ibc_valid && by4 > 0) {
         for (i = 0; i < bw4; i++) {
@@ -936,6 +986,13 @@ static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
                 s->above_ibc_valid[col]) {
                 *pred_y = s->above_ibc_mv_y[col];
                 *pred_x = s->above_ibc_mv_x[col];
+#ifdef STB_AV1_MSB_DEBUG
+                if (bx4 == 16 && by4 == 64) {
+                    extern FILE *_msac_dbg_fp;
+                    if (!_msac_dbg_fp) _msac_dbg_fp = fopen("msac_block_debug.txt", "w");
+                    if (_msac_dbg_fp) fprintf(_msac_dbg_fp, "  IBC_PRED src=ABOVE col=%d pred_y=%d pred_x=%d\n", col, *pred_y, *pred_x);
+                }
+#endif
                 return;
             }
         }
@@ -947,6 +1004,13 @@ static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
             s->above_ibc_valid[col]) {
             *pred_y = s->above_ibc_mv_y[col];
             *pred_x = s->above_ibc_mv_x[col];
+#ifdef STB_AV1_MSB_DEBUG
+            if (bx4 == 16 && by4 == 64) {
+                extern FILE *_msac_dbg_fp;
+                if (!_msac_dbg_fp) _msac_dbg_fp = fopen("msac_block_debug.txt", "w");
+                if (_msac_dbg_fp) fprintf(_msac_dbg_fp, "  IBC_PRED src=ABOVE_LEFT col=%d pred_y=%d pred_x=%d\n", col, *pred_y, *pred_x);
+            }
+#endif
             return;
         }
     }
@@ -958,6 +1022,13 @@ static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
                 s->left_ibc_valid[row]) {
                 *pred_y = s->left_ibc_mv_y[row];
                 *pred_x = s->left_ibc_mv_x[row];
+#ifdef STB_AV1_MSB_DEBUG
+                if (bx4 == 16 && by4 == 64) {
+                    extern FILE *_msac_dbg_fp;
+                    if (!_msac_dbg_fp) _msac_dbg_fp = fopen("msac_block_debug.txt", "w");
+                    if (_msac_dbg_fp) fprintf(_msac_dbg_fp, "  IBC_PRED src=LEFT row=%d pred_y=%d pred_x=%d\n", row, *pred_y, *pred_x);
+                }
+#endif
                 return;
             }
         }
@@ -969,6 +1040,13 @@ static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
             s->left_ibc_valid[row]) {
             *pred_y = s->left_ibc_mv_y[row];
             *pred_x = s->left_ibc_mv_x[row];
+#ifdef STB_AV1_MSB_DEBUG
+            if (bx4 == 16 && by4 == 64) {
+                extern FILE *_msac_dbg_fp;
+                if (!_msac_dbg_fp) _msac_dbg_fp = fopen("msac_block_debug.txt", "w");
+                if (_msac_dbg_fp) fprintf(_msac_dbg_fp, "  IBC_PRED src=BELOW_LEFT row=%d pred_y=%d pred_x=%d\n", row, *pred_y, *pred_x);
+            }
+#endif
             return;
         }
     }
@@ -1019,6 +1097,25 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     unsigned block_skip = 0;
     unsigned int n;
     int intra_flag = 1; /* 1 = intra, 0 = IBC */
+#ifdef STB_AV1_MSB_DEBUG
+    {
+        extern int _msac_dbg_bx4, _msac_dbg_by4;
+        extern FILE *_msac_dbg_fp;
+        int _msac_dbg_roi = (bx4 < 16 && by4 < 16);
+        if (_msac_dbg_roi || (bx4 >= 108 && bx4 < 132 && by4 >= 12 && by4 < 36)
+            || (by4 >= 60 && by4 < 80) || (bx4 >= 0 && bx4 < 24 && by4 >= 16 && by4 < 20)
+            || (bx4 >= 14 && bx4 < 22 && by4 >= 62 && by4 < 68)) {
+            _msac_dbg_bx4 = bx4;
+            _msac_dbg_by4 = by4;
+            if (!_msac_dbg_fp) _msac_dbg_fp = fopen("msac_block_debug.txt", "w");
+            if (_msac_dbg_fp) {
+                fprintf(_msac_dbg_fp, "D_ENTER bx4=%d by4=%d bs=%d rng=%u cnt=%d dif=%llu\n",
+                        bx4, by4, bs, msac->rng, msac->cnt, (unsigned long long)msac->dif);
+                fflush(_msac_dbg_fp);
+            }
+        }
+    }
+#endif
 c.recon = recon;
     if (!msac || !cdf || !state || bs < 0 || bs >= STBV_AV1_N_BS_SIZES)
         return -1;
@@ -1026,17 +1123,6 @@ c.recon = recon;
     bh4 = stbv_av1_block_dimensions[bs][1];
     if (!bw4 || !bh4)
         return -2;
-#ifdef STB_AV1_IBC_DEBUG
-    if (by4 == 0 && bx4 >= 140) {
-        static FILE *fp = NULL;
-        if (!fp) fp = fopen("ibc_debug.txt", "a");
-        if (fp) {
-            fprintf(fp, "ENTER bx4=%d by4=%d bw4=%d bh4=%d bs=%d\n",
-                    bx4, by4, bw4, bh4, bs);
-            fflush(fp);
-        }
-    }
-#endif
 
     layout = seq ? (int)seq->layout : STB_AV1_LAYOUT_I444;
     ss_hor = layout == STB_AV1_LAYOUT_I420 || layout == STB_AV1_LAYOUT_I422;
@@ -1140,6 +1226,16 @@ c.recon = recon;
         if (!block_skip) {
             block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
         }
+#ifdef STB_AV1_MSB_DEBUG
+        {
+            extern FILE *_msac_dbg_fp;
+            if (_msac_dbg_fp) {
+                fprintf(_msac_dbg_fp, "  AFTER_SKIP bx4=%d by4=%d skip=%d sctx=%d rng=%u cnt=%d dif=%llu\n",
+                        bx4, by4, (int)block_skip, sctx, msac->rng, msac->cnt, (unsigned long long)msac->dif);
+                fflush(_msac_dbg_fp);
+            }
+        }
+#endif
         for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->above_skip_n; i++)
             state->above_skip[bx4 + i] = (stbv_u8)block_skip;
         for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->left_skip_n; i++)
@@ -1244,6 +1340,16 @@ c.recon = recon;
         intra.y_mode = STBV_AV1_INTRA_DC;
         intra.uv_mode = STBV_AV1_INTRA_DC;
     }
+#ifdef STB_AV1_MSB_DEBUG
+    {
+        extern FILE *_msac_dbg_fp;
+        if (_msac_dbg_fp) {
+            fprintf(_msac_dbg_fp, "  AFTER_INTRABC bx4=%d by4=%d intra=%d rng=%u cnt=%d dif=%llu\n",
+                    bx4, by4, intra_flag, msac->rng, msac->cnt, (unsigned long long)msac->dif);
+            fflush(_msac_dbg_fp);
+        }
+    }
+#endif
 
     /* Recompute qidx using the SB-level last_qidx (may have been updated
      * by delta_q above). */
@@ -1264,7 +1370,37 @@ c.recon = recon;
                                    &pred_mv_y, &pred_mv_x);
         mv_y = pred_mv_y;
         mv_x = pred_mv_x;
+#ifdef STB_AV1_MSB_DEBUG
+        {
+            int _msac_dbg_roi = (bx4 >= 108 && bx4 < 132 && by4 >= 12 && by4 < 36)
+                             || (by4 >= 60 && by4 < 80);
+            if (_msac_dbg_roi) {
+                extern FILE *_msac_dbg_fp;
+                if (_msac_dbg_fp) {
+                    fprintf(_msac_dbg_fp, "  PRE_MV bx4=%d by4=%d ref_y=%d ref_x=%d rng=%u cnt=%d dif=%llu\n",
+                            bx4, by4, pred_mv_y, pred_mv_x, msac->rng, msac->cnt,
+                            (unsigned long long)msac->dif);
+                    fflush(_msac_dbg_fp);
+                }
+            }
+        }
+#endif
         stbv_av1_read_mv_residual(msac, cdf, &mv_y, &mv_x, -1, bx4, by4);
+#ifdef STB_AV1_MSB_DEBUG
+        {
+            int _msac_dbg_roi = (bx4 >= 108 && bx4 < 132 && by4 >= 12 && by4 < 36)
+                             || (by4 >= 60 && by4 < 80);
+            if (_msac_dbg_roi) {
+                extern FILE *_msac_dbg_fp;
+                if (_msac_dbg_fp) {
+                    fprintf(_msac_dbg_fp, "  AFTER_MV bx4=%d by4=%d mv_y=%d mv_x=%d rng=%u cnt=%d dif=%llu\n",
+                            bx4, by4, mv_y, mv_x, msac->rng, msac->cnt,
+                            (unsigned long long)msac->dif);
+                    fflush(_msac_dbg_fp);
+                }
+            }
+        }
+#endif
 
         /* Clip IBC MV to decoded parts of the current tile/SB
          * (dav1d decode.c:1292-1346).  All values in pixel units. */
@@ -1342,6 +1478,19 @@ c.recon = recon;
                                              bx4, by4, bs, cfl_allowed,
                                              has_chroma, &intra))
             return -3;
+#ifdef STB_AV1_MSB_DEBUG
+        {
+            int _msac_dbg_roi = (bx4 >= 108 && bx4 < 132 && by4 >= 12 && by4 < 36);
+            if (_msac_dbg_roi) {
+                FILE *_msac_dbg_fp = fopen("msac_block_debug.txt", "a");
+                if (_msac_dbg_fp) {
+                    fprintf(_msac_dbg_fp, "  AFTER_YMODE bx4=%d by4=%d ymode=%d uv_mode=%d rng=%u cnt=%d\n",
+                            bx4, by4, intra.y_mode, intra.uv_mode, msac->rng, msac->cnt);
+                    fclose(_msac_dbg_fp);
+                }
+            }
+        }
+#endif
     } else {
         /* IBC: no intra mode decode; set defaults for ctx. */
         memset(&intra, 0, sizeof(intra));
@@ -1370,16 +1519,6 @@ c.recon = recon;
                     state->left_pal_sz[by4] > 0) {
                     pal_ctx++;
                     left_palsz = state->left_pal_sz[by4];
-                }
-                if (by4 == 0 && bx4 >= 156) {
-                    static FILE *fp = NULL;
-                    if (!fp) fp = fopen("ibc_debug.txt", "a");
-                    if (fp) {
-                        fprintf(fp, "PAL-BOOL bx4=%d by4=%d bw4=%d bh4=%d sz_ctx=%d pal_ctx=%d above=%d left=%d y_mode=%d uv_mode=%d has_chroma=%d\n",
-                                bx4, by4, bw4, bh4, sz_ctx, pal_ctx, above_palsz, left_palsz,
-                                intra.y_mode, intra.uv_mode, has_chroma);
-                        fflush(fp);
-                    }
                 }
                 {
                     int pal_result = stb_av1_msac_bool_adapt(msac,
@@ -1436,15 +1575,6 @@ c.recon = recon;
      * For palette blocks this still fires but luma_pal/chroma_pal will
      * overwrite the prediction afterwards. */
     if (c.recon && c.recon->block_info) {
-        if (by4 == 0 && bx4 >= 140) {
-            static FILE *fp = NULL;
-            if (!fp) fp = fopen("ibc_debug.txt", "a");
-            if (fp) {
-                fprintf(fp, "LEAF-CALL bx4=%d by4=%d bw4=%d bh4=%d bs=%d intra=%d pal_sz_y=%d pal_sz_uv=%d\n",
-                        bx4, by4, bw4, bh4, bs, intra_flag, state->pal_sz_y, state->pal_sz_uv);
-                fflush(fp);
-            }
-        }
         c.recon->block_info(c.recon->ud, intra_flag, bs, bx4, by4,
                             has_chroma, cbw4, cbh4, 0, 0,
                             state->pal_sz_y, state->pal_sz_uv,
@@ -1543,6 +1673,18 @@ c.recon = recon;
     /* Coefficients: intra blocks use one transform size across the whole
      * block.  IBC blocks use a variable TX tree for luma and fixed uv_tx
      * for chroma (dav1d decode.c:1352 read_vartx_tree). */
+#ifdef STB_AV1_MSB_DEBUG
+    if (by4 >= 60 && by4 < 80) {
+        extern FILE *_msac_dbg_fp;
+        if (_msac_dbg_fp) {
+            fprintf(_msac_dbg_fp, "  PRE_COEF bx4=%d by4=%d block_skip=%d tx0=%d max_tx=%d txfm_mode=%d lossless=%d rng=%u cnt=%d dif=%llu\n",
+                    bx4, by4, (int)block_skip, tx0, max_tx,
+                    frame ? frame->txfm_mode : -1, (int)lossless,
+                    msac->rng, msac->cnt, (unsigned long long)msac->dif);
+            fflush(_msac_dbg_fp);
+        }
+    }
+#endif
     {
         int txw4 = stbv_av1_tx_dims[tx0].w;
         int txh4 = stbv_av1_tx_dims[tx0].h;
@@ -1580,6 +1722,18 @@ c.recon = recon;
                          * read_coef_tree).  Chroma uses fixed uv_tx. */
                         int ytxw = stbv_av1_tx_dims[max_tx].w;
                         int ytxh = stbv_av1_tx_dims[max_tx].h;
+#ifdef STB_AV1_MSB_DEBUG
+                        {
+                            extern FILE *_msac_dbg_fp;
+                            if (_msac_dbg_fp && bx4==136 && by4==152) {
+                                fprintf(_msac_dbg_fp, "  PRE_VARTX bx4=%d by4=%d max_tx=%d txw4=%d txh4=%d qy4=%d qx4=%d qh4=%d qw4=%d txfm_mode=%d rng=%u cnt=%d dif=%llu\n",
+                                        bx4, by4, max_tx, ytxw, ytxh, qy4, qx4, qh4, qw4,
+                                        frame ? frame->txfm_mode : -1,
+                                        msac->rng, msac->cnt, (unsigned long long)msac->dif);
+                                fflush(_msac_dbg_fp);
+                            }
+                        }
+#endif
                         if (stbv_av1_tx_dims[max_tx].max > STBV_AV1_TX_4X4 &&
                             frame && frame->txfm_mode == 1) {
                             /* Variable TX: recursively read split bools from MSAC
@@ -1595,6 +1749,16 @@ c.recon = recon;
                                     }
                                 }
                             }
+#ifdef STB_AV1_MSB_DEBUG
+                            {
+                                extern FILE *_msac_dbg_fp;
+                                if (_msac_dbg_fp && bx4==136 && by4==152) {
+                                    fprintf(_msac_dbg_fp, "  POST_VARTX_LUMA bx4=%d by4=%d rng=%u cnt=%d dif=%llu\n",
+                                            bx4, by4, msac->rng, msac->cnt, (unsigned long long)msac->dif);
+                                    fflush(_msac_dbg_fp);
+                                }
+                            }
+#endif
                         } else {
                             /* Fixed max_tx luma (non-switchable or lossless) */
                             for (y4 = qy4; y4 < qy4 + qh4; y4 += txh4) {
@@ -1633,6 +1797,16 @@ c.recon = recon;
                             }
                         }
                     }
+#ifdef STB_AV1_MSB_DEBUG
+                    {
+                        extern FILE *_msac_dbg_fp;
+                        if (_msac_dbg_fp && bx4==136 && by4==152) {
+                            fprintf(_msac_dbg_fp, "  POST_CHROMA bx4=%d by4=%d rng=%u cnt=%d dif=%llu\n",
+                                    bx4, by4, msac->rng, msac->cnt, (unsigned long long)msac->dif);
+                            fflush(_msac_dbg_fp);
+                        }
+                    }
+#endif
                 }
             }
         } else {
@@ -1808,7 +1982,9 @@ c.recon = recon;
 
     /* IBC MV neighbour splat (dav1d decode.c splat_intrabc_mv + set_ctx).
      * For IBC blocks, store the decoded MV in the above/left arrays so
-     * subsequent IBC blocks can use it as a prediction candidate. */
+     * subsequent IBC blocks can use it as a prediction candidate.
+     * For regular intra blocks, clear the IBC validity flags so stale
+     * MV data from a previous IBC block does not leak. */
     if (!intra_flag) {
         if (state->above_ibc_mv_y && state->above_ibc_valid) {
             for (i = 0; i < bw4 && (unsigned)(bx4 + i) < state->above_ibc_mv_n; i++) {
@@ -1824,7 +2000,26 @@ c.recon = recon;
                 state->left_ibc_valid[by4 + i] = 1;
             }
         }
+    } else {
+        if (state->above_ibc_valid) {
+            for (i = 0; i < bw4 && (unsigned)(bx4 + i) < state->above_ibc_mv_n; i++)
+                state->above_ibc_valid[bx4 + i] = 0;
+        }
+        if (state->left_ibc_valid) {
+            for (i = 0; i < bh4 && (unsigned)(by4 + i) < state->left_ibc_mv_n; i++)
+                state->left_ibc_valid[by4 + i] = 0;
+        }
     }
+#ifdef STB_AV1_MSB_DEBUG
+    {
+        extern FILE *_msac_dbg_fp;
+        if (_msac_dbg_fp) {
+            fprintf(_msac_dbg_fp, "  EXIT bx4=%d by4=%d bs=%d intra=%d skip=%d rng=%u cnt=%d dif=%llu\n",
+                    bx4, by4, bs, intra_flag, (int)block_skip, msac->rng, msac->cnt, (unsigned long long)msac->dif);
+            fflush(_msac_dbg_fp);
+        }
+    }
+#endif
     return 0;
 }
 

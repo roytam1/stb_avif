@@ -2559,6 +2559,22 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
         memset(rc->pred + i * w + cw, 0,
                (size_t)((w - cw) * sizeof(stbv_u16)));
     }
+#ifdef STB_AV1_MSB_DEBUG
+    {
+        extern int _msac_dbg_bx4, _msac_dbg_by4;
+        extern FILE *_msac_dbg_fp;
+        if (_msac_dbg_fp && px == 64 && py == 256 && tx == 2) {
+            fprintf(_msac_dbg_fp, "  RECON_PRED px=%d py=%d tx=%d txtp=%d eob=%d pred[0..7]=%d,%d,%d,%d,%d,%d,%d,%d\n",
+                    px, py, tx, txtp, eob,
+                    rc->pred[0], rc->pred[1], rc->pred[2], rc->pred[3],
+                    rc->pred[4], rc->pred[5], rc->pred[6], rc->pred[7]);
+            fprintf(_msac_dbg_fp, "  RECON_PRED pred[16..23]=%d,%d,%d,%d,%d,%d,%d,%d\n",
+                    rc->pred[16], rc->pred[17], rc->pred[18], rc->pred[19],
+                    rc->pred[20], rc->pred[21], rc->pred[22], rc->pred[23]);
+            fflush(_msac_dbg_fp);
+        }
+    }
+#endif
     stbv_av1_inv_txfm_add16(rc->pred, w, cf, eob, tx, txtp, rc->bit_depth);
     for (i = 0; i < ch; i++)
         memcpy(plane + (py + i) * stride + px, rc->pred + i * w,
@@ -3104,10 +3120,16 @@ static int stb_avif_leaf_cb(struct stb_av1_tile_decoder *td, const struct stb_av
     stbv_av1_leaf_tx_result out;
     int r;
     state = (stbv_av1_leaf_state *)opaque;
+    if (li->by >= 144 && li->by < 160 && li->bx >= 128 && li->bx < 160)
+        fprintf(stderr, "LEAF_CB_ENTER bx=%d by=%d bs=%d rng=%u cnt=%d\n",
+                li->bx, li->by, li->bs, td->msac.rng, td->msac.cnt);
     r = stbv_av1_decode_leaf_syntax(&td->msac, &td->cdf, state,
                                        td->seq, td->frame,
                                        li->bs, li->bx, li->by,
                                        &out, &g_scalar_recon_cb);
+    if (li->by >= 144 && li->by < 160 && li->bx >= 128 && li->bx < 160)
+        fprintf(stderr, "LEAF_CB_DONE bx=%d by=%d r=%d rng=%u cnt=%d\n",
+                li->bx, li->by, r, td->msac.rng, td->msac.cnt);
     return r;
 }
 

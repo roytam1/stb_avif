@@ -75,9 +75,37 @@ static int stbv_av1_decode_intra_mode(struct stb_av1_msac *msac,
     ac = stbv_av1_intra_mode_ctx[above_mode];
     lc = stbv_av1_intra_mode_ctx[left_mode];
     ycdf = cdf->kfym + (ac * 5 + lc) * 16;
+#ifdef STB_AV1_MSB_DEBUG
+    {
+        extern FILE *_msac_dbg_fp;
+        extern int _msac_dbg_bx4, _msac_dbg_by4;
+        if (_msac_dbg_fp) {
+            fprintf(_msac_dbg_fp, "  YMODE_CDF bx4=%d by4=%d above=%d left=%d ac=%d lc=%d cdf[0..3]=%d,%d,%d,%d cdf[4..7]=%d,%d,%d,%d cdf[8..11]=%d,%d,%d,%d cdf_cnt=%d rng=%u cnt=%d\n",
+                    _msac_dbg_bx4, _msac_dbg_by4,
+                    above_mode, left_mode, ac, lc,
+                    (int)ycdf[0], (int)ycdf[1], (int)ycdf[2], (int)ycdf[3],
+                    (int)ycdf[4], (int)ycdf[5], (int)ycdf[6], (int)ycdf[7],
+                    (int)ycdf[8], (int)ycdf[9], (int)ycdf[10], (int)ycdf[11],
+                    (int)ycdf[12],
+                    msac->rng, msac->cnt);
+            fflush(_msac_dbg_fp);
+        }
+    }
+#endif
     sym = stb_av1_msac_symbol(msac, ycdf, 12);
     if (sym > 12) return -2;
     mode = (int)sym;
+#ifdef STB_AV1_MSB_DEBUG
+    {
+        extern FILE *_msac_dbg_fp;
+        extern int _msac_dbg_bx4, _msac_dbg_by4;
+        if (_msac_dbg_fp) {
+            fprintf(_msac_dbg_fp, "  AFTER_YMODE bx4=%d by4=%d ymode=%d rng=%u cnt=%d dif=%llu\n",
+                    _msac_dbg_bx4, _msac_dbg_by4, mode, msac->rng, msac->cnt, (unsigned long long)msac->dif);
+            fflush(_msac_dbg_fp);
+        }
+    }
+#endif
     b->y_mode = mode;
     b->y_angle = 0;
     b->uv_mode = STBV_AV1_INTRA_DC;

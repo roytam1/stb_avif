@@ -98,12 +98,14 @@ struct stbv_av1_partition_decoder {
     int ctx_y4;
     stbv_av1_partition_leaf_fn leaf;
     void *opaque;
+    int leaf_count;
 };
 
 static int stbv_av1_partition_emit(stbv_av1_partition_decoder *d,
                                     int bl, int bs, int bp,
                                     int bx, int by)
 {
+    d->leaf_count++;
     return d->leaf(d, bl, bs, bp, bx, by, d->opaque);
 }
 
@@ -120,6 +122,21 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
     hsz = 16 >> bl;
     have_h_split = d->frame_w4 > bx + hsz;
     have_v_split = d->frame_h4 > by + hsz;
+
+#ifdef STB_AV1_MSB_DEBUG
+    {
+        int _dbg_bx4 = bx, _dbg_by4 = by;
+        int _dbg_roi = (_dbg_bx4 >= 108 && _dbg_bx4 < 132 && _dbg_by4 >= 12 && _dbg_by4 < 36);
+        if (_dbg_roi) {
+            FILE *_fp = fopen("msac_block_debug.txt", "a");
+            if (_fp) {
+                fprintf(_fp, "PRE_PART bx4=%d by4=%d bl=%d rng=%u cnt=%d\n",
+                        bx, by, bl, d->msac->rng, d->msac->cnt);
+                fclose(_fp);
+            }
+        }
+    }
+#endif
 
     if (!have_h_split && !have_v_split) {
         if (bl >= STBV_AV1_BL_8X8)

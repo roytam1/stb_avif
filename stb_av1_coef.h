@@ -472,6 +472,27 @@ is1d = tx_class != 0;
     hi_cdf = cdf->coef + 2186U + (unsigned)(txctx > 3 ? 3 : txctx) * 168U +
              (unsigned)chroma * 84U;
 
+#ifdef STB_AV1_MSB_DEBUG
+    {
+        extern FILE *_msac_dbg_fp;
+        extern int _msac_dbg_bx4, _msac_dbg_by4;
+        if (_msac_dbg_fp && !chroma) {
+            fprintf(_msac_dbg_fp, "  EOB_POST x4=%d y4=%d eob=%u txctx=%d szctx=%u rng=%u cnt=%d\n",
+                    _msac_dbg_bx4 * 4, _msac_dbg_by4 * 4, eob, txctx, szctx, msac->rng, msac->cnt);
+            if (_msac_dbg_bx4 == 16 && _msac_dbg_by4 == 64) {
+                int _ci;
+                fprintf(_msac_dbg_fp, "  CDF_STATE eob_cdf=");
+                for (_ci = 0; _ci < 4; _ci++) fprintf(_msac_dbg_fp, "%d,%d ", eob_cdf[_ci*4+0], eob_cdf[_ci*4+1]);
+                fprintf(_msac_dbg_fp, "lo_cdf=");
+                for (_ci = 0; _ci < 4; _ci++) fprintf(_msac_dbg_fp, "%d,%d ", lo_cdf[_ci*4+0], lo_cdf[_ci*4+1]);
+                fprintf(_msac_dbg_fp, " dq_dc=%d dq_ac=%d dq_shift=%d chroma=%d txctx=%d\n",
+                        dq_dc, dq_ac, dq_shift, chroma, txctx);
+            }
+            fflush(_msac_dbg_fp);
+        }
+    }
+#endif
+
     /* The level scratch layout is exactly the one used by dav1d: for 2-D
      * transforms stride is the coefficient-grid width (4 << slh), which for
      * TX_64X64 is 32 while the real transform is 64 samples wide; H/V use
