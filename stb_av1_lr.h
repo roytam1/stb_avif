@@ -487,7 +487,7 @@ static void stbv_av1_sgr_3x3(unsigned short *dst, int stride,
         src_ptr = dst + row_clamped * stride + ex0;
 
         stbv_av1_sgr_box3_row_h(sumsq_ptrs[2], sum_ptrs[2], src_ptr, ew);
-        stbv_av1_sgr_box3_row_v(sumsq_ptrs, sum_ptrs, A_ptrs[2], B_ptrs[2], uw);
+        stbv_av1_sgr_box3_row_v((const int *const *)sumsq_ptrs, (const int *const *)sum_ptrs, A_ptrs[2], B_ptrs[2], uw);
         stbv_av1_sgr_calc_ab(A_ptrs[2], B_ptrs[2], uw, s1, 9, 455);
         stbv_av1_rotate3(sumsq_ptrs);
         stbv_av1_rotate3(sum_ptrs);
@@ -513,7 +513,7 @@ static void stbv_av1_sgr_3x3(unsigned short *dst, int stride,
         int out_y = uy0 + uh - 2 + i;
         if (out_y >= uy0 && out_y < uy0 + uh) {
             unsigned short *dst_row = dst + out_y * stride + ux0;
-            stbv_av1_sgr_box3_row_v(sumsq_ptrs, sum_ptrs, A_ptrs[2], B_ptrs[2], uw);
+        stbv_av1_sgr_box3_row_v((const int *const *)sumsq_ptrs, (const int *const *)sum_ptrs, A_ptrs[2], B_ptrs[2], uw);
             stbv_av1_sgr_calc_ab(A_ptrs[2], B_ptrs[2], uw, s1, 9, 455);
             stbv_av1_rotate3(sumsq_ptrs);
             stbv_av1_rotate3(sum_ptrs);
@@ -597,7 +597,7 @@ static void stbv_av1_sgr_5x5(unsigned short *dst, int stride,
         stbv_av1_sgr_box5_row_h(sumsq_ptrs[3], sum_ptrs[3], src_ptr, ew);
 
         /* Vertical accumulation when we have 5 rows */
-        stbv_av1_sgr_box5_row_v(sumsq_ptrs, sum_ptrs, A_ptrs[1], B_ptrs[1], uw);
+        stbv_av1_sgr_box5_row_v((const int *const *)sumsq_ptrs, (const int *const *)sum_ptrs, A_ptrs[1], B_ptrs[1], uw);
         stbv_av1_sgr_calc_ab(A_ptrs[1], B_ptrs[1], uw, s0, 25, 164);
         stbv_av1_rotate5(sumsq_ptrs);
         stbv_av1_rotate5(sum_ptrs);

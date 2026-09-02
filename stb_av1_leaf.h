@@ -928,9 +928,9 @@ static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
                                        int *pred_y, int *pred_x)
 {
     int i;
-    /* Search above row (by4-1): right-to-left across block width. */
+    /* Search above row (by4-1): left-to-right across block width (dav1d scan_row). */
     if (s->above_ibc_mv_y && s->above_ibc_valid && by4 > 0) {
-        for (i = bw4 - 1; i >= 0; i--) {
+        for (i = 0; i < bw4; i++) {
             int col = bx4 + i;
             if (col >= 0 && (unsigned)col < s->above_ibc_mv_n &&
                 s->above_ibc_valid[col]) {
