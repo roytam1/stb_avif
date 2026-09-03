@@ -2321,10 +2321,14 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
         }
         /* Copy chroma if present. */
         if (has_chroma && rc->plane_u && rc->plane_v) {
-            int cx_src = src_px_x >> ss_h;
-            int cy_src = src_px_y >> ss_v;
-            int cx_dst = dst_px_x >> ss_h;
-            int cy_dst = dst_px_y >> ss_v;
+            int cbx4_dst = bx4 >> ss_h;
+            int cby4_dst = by4 >> ss_v;
+            int cx_dst = cbx4_dst * 4;
+            int cy_dst = cby4_dst * 4;
+            int luma_src_x = cbx4_dst * (4 << ss_h) + (ibc_mv_x >> 3);
+            int luma_src_y = cby4_dst * (4 << ss_v) + (ibc_mv_y >> 3);
+            int cx_src = luma_src_x >> ss_h;
+            int cy_src = luma_src_y >> ss_v;
             int cw4 = (bw4 + ss_h) >> ss_h;
             int ch4 = (bh4 + ss_v) >> ss_v;
             int cpw = cw4 << 2;
@@ -4423,6 +4427,17 @@ ivf_decoded:
                 result[(row * info.width + col) * output_channels + 0] = (unsigned char)r;
                 result[(row * info.width + col) * output_channels + 1] = (unsigned char)g;
                 result[(row * info.width + col) * output_channels + 2] = (unsigned char)b;
+                /* Dump raw YUV for big-diff regions */
+                if (row >= 390 && row < 420 && col >= 750 && col < 784) {
+                    static FILE *_dbg_yuv = NULL;
+                    if (!_dbg_yuv) _dbg_yuv = fopen("yuv_dump_ours.txt", "a");
+                    if (_dbg_yuv) { fprintf(_dbg_yuv, "px(%d,%d) Y=%d U=%d V=%d rgb=(%d,%d,%d)\n", col, row, y_val, u_val+128, v_val+128, r, g, b); fflush(_dbg_yuv); }
+                }
+                if (row >= 542 && row < 582 && col >= 870 && col < 884) {
+                    static FILE *_dbg_yuv2 = NULL;
+                    if (!_dbg_yuv2) _dbg_yuv2 = fopen("yuv_dump_ours2.txt", "a");
+                    if (_dbg_yuv2) { fprintf(_dbg_yuv2, "px(%d,%d) Y=%d U=%d V=%d rgb=(%d,%d,%d)\n", col, row, y_val, u_val+128, v_val+128, r, g, b); fflush(_dbg_yuv2); }
+                }
 
                 if (output_channels == 4) {
                     if (info.alpha_plane)
