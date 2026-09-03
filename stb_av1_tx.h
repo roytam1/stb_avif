@@ -347,19 +347,6 @@ static int stbv_av1_decode_inter_txtp(struct stb_av1_msac *msac,
                   &cdf->txtp_inter3[min2 * 2]);
         return stbv_av1_tx_set_inter3[idx];
     } else if (t_dim_min == 2 /* TX_16X16 */) {
-#ifdef STB_AV1_MSB_DEBUG
-        {
-            extern FILE *_msac_dbg_fp;
-            extern int _msac_dbg_bx4, _msac_dbg_by4;
-            if (_msac_dbg_fp) {
-                fprintf(_msac_dbg_fp, "  TXTP_INTER2 bx4=%d by4=%d txtp_inter2[0..10]=",
-                        _msac_dbg_bx4, _msac_dbg_by4);
-                { int _i; for (_i = 0; _i < 11; _i++) fprintf(_msac_dbg_fp, "%s%d", _i?",":"", cdf->txtp_inter2[_i]); }
-                fprintf(_msac_dbg_fp, " rng=%u cnt=%d\n", msac->rng, msac->cnt);
-                fflush(_msac_dbg_fp);
-            }
-        }
-#endif
         idx = stb_av1_msac_symbol(msac, cdf->txtp_inter2, 11);
         return stbv_av1_tx_set_inter2[idx < 11 ? idx : 0];
     } else {

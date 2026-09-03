@@ -2187,8 +2187,7 @@ static void stb_avif_recon_predict_block(struct stb_avif_scalar_recon *rc,
     }
 
     /* Chroma prediction (chroma coords are the luma ones shifted) */
-    if (has_chroma && rc->plane_u && rc->plane_v && uv_mode >= 0 &&
-        bw4c > ss_hor && bh4c > ss_ver)
+    if (has_chroma && rc->plane_u && rc->plane_v && uv_mode >= 0)
     {
         const int cfw4 = (fw4 + ss_hor) >> ss_hor;
         const int cfh4 = (fh4 + ss_ver) >> ss_ver;
@@ -3080,16 +3079,10 @@ static int stb_avif_leaf_cb(struct stb_av1_tile_decoder *td, const struct stb_av
     stbv_av1_leaf_tx_result out;
     int r;
     state = (stbv_av1_leaf_state *)opaque;
-    if (li->by >= 144 && li->by < 160 && li->bx >= 128 && li->bx < 160)
-        fprintf(stderr, "LEAF_CB_ENTER bx=%d by=%d bs=%d rng=%u cnt=%d\n",
-                li->bx, li->by, li->bs, td->msac.rng, td->msac.cnt);
     r = stbv_av1_decode_leaf_syntax(&td->msac, &td->cdf, state,
                                        td->seq, td->frame,
                                        li->bs, li->bx, li->by,
                                        &out, &g_scalar_recon_cb);
-    if (li->by >= 144 && li->by < 160 && li->bx >= 128 && li->bx < 160)
-        fprintf(stderr, "LEAF_CB_DONE bx=%d by=%d r=%d rng=%u cnt=%d\n",
-                li->bx, li->by, r, td->msac.rng, td->msac.cnt);
     return r;
 }
 
@@ -3544,33 +3537,6 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         int w, h, hh, y0, x0;
         w = tc->frame_width;
         h = tc->frame_height;
-#ifdef STB_AV1_MSB_DEBUG
-        if (w == 679) {
-            extern FILE *_msac_dbg_fp;
-            if (_msac_dbg_fp) {
-                fprintf(_msac_dbg_fp, "EDGE_PIX stride=%d w=%d h=%d bd=%d sh=%d\n",
-                        tc->stride_y, w, h, bd, sh);
-                fprintf(_msac_dbg_fp, "  py16 y=0: [%d]=%d [%d]=%d [%d]=%d\n",
-                        676, (int)py16[676], 677, (int)py16[677], 678, (int)py16[678]);
-                fprintf(_msac_dbg_fp, "  py16 y=1: [%d]=%d [%d]=%d [%d]=%d\n",
-                        676, (int)py16[tc->stride_y+676], 677, (int)py16[tc->stride_y+677],
-                        678, (int)py16[tc->stride_y+678]);
-                fprintf(_msac_dbg_fp, "  py16 y=100: [%d]=%d [%d]=%d [%d]=%d\n",
-                        676, (int)py16[100*tc->stride_y+676], 677, (int)py16[100*tc->stride_y+677],
-                        678, (int)py16[100*tc->stride_y+678]);
-                fprintf(_msac_dbg_fp, "  py16 y=700: [%d]=%d [%d]=%d [%d]=%d\n",
-                        676, (int)py16[700*tc->stride_y+676], 677, (int)py16[700*tc->stride_y+677],
-                        678, (int)py16[700*tc->stride_y+678]);
-                if (pu16 && pv16) {
-                    fprintf(_msac_dbg_fp, "  pu16 y=0: [%d]=%d [%d]=%d [%d]=%d\n",
-                            676, (int)pu16[676], 677, (int)pu16[677], 678, (int)pu16[678]);
-                    fprintf(_msac_dbg_fp, "  pv16 y=0: [%d]=%d [%d]=%d [%d]=%d\n",
-                            676, (int)pv16[676], 677, (int)pv16[677], 678, (int)pv16[678]);
-                }
-                fflush(_msac_dbg_fp);
-            }
-        }
-#endif
         for (y0 = 0; y0 < h; y0++)
             for (x0 = 0; x0 < w; x0++) {
                 unsigned v = (unsigned)py16[y0 * tc->stride_y + x0];
