@@ -1652,57 +1652,6 @@ static void stb_av1_parse_frame_header(struct stb_avif_reader *r,
 /* AV1 TILE DECODER - MAIN FRAME DECODE                                      */
 /* -------------------------------------------------------------------------- */
 
-/* Constants */
-#define STB_AV1_MAX_SB_SIZE 128
-#define STB_AV1_MAX_TILE_WIDTH 4096
-#define STB_AV1_MAX_TILE_HEIGHT 4096
-#define STB_AV1_MAX_BLOCK_SIZE 4096
-
-/* Convolutional numbers for transforms */
-#define STB_AV1_TX_4X4 0
-#define STB_AV1_TX_8X8 1
-#define STB_AV1_TX_16X16 2
-#define STB_AV1_TX_32X32 3
-#define STB_AV1_TX_64X64 4
-#define STB_AV1_TX_4X8 5
-#define STB_AV1_TX_8X4 6
-#define STB_AV1_TX_8X16 7
-#define STB_AV1_TX_16X8 8
-#define STB_AV1_TX_16X32 9
-#define STB_AV1_TX_32X16 10
-#define STB_AV1_TX_32X64 11
-#define STB_AV1_TX_64X32 12
-#define STB_AV1_TX_4X16 13
-#define STB_AV1_TX_16X4 14
-#define STB_AV1_TX_8X32 15
-#define STB_AV1_TX_32X8 16
-
-/* Prediction modes */
-#define STB_AV1_DC_PRED 0
-#define STB_AV1_V_PRED 1
-#define STB_AV1_H_PRED 2
-#define STB_AV1_D45_PRED 3
-#define STB_AV1_D135_PRED 4
-#define STB_AV1_D113_PRED 5
-#define STB_AV1_D157_PRED 6
-#define STB_AV1_D203_PRED 7
-#define STB_AV1_D67_PRED 8
-#define STB_AV1_SMOOTH_PRED 9
-#define STB_AV1_SMOOTH_V_PRED 10
-#define STB_AV1_SMOOTH_H_PRED 11
-#define STB_AV1_PAETH_PRED 12
-
-#define STB_AV1_INTRA_MODES 13
-
-/* Partition types (for a given block size) */
-#define STB_AV1_PARTITION_NONE 0
-#define STB_AV1_PARTITION_HORZ 1
-#define STB_AV1_PARTITION_VERT 2
-#define STB_AV1_PARTITION_SPLIT 3
-
-/* Reference array types */
-#define STB_AV1_MAX_REF_FRAMES 8
-
 /* Context for tile decoding */
 struct stb_av1_tile_context {
     struct stb_av1_sequence_header *sh;
@@ -3584,6 +3533,33 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
         int w, h, hh, y0, x0;
         w = tc->frame_width;
         h = tc->frame_height;
+#ifdef STB_AV1_MSB_DEBUG
+        if (w == 679) {
+            extern FILE *_msac_dbg_fp;
+            if (_msac_dbg_fp) {
+                fprintf(_msac_dbg_fp, "EDGE_PIX stride=%d w=%d h=%d bd=%d sh=%d\n",
+                        tc->stride_y, w, h, bd, sh);
+                fprintf(_msac_dbg_fp, "  py16 y=0: [%d]=%d [%d]=%d [%d]=%d\n",
+                        676, (int)py16[676], 677, (int)py16[677], 678, (int)py16[678]);
+                fprintf(_msac_dbg_fp, "  py16 y=1: [%d]=%d [%d]=%d [%d]=%d\n",
+                        676, (int)py16[tc->stride_y+676], 677, (int)py16[tc->stride_y+677],
+                        678, (int)py16[tc->stride_y+678]);
+                fprintf(_msac_dbg_fp, "  py16 y=100: [%d]=%d [%d]=%d [%d]=%d\n",
+                        676, (int)py16[100*tc->stride_y+676], 677, (int)py16[100*tc->stride_y+677],
+                        678, (int)py16[100*tc->stride_y+678]);
+                fprintf(_msac_dbg_fp, "  py16 y=700: [%d]=%d [%d]=%d [%d]=%d\n",
+                        676, (int)py16[700*tc->stride_y+676], 677, (int)py16[700*tc->stride_y+677],
+                        678, (int)py16[700*tc->stride_y+678]);
+                if (pu16 && pv16) {
+                    fprintf(_msac_dbg_fp, "  pu16 y=0: [%d]=%d [%d]=%d [%d]=%d\n",
+                            676, (int)pu16[676], 677, (int)pu16[677], 678, (int)pu16[678]);
+                    fprintf(_msac_dbg_fp, "  pv16 y=0: [%d]=%d [%d]=%d [%d]=%d\n",
+                            676, (int)pv16[676], 677, (int)pv16[677], 678, (int)pv16[678]);
+                }
+                fflush(_msac_dbg_fp);
+            }
+        }
+#endif
         for (y0 = 0; y0 < h; y0++)
             for (x0 = 0; x0 < w; x0++) {
                 unsigned v = (unsigned)py16[y0 * tc->stride_y + x0];
