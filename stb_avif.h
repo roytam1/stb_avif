@@ -1781,18 +1781,24 @@ static int stb_avif_decode_with_dav1d(const unsigned char *av1_data, size_t av1_
         *subsampling_y = 0;
     }
 
-    /* Allocate 8-bit output planes */
-    *y_stride = (*width + 31) & ~31;
-    *y_plane = (unsigned char *)malloc((size_t)(*y_stride * *height));
-    if (!*y_plane) { dav1d_picture_unref(&pic); dav1d_close(&ctx); return 0; }
+    /* Compute chroma dimensions using ceiling division */
+    {
+        int uv_w = (*width + (1 << *subsampling_x) - 1) >> *subsampling_x;
+        int uv_h = (*height + (1 << *subsampling_y) - 1) >> *subsampling_y;
 
-    *u_stride = ((*width >> *subsampling_x) + 31) & ~31;
-    *u_plane = (unsigned char *)malloc((size_t)(*u_stride * (*height >> *subsampling_y)));
-    if (!*u_plane) { free(*y_plane); dav1d_picture_unref(&pic); dav1d_close(&ctx); return 0; }
+        /* Allocate 8-bit output planes */
+        *y_stride = (*width + 31) & ~31;
+        *y_plane = (unsigned char *)malloc((size_t)(*y_stride * *height));
+        if (!*y_plane) { dav1d_picture_unref(&pic); dav1d_close(&ctx); return 0; }
 
-    *v_stride = *u_stride;
-    *v_plane = (unsigned char *)malloc((size_t)(*v_stride * (*height >> *subsampling_y)));
-    if (!*v_plane) { free(*y_plane); free(*u_plane); dav1d_picture_unref(&pic); dav1d_close(&ctx); return 0; }
+        *u_stride = (uv_w + 31) & ~31;
+        *u_plane = (unsigned char *)malloc((size_t)(*u_stride * uv_h));
+        if (!*u_plane) { free(*y_plane); dav1d_picture_unref(&pic); dav1d_close(&ctx); return 0; }
+
+        *v_stride = *u_stride;
+        *v_plane = (unsigned char *)malloc((size_t)(*v_stride * uv_h));
+        if (!*v_plane) { free(*y_plane); free(*u_plane); dav1d_picture_unref(&pic); dav1d_close(&ctx); return 0; }
+    }
 
     /* Copy Y plane (convert from 16-bit/10-bit to 8-bit if needed) */
     for (i = 0; i < *height; i++) {
@@ -1809,8 +1815,8 @@ static int stb_avif_decode_with_dav1d(const unsigned char *av1_data, size_t av1_
 
     /* Copy U plane */
     {
-        int uv_h = *height >> *subsampling_y;
-        int uv_w = *width >> *subsampling_x;
+        int uv_h = (*height + (1 << *subsampling_y) - 1) >> *subsampling_y;
+        int uv_w = (*width + (1 << *subsampling_x) - 1) >> *subsampling_x;
         for (i = 0; i < uv_h; i++) {
             int si;
             for (si = 0; si < uv_w; si++) {
@@ -1826,8 +1832,8 @@ static int stb_avif_decode_with_dav1d(const unsigned char *av1_data, size_t av1_
 
     /* Copy V plane */
     {
-        int uv_h = *height >> *subsampling_y;
-        int uv_w = *width >> *subsampling_x;
+        int uv_h = (*height + (1 << *subsampling_y) - 1) >> *subsampling_y;
+        int uv_w = (*width + (1 << *subsampling_x) - 1) >> *subsampling_x;
         for (i = 0; i < uv_h; i++) {
             int si;
             for (si = 0; si < uv_w; si++) {
