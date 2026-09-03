@@ -115,6 +115,40 @@ static int decode_to_ppm(const char *avif_path, const char *ppm_path, int req_ch
 
     printf("  OK: %dx%d, %d chan -> %s\n", w, h, c, ppm_path);
 
+    /* Dump Y4M (raw YUV420P) for comparison with dav1d output. */
+    {
+        unsigned char *uy = NULL, *uu = NULL, *uv = NULL;
+        int sy = 0, su = 0, sv = 0;
+        stb_avif_last_yuv(&uy, &uu, &uv, &sy, &su, &sv);
+        if (uy && uu && uv) {
+            char y4m_path[1024];
+            FILE *fy;
+            size_t nl = strlen(ppm_path);
+            memcpy(y4m_path, ppm_path, nl + 1);
+            { char *dot = strrchr(y4m_path, '.'); if (dot) strcpy(dot, ".y4m"); else strcat(y4m_path, ".y4m"); }
+            fy = fopen(y4m_path, "wb");
+            if (fy) {
+                int subsample = (su < w) ? 1 : 0;
+                fprintf(fy, "YUV4MPEG2 W%d H%d F1:1 Ip C420\n", w, h);
+                fprintf(fy, "FRAME\n");
+                /* Y plane: w*h bytes, stride may be padded */
+                for (row = 0; row < h; row++)
+                    fwrite(uy + (size_t)row * sy, 1, (size_t)w, fy);
+                /* U plane: (w/2)*(h/2) bytes */
+                for (row = 0; row < (h + 1) / 2; row++)
+                    fwrite(uu + (size_t)row * su, 1, (size_t)((w + 1) / 2), fy);
+                /* V plane: (w/2)*(h/2) bytes */
+                for (row = 0; row < (h + 1) / 2; row++)
+                    fwrite(uv + (size_t)row * sv, 1, (size_t)((w + 1) / 2), fy);
+                fclose(fy);
+                printf("  Y4M: -> %s\n", y4m_path);
+            }
+            stb_avif_free(uy);
+            stb_avif_free(uu);
+            stb_avif_free(uv);
+        }
+    }
+
     stb_avif_free(img);
     free(data);
     return 1;
@@ -151,7 +185,10 @@ int main(int argc, char *argv[])
 "example_avif/hato.profile2.8bpc.yuv422.avif",
 "example_avif/hato.profile2.8bpc.yuv422.monochrome.avif",
 "example_avif/illustration.avif",
+"example_avif/image-settings.avif",
 "example_avif/kimono.avif",
+"example_avif/Tomsk_with_thumbnails.avif",
+"example_avif/victoria-falls-lossless.avif",
 "example_avif/red-at-12-oclock-with-color-profile-10bpc.avif",
 "example_avif/steam_2253100.avif"
     };
