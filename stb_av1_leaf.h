@@ -579,7 +579,7 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
         {
             extern FILE *_msac_dbg_fp;
             extern int _msac_dbg_bx4, _msac_dbg_by4;
-            if (_msac_dbg_fp && (x4 >= 16 && x4 < 20 && y4 >= 64 && y4 < 68) && !is_chroma) {
+            if (_msac_dbg_fp && ((x4 >= 16 && x4 < 20 && y4 >= 64 && y4 < 68) || (x4 >= 192 && x4 < 224 && y4 >= 60 && y4 < 72)) && !is_chroma) {
                 fprintf(_msac_dbg_fp, "  CTX x4=%d y4=%d sctx=%d dc_sign_ctx=%d s=%d txw4=%d txh4=%d above_n=%d left_n=%d res_ctx_above=",
                         x4, y4, sctx, dc_sign_ctx, s, txw4, txh4, rs->above_n, rs->left_n);
                 { int _i; for (_i = 0; _i < txw4 && _i < 8; _i++) fprintf(_msac_dbg_fp, "%s0x%02x", _i?",":"", (unsigned)(x4+_i) < rs->above_n ? rs->above[x4+_i] : 0xFF); }
@@ -633,7 +633,7 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
             return -2;
 #ifdef STB_AV1_MSB_DEBUG
         {
-            int _msac_dbg_roi = (x4 >= 16 && x4 < 20 && y4 >= 64 && y4 < 68);
+            int _msac_dbg_roi = ((x4 >= 16 && x4 < 20 && y4 >= 64 && y4 < 68) || (x4 >= 192 && x4 < 224 && y4 >= 60 && y4 < 72));
             if (_msac_dbg_roi && !is_chroma) {
                 extern FILE *_msac_dbg_fp;
                 if (_msac_dbg_fp) {
@@ -978,6 +978,16 @@ static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
     int i;
     *pred_y = 0;
     *pred_x = 0;
+    /* Search above-right first (dav1d refmvs_find priority). */
+    if (s->above_ibc_mv_y && s->above_ibc_valid && by4 > 0) {
+        int col = bx4 + bw4;
+        if (col >= 0 && (unsigned)col < s->above_ibc_mv_n &&
+            s->above_ibc_valid[col]) {
+            *pred_y = s->above_ibc_mv_y[col];
+            *pred_x = s->above_ibc_mv_x[col];
+            return;
+        }
+    }
     /* Search above row (by4-1): left-to-right across block width (dav1d scan_row). */
     if (s->above_ibc_mv_y && s->above_ibc_valid && by4 > 0) {
         for (i = 0; i < bw4; i++) {
@@ -1101,10 +1111,8 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     {
         extern int _msac_dbg_bx4, _msac_dbg_by4;
         extern FILE *_msac_dbg_fp;
-        int _msac_dbg_roi = (bx4 < 16 && by4 < 16);
-        if (_msac_dbg_roi || (bx4 >= 108 && bx4 < 132 && by4 >= 12 && by4 < 36)
-            || (by4 >= 60 && by4 < 80) || (bx4 >= 0 && bx4 < 24 && by4 >= 16 && by4 < 20)
-            || (bx4 >= 14 && bx4 < 22 && by4 >= 62 && by4 < 68)) {
+        int _msac_dbg_roi = 1;
+        if (_msac_dbg_roi) {
             _msac_dbg_bx4 = bx4;
             _msac_dbg_by4 = by4;
             if (!_msac_dbg_fp) _msac_dbg_fp = fopen("msac_block_debug.txt", "w");
@@ -1160,6 +1168,17 @@ c.recon = recon;
     }
     cbw4 = (bw4 + ss_hor) >> ss_hor;
     cbh4 = (bh4 + ss_ver) >> ss_ver;
+#ifdef STB_AV1_MSB_DEBUG
+    if (bx4 >= 168) {
+        extern FILE *_msac_dbg_fp;
+        if (_msac_dbg_fp) {
+            fprintf(_msac_dbg_fp, "EDGE bx4=%d by4=%d bs=%d bw4_unc=%d bw4=%d bh4=%d fw4=%d\n",
+                    bx4, by4, bs, bw4_unc, bw4, bh4,
+                    frame ? (((int)frame->width[0]+7)&~7)>>2 : 0);
+            fflush(_msac_dbg_fp);
+        }
+    }
+#endif
 
     /* Segment ID decoding (dav1d decode_b segment_id section). */
     seg_id = 0;
