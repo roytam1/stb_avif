@@ -2280,19 +2280,6 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
                                    ? tx0 : 0].h;
     rc->block_skip = skip;
     rc->has_chroma = has_chroma;
-#ifdef STB_AV1_IBC_DEBUG
-    if (by4 == 0 && bx4 >= 156 && rc->plane_y) {
-        static FILE *dbg_fp = NULL;
-        if (!dbg_fp) dbg_fp = fopen("ibc_debug.txt", "a");
-        if (dbg_fp) {
-            fprintf(dbg_fp, "BLK bx4=%d by4=%d bw4=%d bh4=%d intra=%d skip=%d "
-                    "mv=(%d,%d) has_chroma=%d y_mode=%d uv_mode=%d pal_sz_y=%d\n",
-                    bx4, by4, bw4, bh4, intra, skip,
-                    ibc_mv_x, ibc_mv_y, has_chroma, y_mode, uv_mode, pal_sz_y);
-            fflush(dbg_fp);
-        }
-    }
-#endif
     if (!intra) {
         /* IBC block: copy already-reconstructed pixels from the current
          * frame at the reference position indicated by the MV.  MV is in
@@ -2368,29 +2355,6 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
                 }
             }
         }
-#ifdef STB_AV1_IBC_DEBUG
-        if (bx4 >= 168 && by4 < 2 && rc->plane_y) {
-            static FILE *dbg_fp = NULL;
-        if (!dbg_fp) dbg_fp = fopen("ibc_debug.txt", "a");
-            if (dbg_fp) {
-                fprintf(dbg_fp, "BLK bx4=%d by4=%d bw4=%d bh4=%d intra=%d skip=%d "
-                        "mv=(%d,%d) dst=(%d,%d) has_chroma=%d\n",
-                        bx4, by4, bw4, bh4, intra, skip,
-                        ibc_mv_x, ibc_mv_y, dst_px_x, dst_px_y, has_chroma);
-                if (dst_px_x <= 678 && dst_px_x + bw4 * 4 > 678 && rc->plane_y) {
-                    fprintf(dbg_fp, "  LUMA[678,%d]=%d\n", dst_px_y,
-                        (int)rc->plane_y[(size_t)dst_px_y * rc->stride_y + 678]);
-                }
-                if (has_chroma && rc->plane_u) {
-                    int csy = dst_px_y >> ss_v;
-                    fprintf(dbg_fp, "  CHR[339,%d]=U:%d V:%d\n", csy,
-                        (int)rc->plane_u[(size_t)csy * rc->stride_u + 339],
-                        (int)rc->plane_v[(size_t)csy * rc->stride_v + 339]);
-                }
-                fflush(dbg_fp);
-            }
-        }
-#endif
         /* Fill lf_blkid for IBC skip blocks (same logic as intra skip). */
         if (skip && rc->lf_blkid && bw4 > 0 && bh4 > 0) {
             stbv_u32 blkid = ((stbv_u32)bx4 << 16) | (stbv_u32)by4;
@@ -2535,24 +2499,10 @@ static void stb_avif_recon_add_res(struct stb_avif_scalar_recon *rc,
         memcpy(rc->pred + i * w, plane + (py + i) * stride + px,
                (size_t)(cw * sizeof(stbv_u16)));
         memset(rc->pred + i * w + cw, 0,
-               (size_t)((w - cw) * sizeof(stbv_u16)));
+                              (size_t)((w - cw) * sizeof(stbv_u16)));
     }
-#ifdef STB_AV1_MSB_DEBUG
-    {
-        extern int _msac_dbg_bx4, _msac_dbg_by4;
-        extern FILE *_msac_dbg_fp;
-        if (_msac_dbg_fp && px == 64 && py == 256 && tx == 2) {
-            fprintf(_msac_dbg_fp, "  RECON_PRED px=%d py=%d tx=%d txtp=%d eob=%d pred[0..7]=%d,%d,%d,%d,%d,%d,%d,%d\n",
-                    px, py, tx, txtp, eob,
-                    rc->pred[0], rc->pred[1], rc->pred[2], rc->pred[3],
-                    rc->pred[4], rc->pred[5], rc->pred[6], rc->pred[7]);
-            fprintf(_msac_dbg_fp, "  RECON_PRED pred[16..23]=%d,%d,%d,%d,%d,%d,%d,%d\n",
-                    rc->pred[16], rc->pred[17], rc->pred[18], rc->pred[19],
-                    rc->pred[20], rc->pred[21], rc->pred[22], rc->pred[23]);
-            fflush(_msac_dbg_fp);
-        }
-    }
-#endif
+
+
     stbv_av1_inv_txfm_add16(rc->pred, w, cf, eob, tx, txtp, rc->bit_depth);
     for (i = 0; i < ch; i++)
         memcpy(plane + (py + i) * stride + px, rc->pred + i * w,
@@ -2628,30 +2578,7 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
         stb_avif_recon_add_res(rc, rc->plane_y, rc->stride_y,
                                x4 << 2, y4 << 2, rc->frame_w,
                                rc->frame_h + 64,
-                               tx, txtp, eob, cf);
-#ifdef STB_AV1_IBC_DEBUG
-    if (x4 >= 160 && x4 < 176 && y4 == 0) {
-        static FILE *dbg_fp = NULL;
-        if (!dbg_fp) dbg_fp = fopen("ibc_debug.txt", "a");
-        if (dbg_fp) {
-            int _dbg_tw = stbv_av1_tx_dims[tx].w;
-            int _dbg_x0 = x4 << 2;
-            int _dbg_cw = rc->stride_y - _dbg_x0;
-            if (_dbg_cw > _dbg_tw * 4) _dbg_cw = _dbg_tw * 4;
-            fprintf(dbg_fp, "LUMA-TXB x4=%d y4=%d tx=%d txtp=%d eob=%d is_ibc=%d skip=%d stride_y=%d frame_w=%d tw4=%d\n",
-                    x4, y4, tx, txtp, eob, rc->is_ibc, rc->block_skip, rc->stride_y, rc->frame_w, _dbg_tw);
-            fprintf(dbg_fp, "  x0=%d copy_w=%d\n", _dbg_x0, _dbg_cw);
-            fprintf(dbg_fp, "  LUMA[678,%d]=%d  LUMA[676..679,%d]=%d %d %d %d\n",
-                y4, (int)rc->plane_y[(size_t)y4 * rc->stride_y + 678],
-                y4,
-                (int)rc->plane_y[(size_t)y4 * rc->stride_y + 676],
-                (int)rc->plane_y[(size_t)y4 * rc->stride_y + 677],
-                (int)rc->plane_y[(size_t)y4 * rc->stride_y + 678],
-                (int)rc->plane_y[(size_t)y4 * rc->stride_y + 679]);
-            fflush(dbg_fp);
-        }
-    }
-#endif
+                                tx, txtp, eob, cf);
     {
         /* record transform coverage for the deblocking pass */
         if (rc->lf_blkid) {
@@ -2997,22 +2924,6 @@ static void stb_avif_recon_luma_pal(void *ud, const stbv_u8 *idx, int sz, int bw
     h = bh4 << 2;
     cw = rc->frame_w - x; if (cw > w) cw = w;
     ch = rc->frame_h - y; if (ch > h) ch = h;
-#ifdef STB_AV1_IBC_DEBUG
-    if (rc->cur_by4 == 0 && rc->cur_bx4 >= 156) {
-        static FILE *dbg_fp = NULL;
-        if (!dbg_fp) dbg_fp = fopen("ibc_debug.txt", "a");
-        if (dbg_fp) {
-            fprintf(dbg_fp, "LUMA-PAL x=%d y=%d w=%d h=%d cw=%d ch=%d sz=%d\n",
-                    x, y, w, h, cw, ch, sz);
-            fprintf(dbg_fp, "  pal[]=");
-            for (i = 0; i < sz; i++) fprintf(dbg_fp, "%d ", (int)pal[i]);
-            fprintf(dbg_fp, "\n  idx[0..7]=");
-            for (i = 0; i < 8 && i < w * h; i++) fprintf(dbg_fp, "%d ", (int)idx[i]);
-            fprintf(dbg_fp, "\n  idx[6] idx[7]=%d %d\n", (int)idx[6], (int)idx[7]);
-            fflush(dbg_fp);
-        }
-    }
-#endif
     for (i = 0; i < ch; i++)
         for (j = 0; j < cw; j++) {
             int id = idx[i * w + j];
@@ -3537,7 +3448,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                             (int)fh->cdef.damping);
     }
 
-        /* Loop restoration filtering (after CDEF, before 8-bit conversion). */
+    /* Loop restoration filtering (after CDEF, before 8-bit conversion). */
     if (!r && lr_mask_ok && stream->seq.restoration && !stream->frame.allow_intrabc) {
         stb_av1_lr_frame(py16, pu16, pv16,
                          tc->stride_y, tc->stride_u, tc->stride_v,
@@ -4417,17 +4328,6 @@ ivf_decoded:
                 result[(row * info.width + col) * output_channels + 0] = (unsigned char)r;
                 result[(row * info.width + col) * output_channels + 1] = (unsigned char)g;
                 result[(row * info.width + col) * output_channels + 2] = (unsigned char)b;
-                /* Dump raw YUV for big-diff regions */
-                if (row >= 390 && row < 420 && col >= 750 && col < 784) {
-                    static FILE *_dbg_yuv = NULL;
-                    if (!_dbg_yuv) _dbg_yuv = fopen("yuv_dump_ours.txt", "a");
-                    if (_dbg_yuv) { fprintf(_dbg_yuv, "px(%d,%d) Y=%d U=%d V=%d rgb=(%d,%d,%d)\n", col, row, y_val, u_val+128, v_val+128, r, g, b); fflush(_dbg_yuv); }
-                }
-                if (row >= 542 && row < 582 && col >= 870 && col < 884) {
-                    static FILE *_dbg_yuv2 = NULL;
-                    if (!_dbg_yuv2) _dbg_yuv2 = fopen("yuv_dump_ours2.txt", "a");
-                    if (_dbg_yuv2) { fprintf(_dbg_yuv2, "px(%d,%d) Y=%d U=%d V=%d rgb=(%d,%d,%d)\n", col, row, y_val, u_val+128, v_val+128, r, g, b); fflush(_dbg_yuv2); }
-                }
 
                 if (output_channels == 4) {
                     if (info.alpha_plane)
