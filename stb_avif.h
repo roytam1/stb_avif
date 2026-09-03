@@ -440,6 +440,7 @@ struct stb_avif_avif_info {
     /* Compressed AV1 data */
     const unsigned char *av1_data;
     size_t av1_size;
+    void *ivf_concat_buf; /* non-NULL if av1_data was allocated for IVF concatenation */
 
     /* Output buffer */
     unsigned char *output;
@@ -3709,8 +3710,9 @@ unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
     /* Detect IVF container (starts with "DKIF") */
     if (data[0] == 'D' && data[1] == 'K' && data[2] == 'I' && data[3] == 'F') {
         unsigned hdr_len;
-        unsigned frame_size;
         int ivf_w, ivf_h;
+        unsigned pos;
+        size_t total_av1 = 0;
         if (len < 32) goto error_exit;
         hdr_len = (unsigned)data[6] | ((unsigned)data[7] << 8);
         ivf_w = (int)((unsigned)data[12] | ((unsigned)data[13] << 8));
@@ -3718,13 +3720,34 @@ unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
         if ((int)hdr_len > len || ivf_w <= 0 || ivf_h <= 0) goto error_exit;
         info.width = ivf_w;
         info.height = ivf_h;
-        /* Read first frame header (12 bytes after IVF header) */
-        if ((int)(hdr_len + 12) > len) goto error_exit;
-        frame_size = (unsigned)data[hdr_len] | ((unsigned)data[hdr_len+1] << 8) |
-                     ((unsigned)data[hdr_len+2] << 16) | ((unsigned)data[hdr_len+3] << 24);
-        if ((int)(hdr_len + 12 + (int)frame_size) > len || frame_size == 0) goto error_exit;
-        info.av1_data = data + hdr_len + 12;
-        info.av1_size = frame_size;
+        /* Concatenate ALL frame payloads into a single AV1 bitstream */
+        pos = hdr_len;
+        while ((int)(pos + 12) <= len) {
+            unsigned fsz = (unsigned)data[pos] | ((unsigned)data[pos+1] << 8) |
+                           ((unsigned)data[pos+2] << 16) | ((unsigned)data[pos+3] << 24);
+            if (fsz == 0 || (int)(pos + 12 + fsz) > len) break;
+            total_av1 += fsz;
+            pos += 12 + fsz;
+        }
+        if (total_av1 == 0) goto error_exit;
+        {
+            unsigned char *av1_buf = (unsigned char *)stb_avif_calloc(1, total_av1);
+            unsigned char *dst;
+            if (!av1_buf) goto error_exit;
+            dst = av1_buf;
+            pos = hdr_len;
+            while ((int)(pos + 12) <= len) {
+                unsigned fsz = (unsigned)data[pos] | ((unsigned)data[pos+1] << 8) |
+                               ((unsigned)data[pos+2] << 16) | ((unsigned)data[pos+3] << 24);
+                if (fsz == 0 || (int)(pos + 12 + fsz) > len) break;
+                memcpy(dst, data + pos + 12, fsz);
+                dst += fsz;
+                pos += 12 + fsz;
+            }
+            info.av1_data = av1_buf;
+            info.av1_size = total_av1;
+            info.ivf_concat_buf = av1_buf;
+        }
         info.input = data;
         info.input_len = len;
         goto ivf_decoded;
@@ -4421,6 +4444,7 @@ ivf_decoded:
     *channels = output_channels;
 
     /* Cleanup */
+    if (info.ivf_concat_buf) stb_avif_free_internal(info.ivf_concat_buf);
     if (info.plane_y) stb_avif_free_internal(info.plane_y);
     if (info.plane_u) stb_avif_free_internal(info.plane_u);
     if (info.plane_v) stb_avif_free_internal(info.plane_v);
@@ -4432,6 +4456,7 @@ ivf_decoded:
     return result;
 
 error_exit:
+    if (info.ivf_concat_buf) stb_avif_free_internal(info.ivf_concat_buf);
     if (info.plane_y) stb_avif_free_internal(info.plane_y);
     if (info.plane_u) stb_avif_free_internal(info.plane_u);
     if (info.plane_v) stb_avif_free_internal(info.plane_v);
