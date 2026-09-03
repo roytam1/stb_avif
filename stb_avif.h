@@ -94,6 +94,12 @@ void stb_avif_free(void *ptr);
 /* Returns a string describing the last error. */
 static unsigned char *stb_avif_g_last_alpha;
 static int stb_avif_g_last_alpha_stride;
+static unsigned char *stb_avif_g_last_yuv_y;
+static unsigned char *stb_avif_g_last_yuv_u;
+static unsigned char *stb_avif_g_last_yuv_v;
+static int stb_avif_g_last_yuv_stride_y;
+static int stb_avif_g_last_yuv_stride_u;
+static int stb_avif_g_last_yuv_stride_v;
 
 /* Returns the 8-bit alpha plane (w-strided) decoded from the AVIF
  * auxiliary alpha item of the most recent load, or NULL. */
@@ -101,6 +107,19 @@ static unsigned char *stb_avif_last_alpha(int *stride)
 {
     if (stride) *stride = stb_avif_g_last_alpha_stride;
     return stb_avif_g_last_alpha;
+}
+
+/* Returns the 8-bit YUV planes from the most recent load, or NULL.
+ * Caller must free *y, *u, *v with stb_avif_free() when done. */
+static void stb_avif_last_yuv(unsigned char **y, unsigned char **u, unsigned char **v,
+                               int *stride_y, int *stride_u, int *stride_v)
+{
+    if (y) *y = stb_avif_g_last_yuv_y;
+    if (u) *u = stb_avif_g_last_yuv_u;
+    if (v) *v = stb_avif_g_last_yuv_v;
+    if (stride_y) *stride_y = stb_avif_g_last_yuv_stride_y;
+    if (stride_u) *stride_u = stb_avif_g_last_yuv_stride_u;
+    if (stride_v) *stride_v = stb_avif_g_last_yuv_stride_v;
 }
 
 const char *stb_avif_failure_reason(void);
@@ -3660,6 +3679,11 @@ unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
     unsigned char *result = NULL;
     int output_channels;
 
+    /* Free YUV planes from previous load. */
+    if (stb_avif_g_last_yuv_y) { stb_avif_free_internal(stb_avif_g_last_yuv_y); stb_avif_g_last_yuv_y = NULL; }
+    if (stb_avif_g_last_yuv_u) { stb_avif_free_internal(stb_avif_g_last_yuv_u); stb_avif_g_last_yuv_u = NULL; }
+    if (stb_avif_g_last_yuv_v) { stb_avif_free_internal(stb_avif_g_last_yuv_v); stb_avif_g_last_yuv_v = NULL; }
+
     /* Initialize info struct */
     memset(&info, 0, sizeof(info));
     info.bit_depth = 8;
@@ -4418,6 +4442,17 @@ ivf_decoded:
 
     stb_avif_g_last_alpha = info.alpha_plane;
     stb_avif_g_last_alpha_stride = info.alpha_plane ? info.alpha_stride : 0;
+
+    /* Keep YUV planes alive for external access via stb_avif_last_yuv(). */
+    stb_avif_g_last_yuv_y = info.plane_y;
+    stb_avif_g_last_yuv_u = info.plane_u;
+    stb_avif_g_last_yuv_v = info.plane_v;
+    stb_avif_g_last_yuv_stride_y = info.stride_y;
+    stb_avif_g_last_yuv_stride_u = info.stride_u;
+    stb_avif_g_last_yuv_stride_v = info.stride_v;
+    info.plane_y = NULL;  /* prevent free — ownership transferred to global */
+    info.plane_u = NULL;
+    info.plane_v = NULL;
 
     /* Set output parameters */
     *x = info.width;
