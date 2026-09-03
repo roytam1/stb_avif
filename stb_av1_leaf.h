@@ -477,7 +477,7 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
         max = stbv_av1_tx_dims[tx].max;
         if (c->lossless)
             txtp = STBV_AV1_TX_WHT_WHT;
-        else if (max + 1 >= STBV_AV1_TX_64X64) /* max + intra >= TX_64X64 */
+        else if (max + c->is_intra >= STBV_AV1_TX_64X64) /* max + intra >= TX_64X64 */
             txtp = STBV_AV1_TX_DCT_DCT;
         else if (is_chroma) {
             if (c->is_intra)
@@ -1111,14 +1111,14 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     {
         extern int _msac_dbg_bx4, _msac_dbg_by4;
         extern FILE *_msac_dbg_fp;
-        int _msac_dbg_roi = 1;
+        int _msac_dbg_roi = (bx4 >= 192 && bx4 < 260 && by4 >= 60 && by4 < 100);
         if (_msac_dbg_roi) {
             _msac_dbg_bx4 = bx4;
             _msac_dbg_by4 = by4;
-            if (!_msac_dbg_fp) _msac_dbg_fp = fopen("msac_block_debug.txt", "w");
+            if (!_msac_dbg_fp) _msac_dbg_fp = fopen("msac_block_debug.txt", "a");
             if (_msac_dbg_fp) {
-                fprintf(_msac_dbg_fp, "D_ENTER bx4=%d by4=%d bs=%d rng=%u cnt=%d dif=%llu\n",
-                        bx4, by4, bs, msac->rng, msac->cnt, (unsigned long long)msac->dif);
+                fprintf(_msac_dbg_fp, "D_ENTER bx4=%d by4=%d bs=%d rng=%u cnt=%d dif=%zu\n",
+                        bx4, by4, bs, msac->rng, msac->cnt, msac->dif);
                 fflush(_msac_dbg_fp);
             }
         }
@@ -1743,6 +1743,21 @@ c.recon = recon;
                         int ytxh = stbv_av1_tx_dims[max_tx].h;
 #ifdef STB_AV1_MSB_DEBUG
                         {
+                            int _msac_dbg_roi = (bx4 >= 108 && bx4 < 132 && by4 >= 12 && by4 < 36)
+                                             || (by4 >= 60 && by4 < 80);
+                            if (_msac_dbg_roi) {
+                                extern FILE *_msac_dbg_fp;
+                                if (_msac_dbg_fp) {
+                                    fprintf(_msac_dbg_fp, "  IBC_TX_ENTER bx4=%d by4=%d max_tx=%d max_field=%d txfm_mode=%d rng=%u cnt=%d dif=%llu\n",
+                                            bx4, by4, max_tx, (int)stbv_av1_tx_dims[max_tx].max, frame ? frame->txfm_mode : -1,
+                                            msac->rng, msac->cnt, (unsigned long long)msac->dif);
+                                    fflush(_msac_dbg_fp);
+                                }
+                            }
+                        }
+#endif
+#ifdef STB_AV1_MSB_DEBUG
+                        {
                             extern FILE *_msac_dbg_fp;
                             if (_msac_dbg_fp && bx4==136 && by4==152) {
                                 fprintf(_msac_dbg_fp, "  PRE_VARTX bx4=%d by4=%d max_tx=%d txw4=%d txh4=%d qy4=%d qx4=%d qh4=%d qw4=%d txfm_mode=%d rng=%u cnt=%d dif=%llu\n",
@@ -1758,6 +1773,16 @@ c.recon = recon;
                             /* Variable TX: recursively read split bools from MSAC
                              * and decode coefficients at each leaf. */
                             int ty4, tx4;
+#ifdef STB_AV1_MSB_DEBUG
+                            if (bx4 >= 196 && bx4 < 210 && by4 >= 68 && by4 < 84) {
+                                FILE *_fp = fopen("tx_split_debug.txt", "a");
+                                if (_fp) {
+                                    fprintf(_fp, "IBC_VARTX_ENTER bx4=%d by4=%d max_tx=%d ytxw=%d ytxh=%d rng=%u cnt=%d dif=%llu\n",
+                                            bx4, by4, max_tx, ytxw, ytxh, msac->rng, msac->cnt, (unsigned long long)msac->dif);
+                                    fclose(_fp);
+                                }
+                            }
+#endif
                             for (ty4 = qy4; ty4 < qy4 + qh4; ty4 += ytxh) {
                                 for (tx4 = qx4; tx4 < qx4 + qw4; tx4 += ytxw) {
                                     r = stbv_av1_decode_tx_tree(msac, cdf,
@@ -1772,6 +1797,11 @@ c.recon = recon;
                             {
                                 extern FILE *_msac_dbg_fp;
                                 if (_msac_dbg_fp && bx4==136 && by4==152) {
+                                    fprintf(_msac_dbg_fp, "  POST_VARTX_LUMA bx4=%d by4=%d rng=%u cnt=%d dif=%llu\n",
+                                            bx4, by4, msac->rng, msac->cnt, (unsigned long long)msac->dif);
+                                    fflush(_msac_dbg_fp);
+                                }
+                                if (_msac_dbg_fp && bx4==198 && by4==72) {
                                     fprintf(_msac_dbg_fp, "  POST_VARTX_LUMA bx4=%d by4=%d rng=%u cnt=%d dif=%llu\n",
                                             bx4, by4, msac->rng, msac->cnt, (unsigned long long)msac->dif);
                                     fflush(_msac_dbg_fp);
