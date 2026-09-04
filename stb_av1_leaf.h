@@ -1385,7 +1385,8 @@ c.recon = recon;
             }
             if (has_chroma && intra.uv_mode == STBV_AV1_INTRA_DC) {
                 int pal_ctx = state->pal_sz_y > 0;
-                if (stb_av1_msac_bool_adapt(msac, cdf->pal_uv + pal_ctx * 2)) {
+                int pal_bool = stb_av1_msac_bool_adapt(msac, cdf->pal_uv + pal_ctx * 2);
+                if (pal_bool) {
                     if (stbv_av1_palette_read_plane(msac, cdf, state, 1, sz_ctx,
                                                     bx4, by4, bpc, state->pal_u,
                                                     &state->pal_sz_uv))

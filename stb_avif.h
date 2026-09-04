@@ -2553,10 +2553,6 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
      * plane by block_info, so skip intra prediction. */
     if (!rc->pal_y && !rc->is_ibc) {
         stb_avif_recon_predict_txb_luma(rc, x4, y4, tx);
-        /* dav1d writes intra prediction directly into the plane, then
-         * itxfm_add adds residual on top.  Our predict writes to rc->pred
-         * so we must copy it into the plane before add_res overwrites
-         * rc->pred with (stale) plane data. */
         {
             int _w = stbv_av1_tx_dims[tx].w << 2;
             int _h = stbv_av1_tx_dims[tx].h << 2;
@@ -2958,8 +2954,8 @@ static void stb_avif_recon_chroma_pal(void *ud, int pl, const stbv_u8 *idx, int 
     int stride;
     rc = (struct stb_avif_scalar_recon *)ud;
     if (!rc) return;
-    x = (rc->cur_bx4 << 2) >> rc->ss_hor;
-    y = (rc->cur_by4 << 2) >> rc->ss_ver;
+    x = (rc->cur_bx4 >> rc->ss_hor) << 2;
+    y = (rc->cur_by4 >> rc->ss_ver) << 2;
     w = cbw4 << 2;
     h = cbh4 << 2;
     plane = pl == 0 ? rc->plane_u : rc->plane_v;
@@ -3331,6 +3327,19 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     g_scalar_recon_cb.luma_pal = stb_avif_recon_luma_pal;
     g_scalar_recon_cb.chroma_pal = stb_avif_recon_chroma_pal;
 
+    fprintf(stderr, "FRAMEHDR: w=%d h=%d type=%d show=%d allow_ibc=%d "
+            "superres=%d cdf_upd=%d yac=%d dq_present=%d "
+            "all_lossless=%d coded_w=%d cdef_used=%d\n",
+            stream->frame.width[0], (int)stream->frame.height,
+            stream->frame.frame_type, stream->frame.show_frame,
+            stream->frame.allow_intrabc,
+            stream->frame.superres_enabled, !stream->frame.disable_cdf_update,
+            (int)stream->frame.quant.yac,
+            stream->frame.delta_q_present,
+            stream->frame.all_lossless,
+            tc->frame_width,
+            stream->seq.cdef);
+
     memset(&td, 0, sizeof(td));
     td.seq = &stream->seq;
     td.frame = &stream->frame;
@@ -3426,6 +3435,17 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     }
 #endif
 
+    /* Dump pre-CDEF chroma (u16) for isolating CDEF vs reconstruction diffs. */
+    {
+        int _uw = (tc->frame_width + 1) / 2;
+        int _uh = (tc->frame_height + 1) / 2;
+        int _r;
+        FILE *_fu = fopen("debug_precdef_u.bin", "wb");
+        FILE *_fv = fopen("debug_precdef_v.bin", "wb");
+        if (_fu) { for (_r = 0; _r < _uh; _r++) fwrite(&pu16[_r * tc->stride_u], 2, (size_t)_uw, _fu); fclose(_fu); }
+        if (_fv) { for (_r = 0; _r < _uh; _r++) fwrite(&pv16[_r * tc->stride_v], 2, (size_t)_uw, _fv); fclose(_fv); }
+    }
+
     /* CDEF filtering (after deblocking, before loop restoration). */
     if (!r && stream->seq.cdef && cdef_idx_grid) {
         const struct stb_av1_framehdr *fh = &stream->frame;
@@ -3445,7 +3465,18 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                            cdef_idx_grid, cdef_grid_stride,
                            y_pri_arr, y_sec_arr,
                            uv_pri_arr, uv_sec_arr,
-                            (int)fh->cdef.damping);
+                               (int)fh->cdef.damping);
+    }
+
+    /* Dump post-CDEF chroma (u16) for isolating CDEF vs LR diffs. */
+    {
+        int _uw = (tc->frame_width + 1) / 2;
+        int _uh = (tc->frame_height + 1) / 2;
+        int _r;
+        FILE *_fu = fopen("debug_postcdef_u.bin", "wb");
+        FILE *_fv = fopen("debug_postcdef_v.bin", "wb");
+        if (_fu) { for (_r = 0; _r < _uh; _r++) fwrite(&pu16[_r * tc->stride_u], 2, (size_t)_uw, _fu); fclose(_fu); }
+        if (_fv) { for (_r = 0; _r < _uh; _r++) fwrite(&pv16[_r * tc->stride_v], 2, (size_t)_uw, _fv); fclose(_fv); }
     }
 
     /* Loop restoration filtering (after CDEF, before 8-bit conversion). */
@@ -3456,7 +3487,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                          stream->seq.ss_hor ? 1 : 0,
                          (stream->seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0,
                          8 + stream->seq.hbd * 2,
-                          &lr_mask);
+                           &lr_mask);
     }
 
     /* Convert internal u16 planes to the caller's 8-bit planes.
