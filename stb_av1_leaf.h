@@ -1691,7 +1691,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
             src_bottom = src_top  + bh4 * 4;
 
             /* Single-tile: border_right = frame width rounded up to bw4 */
-            border_right = ((fw + 3 + (bw4 * 4 - 1)) & ~(bw4 * 4 - 1));
+            border_right = ((fw + (bw4 * 4 - 1)) & ~(bw4 * 4 - 1));
 
             /* Clip to left/right tile boundary */
             if (src_left < border_left) {
