@@ -3044,6 +3044,7 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     stbv_u8 *above_ibc_valid = 0;
     int *left_ibc_mv_y = 0, *left_ibc_mv_x = 0;
     stbv_u8 *left_ibc_valid = 0;
+    stbv_refmvs_cell *refmvs_r = 0;
     int cframe_w8 = 0, cframe_h8 = 0;
     int i, j, h2, w2;
     stream = (struct stb_av1_internal_stream *)stb_avif_calloc(1, sizeof(*stream));
@@ -3153,6 +3154,9 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     left_ibc_mv_y = (int*)stb_avif_calloc(frame_h4, sizeof(int));
     left_ibc_mv_x = (int*)stb_avif_calloc(frame_h4, sizeof(int));
     left_ibc_valid = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
+    /* 2D refmvs block array for dav1d-compatible IBC MV prediction. */
+    refmvs_r = (stbv_refmvs_cell*)stb_avif_calloc(
+        (size_t)frame_h4 * frame_w4, sizeof(stbv_refmvs_cell));
     if (!above_mode || !left_mode || !above_tx || !left_tx || !above_res ||
         !left_res || !above_cre0 || !above_cre1 || !left_cre0 || !left_cre1 ||
         !above_skip || !left_skip || !above_pal_sz || !left_pal_sz ||
@@ -3218,6 +3222,10 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     arrays.left_ibc_mv_x = left_ibc_mv_x;
     arrays.left_ibc_valid = left_ibc_valid;
     arrays.left_ibc_mv_n = frame_h4;
+    arrays.refmvs_r = (stbv_u8*)refmvs_r;
+    arrays.refmvs_stride = frame_w4;
+    arrays.refmvs_h4 = frame_h4;
+    arrays.refmvs_w4 = frame_w4;
     stbv_av1_leaf_state_init(&state, &arrays);
     state.cdef_idx_grid = NULL;
     state.cdef_grid_stride = 0;
@@ -3504,6 +3512,7 @@ oom16:
     stb_avif_free_internal(above_ibc_valid);
     stb_avif_free_internal(left_ibc_mv_y); stb_avif_free_internal(left_ibc_mv_x);
     stb_avif_free_internal(left_ibc_valid);
+    stb_avif_free_internal(refmvs_r);
     stb_avif_free_internal(above_pal_sz); stb_avif_free_internal(left_pal_sz);
     stb_avif_free_internal(above_pal_uv);
     stb_avif_free_internal(above_uvmode);
