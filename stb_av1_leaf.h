@@ -1063,64 +1063,50 @@ static int stbv_refmvs_scan_row(
     return n_rows;
 }
 
-/* Scan a column of blocks to the left of the current block (dav1d scan_col).
- * bx4_col = column index of the left neighbor (bx4-1).
- * Returns the number of columns actually scanned. */
-static int stbv_refmvs_scan_col(
-    const stbv_refmvs_cell *r, unsigned int stride, unsigned int rw4,
-    int mvstack_mv_y[8], int mvstack_mv_x[8], int mvstack_w[8], int *cnt,
-    int bx4_col, int by4, int bh4, int max_cols, signed char filter_ref)
+/* Scan a single column vertically (matching dav1d scan_col).
+ * bx4_col = column index to scan.
+ * start_y = starting row (by4 for primary, by4|1 for secondary).
+ * h4 = scan depth (imin(bh4, 16)).
+ * Returns weight>>1 for single-block case, 1 for loop case. */
+static int stbv_refmvs_scan_col1(
+    const stbv_refmvs_cell *r, unsigned int stride,
+    int mvstack_mv_y[8], int mvstack_mv_x[8], int mvstack_w[8],
+    int *cnt, int *have_col_mvs,
+    int bx4_col, int start_y, int bh4, int h4, int max_cols, int step,
+    signed char filter_ref)
 {
-    int n_cols = 0;
-    int col;
-    for (col = 0; col <= max_cols; col++) {
-        int check_x = bx4_col - col * 2 + col;  /* primary then 8x8-aligned */
-        if (check_x < 0) break;
-        {
-            int y;
-            int start_y = (col >= 1) ? (by4 | 1) : by4;
-            /* dav1d step: 4 for bh4>=16, 1 otherwise */
-            int step = bh4 >= 16 ? 4 : 1;
-            /* dav1d h4 = imin(bh4, 16) - caps scan depth at 16 */
-            int h4 = bh4 < 16 ? bh4 : 16;
-            y = start_y;
-            /* First block: compute initial len same as dav1d
-             * len = imax(step, imin(bh4, cand_bh4)) */
-            {
-                const stbv_refmvs_cell *cand = &r[y * (int)stride + check_x];
-                int cand_bh4 = stbv_av1_block_dimensions[cand->bs][1];
-                int len = step > cand_bh4 ? step : (bh4 < cand_bh4 ? bh4 : cand_bh4);
-                if (bh4 <= cand_bh4) {
-                    int cand_bw4 = stbv_av1_block_dimensions[cand->bs][0];
-                    int maxc = max_cols + 2;
-                    int weight = bh4 == 1 ? 2 : (cand_bw4 > maxc ? maxc : (cand_bw4 < 2 ? 2 : cand_bw4));
-                if (cand->valid && (filter_ref < 0 || cand->ref == filter_ref)) {
-                        stbv_refmvs_add_candidate(mvstack_mv_y, mvstack_mv_x, mvstack_w,
-                                                  cnt, cand->mv_y, cand->mv_x,
-                                                  len * weight);
-                    }
-                    n_cols++;
-                    return n_cols;
-                }
-                /* Loop: advance by len (matching dav1d scan_col) */
-                for (;;) {
-                    if (cand->valid && (filter_ref < 0 || cand->ref == filter_ref)) {
-                        int cweight = len * 2;
-                        stbv_refmvs_add_candidate(mvstack_mv_y, mvstack_mv_x, mvstack_w,
-                                                  cnt, cand->mv_y, cand->mv_x,
-                                                  cweight);
-                    }
-                    y += len;
-                    if (y >= by4 + h4) break;
-                    cand = &r[y * (int)stride + check_x];
-                    cand_bh4 = stbv_av1_block_dimensions[cand->bs][1];
-                    len = step > cand_bh4 ? step : cand_bh4;
-                }
-            }
+    const stbv_refmvs_cell *cand = &r[start_y * (int)stride + bx4_col];
+    int cand_bh4 = stbv_av1_block_dimensions[cand->bs][1];
+    int len = step > cand_bh4 ? step : (bh4 < cand_bh4 ? bh4 : cand_bh4);
+
+    if (bh4 <= cand_bh4) {
+        int cand_bw4 = stbv_av1_block_dimensions[cand->bs][0];
+        int weight = bh4 == 1 ? 2 :
+                     (cand_bw4 > 2 * max_cols ? 2 * max_cols :
+                      (cand_bw4 < 2 ? 2 : cand_bw4));
+        if (cand->valid && (filter_ref < 0 || cand->ref == filter_ref)) {
+            stbv_refmvs_add_candidate(mvstack_mv_y, mvstack_mv_x, mvstack_w,
+                                       cnt, cand->mv_y, cand->mv_x,
+                                       len * weight);
+            *have_col_mvs = 1;
         }
-        n_cols++;
+        return weight >> 1;
     }
-    return n_cols;
+
+    for (int y = 0;;) {
+        if (cand->valid && (filter_ref < 0 || cand->ref == filter_ref)) {
+            stbv_refmvs_add_candidate(mvstack_mv_y, mvstack_mv_x, mvstack_w,
+                                       cnt, cand->mv_y, cand->mv_x,
+                                       len * 2);
+            *have_col_mvs = 1;
+        }
+        y += len;
+        if (y >= h4) break;
+        cand = &r[(start_y + y) * (int)stride + bx4_col];
+        cand_bh4 = stbv_av1_block_dimensions[cand->bs][1];
+        len = step > cand_bh4 ? step : cand_bh4;
+    }
+    return 1;
 }
 
 /* Splat MV into the 2D refmvs array for all 4x4 positions covered by the
@@ -1190,6 +1176,26 @@ static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
       }
     }
 
+    /* Dump refmvs_r around first diff location for IBC block at (278,24) */
+    { static int logged2 = 0;
+      if (!logged2 && bx4 == 278 && by4 == 24) { logged2 = 1;
+        fprintf(stderr, "REFMVS_DUMP at (278,24) bw4=%d bh4=%d:\n", bw4, bh4);
+        /* Dump rows 16-24 around the block, columns 272-288 */
+        for (int dy = 16; dy <= 24; dy++) {
+            fprintf(stderr, "  ROW %d:\n", dy);
+            for (int dx = 272; dx <= 288; dx++) {
+                if ((unsigned)dx < s->refmvs_w4 && (unsigned)dy < s->refmvs_h4) {
+                    const stbv_refmvs_cell *c = &s->refmvs_r[dy * (int)s->refmvs_stride + dx];
+                    if (c->valid) {
+                        fprintf(stderr, "    r[%d][%d] v=%d ref=%d bs=%d mv=(%d,%d)\n",
+                                dy, dx, c->valid, c->ref, c->bs, c->mv_y, c->mv_x);
+                    }
+                }
+            }
+        }
+      }
+    }
+
     /* max_rows/max_cols: same formula as dav1d refmvs_find.
      * max_rows = imin((by4 + 1) >> 1, 2 + (bh4 > 1)) */
     max_rows = ((by4 + 1) >> 1);
@@ -1206,13 +1212,27 @@ static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
         have_row_mvs = n_rows > 0 ? 1 : 0;
     }
 
-    /* 2. Scan left column. IBC ref=0 (current frame). */
+    /* 2. Scan left column. IBC ref=0 (current frame).
+     * Match dav1d: primary column bx4-1, secondary (bx4-3)|1, (bx4-5)|1. */
     if (bx4 > 0) {
-        n_cols = stbv_refmvs_scan_col(s->refmvs_r, s->refmvs_stride,
-                                       s->refmvs_w4,
-                                       mvstack_mv_y, mvstack_mv_x, mvstack_w,
-                                       &cnt, bx4 - 1, by4, bh4, max_cols, 0);
-        have_col_mvs = n_cols > 0 ? 1 : 0;
+        int h4 = bh4 < 16 ? bh4 : 16;
+        /* Primary: column bx4-1, start at by4, step = bh4>=16 ? 4 : 1 */
+        n_cols = stbv_refmvs_scan_col1(s->refmvs_r, s->refmvs_stride,
+                                        mvstack_mv_y, mvstack_mv_x, mvstack_w,
+                                        &cnt, &have_col_mvs,
+                                        bx4 - 1, by4, bh4, h4,
+                                        max_cols, bh4 >= 16 ? 4 : 1, 0);
+        /* Secondary columns (8x8-aligned): (bx4 - n*2 + 1) | 1, start at by4|1 */
+        for (int n = 2; n <= 3; n++) {
+            if ((unsigned)n > (unsigned)n_cols && (unsigned)n <= (unsigned)max_cols) {
+                n_cols += stbv_refmvs_scan_col1(s->refmvs_r, s->refmvs_stride,
+                                                 mvstack_mv_y, mvstack_mv_x, mvstack_w,
+                                                 &cnt, &have_col_mvs,
+                                                 (bx4 - n * 2 + 1) | 1, by4 | 1,
+                                                 bh4, h4,
+                                                 1 + max_cols - n, bh4 >= 16 ? 4 : 2, 0);
+            }
+        }
     }
 
     /* 3. Above-right: add as spatial candidate with weight=4.
@@ -1280,14 +1300,12 @@ static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
     if (cnt > 0) {
         *pred_y = mvstack_mv_y[0];
         *pred_x = mvstack_mv_x[0];
-        if ((bx4 == 448 && by4 == 0) || (bx4 == 416 && by4 == 0) ||
-            (bx4 == 480 && by4 == 0) || (bx4 == 384 && by4 == 0) ||
-            (bx4 == 352 && by4 == 0) ||
-            (bx4 >= 460 && bx4 <= 465 && by4 >= 17 && by4 <= 19)) {
-            fprintf(stderr, "REFMVS bx4=%d by4=%d bw4=%d bh4=%d cnt=%d best=(%d,%d) w=%d\n",
-                    bx4, by4, bw4, bh4, cnt, mvstack_mv_y[0], mvstack_mv_x[0], mvstack_w[0]);
-            { int k; for (k = 1; k < cnt; k++)
-                fprintf(stderr, "  cand[%d] = (%d,%d) w=%d\n", k, mvstack_mv_y[k], mvstack_mv_x[k], mvstack_w[k]); }
+        /* Trace candidates for block at (278,24) - first diff location */
+        if (bx4 == 278 && by4 == 24) {
+            fprintf(stderr, "REFMVS bx4=%d by4=%d bw4=%d bh4=%d cnt=%d n_rows=%d n_cols=%d best=(%d,%d) w=%d\n",
+                    bx4, by4, bw4, bh4, cnt, n_rows, n_cols, mvstack_mv_y[0], mvstack_mv_x[0], mvstack_w[0]);
+            { int k; for (k = 0; k < cnt; k++)
+                fprintf(stderr, "  cand[%d] = mv=(%d,%d) w=%d\n", k, mvstack_mv_y[k], mvstack_mv_x[k], mvstack_w[k]); }
         }
         return;
     }
@@ -1586,13 +1604,8 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         fprintf(stderr, "  AFTER_INTRA rng=%u cnt=%d intra=%d\n",
                 (unsigned)msac->rng, msac->cnt, intra_flag);
     }
-    /* Trace the 128x128 IBC block at (448,0) which contains first diff */
-    if (bx4 == 448 && by4 == 0) {
-        fprintf(stderr, "BLK bx4=%d by4=%d bs=%d bw4=%d bh4=%d intra=%d rng=%u cnt=%d\n",
-                bx4, by4, bs, bw4, bh4, intra_flag, (unsigned)msac->rng, msac->cnt);
-    }
-    /* Also trace MV at (416,0) - the left neighbor of the first diff block */
-    if (bx4 == 416 && by4 == 0) {
+    /* Trace blocks around first diff location (279,24) in SB (256,0) */
+    if (bx4 >= 272 && bx4 < 284 && by4 >= 24 && by4 < 32) {
         fprintf(stderr, "BLK bx4=%d by4=%d bs=%d bw4=%d bh4=%d intra=%d rng=%u cnt=%d\n",
                 bx4, by4, bs, bw4, bh4, intra_flag, (unsigned)msac->rng, msac->cnt);
     }
@@ -1617,6 +1630,11 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                    &pred_mv_y, &pred_mv_x);
         mv_y = pred_mv_y;
         mv_x = pred_mv_x;
+        /* Trace IBC MV prediction around first diff location */
+        if (bx4 >= 272 && bx4 < 284 && by4 >= 24 && by4 < 32) {
+            fprintf(stderr, "IBC_PRED bx4=%d by4=%d bw4=%d bh4=%d pred=(%d,%d) mv=(%d,%d)\n",
+                    bx4, by4, bw4, bh4, pred_mv_y, pred_mv_x, mv_y, mv_x);
+        }
     
         stbv_av1_read_mv_residual(msac, cdf, &mv_y, &mv_x, -1, bx4, by4);
 
