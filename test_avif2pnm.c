@@ -128,18 +128,20 @@ static int decode_to_ppm(const char *avif_path, const char *ppm_path, int req_ch
             { char *dot = strrchr(y4m_path, '.'); if (dot) strcpy(dot, ".y4m"); else strcat(y4m_path, ".y4m"); }
             fy = fopen(y4m_path, "wb");
             if (fy) {
-                int subsample = (su < w) ? 1 : 0;
-                fprintf(fy, "YUV4MPEG2 W%d H%d F1:1 Ip C420\n", w, h);
+                int uv_w = (su == sy) ? w : ((w + 1) / 2);
+                int uv_h = (sv == sy) ? h : ((h + 1) / 2);
+                const char *chroma = (su == sy) ? "C444" : "C420";
+                fprintf(fy, "YUV4MPEG2 W%d H%d F1:1 Ip %s\n", w, h, chroma);
                 fprintf(fy, "FRAME\n");
                 /* Y plane: w*h bytes, stride may be padded */
                 for (row = 0; row < h; row++)
                     fwrite(uy + (size_t)row * sy, 1, (size_t)w, fy);
-                /* U plane: (w/2)*(h/2) bytes */
-                for (row = 0; row < (h + 1) / 2; row++)
-                    fwrite(uu + (size_t)row * su, 1, (size_t)((w + 1) / 2), fy);
-                /* V plane: (w/2)*(h/2) bytes */
-                for (row = 0; row < (h + 1) / 2; row++)
-                    fwrite(uv + (size_t)row * sv, 1, (size_t)((w + 1) / 2), fy);
+                /* U plane */
+                for (row = 0; row < uv_h; row++)
+                    fwrite(uu + (size_t)row * su, 1, (size_t)uv_w, fy);
+                /* V plane */
+                for (row = 0; row < uv_h; row++)
+                    fwrite(uv + (size_t)row * sv, 1, (size_t)uv_w, fy);
                 fclose(fy);
                 printf("  Y4M: -> %s\n", y4m_path);
             }

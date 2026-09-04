@@ -4357,15 +4357,7 @@ ivf_decoded:
 
     /* Cleanup */
     if (info.ivf_concat_buf) stb_avif_free_internal(info.ivf_concat_buf);
-    if (info.plane_y) stb_avif_free_internal(info.plane_y);
-    if (info.plane_u) stb_avif_free_internal(info.plane_u);
-    if (info.plane_v) stb_avif_free_internal(info.plane_v);
-    info.plane_y = NULL;
-    info.plane_u = NULL;
-    info.plane_v = NULL;
-    stb_avif_g_last_yuv_y = NULL;
-    stb_avif_g_last_yuv_u = NULL;
-    stb_avif_g_last_yuv_v = NULL;
+    /* plane_y/u/v ownership transferred to global above — do not free here */
 
     stb_avif_error_msg = "no error";
     return result;

@@ -433,6 +433,7 @@ typedef struct stbv_av1_leaf_decode_ctx {
     int cbw4, cbh4;
     /* Unclipped chroma block dims (dav1d uses full b_dim for skip ctx). */
     int cbw4_unc, cbh4_unc;
+    int ss_hor, ss_ver;  /* chroma subsampling for txtp_map lookup */
     int lossless;
     int qidx;
     int y_mode_nofilt;
@@ -442,6 +443,10 @@ typedef struct stbv_av1_leaf_decode_ctx {
     int hbd;
     int is_intra;  /* 1 = intra block, 0 = IBC block */
     int luma_txtp; /* stored luma txtp for inter/IBC chroma derivation */
+    /* Per-position luma txtp map (SB-local 32x32), matching dav1d's
+     * t->scratch.txtp_map.  Populated during luma coefficient decode,
+     * read during chroma coefficient decode for inter/IBC blocks. */
+    stbv_u8 luma_txtp_map[32 * 32];
     int ibc_mv_y;  /* decoded IBC MV, 1/8-pel luma units */
     int ibc_mv_x;
     const stbv_av1_leaf_recon *recon;
@@ -482,10 +487,17 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
         else if (is_chroma) {
             if (c->is_intra)
                 txtp = stbv_av1_txtp_from_uvmode[c->intra ? c->intra->uv_mode : 0];
-            else
+            else {
+                /* dav1d read_coef_blocks: txtp = t->scratch.txtp_map[by4*32+bx4].
+                 * Look up the luma txtp at the chroma position from the
+                 * per-position txtp map, matching dav1d's read_coef_tree. */
+                int lumax = x4 << c->ss_hor;
+                int lumay = y4 << c->ss_ver;
+                int map_txtp = c->luma_txtp_map[(lumay & 31) * 32 + (lumax & 31)];
                 txtp = stbv_av1_get_uv_inter_txtp(
                     stbv_av1_tx_dims[tx].min, stbv_av1_tx_dims[tx].max,
-                    c->luma_txtp);
+                    map_txtp);
+            }
         } else if (!c->qidx)
             txtp = STBV_AV1_TX_DCT_DCT;
         else if (c->is_intra)
@@ -502,8 +514,22 @@ static int stbv_av1_leaf_tx_plane(struct stb_av1_msac *msac,
     }
 
     /* Store luma txtp for inter/IBC chroma derivation */
-    if (!is_chroma)
+    if (!is_chroma) {
         c->luma_txtp = txtp;
+        /* Store in per-position txtp map (dav1d read_coef_tree: txtp_map).
+         * SB-local coordinates: (x4 & 31, y4 & 31).
+         * Fill all 4x4 positions covered by this TX leaf. */
+        {
+            int sbx = x4 & 31;
+            int sby = y4 & 31;
+            int dx, dy;
+            for (dy = 0; dy < txh4 && (sby + dy) < 32; dy++) {
+                for (dx = 0; dx < txw4 && (sbx + dx) < 32; dx++) {
+                    c->luma_txtp_map[(sby + dy) * 32 + (sbx + dx)] = (stbv_u8)txtp;
+                }
+            }
+        }
+    }
 
     if (out) {
         out->x4 = x4;
@@ -1031,7 +1057,10 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     unsigned block_skip = 0;
     unsigned int n;
     int intra_flag = 1; /* 1 = intra, 0 = IBC */
-c.recon = recon;
+    c.recon = recon;
+    c.ss_hor = 0;
+    c.ss_ver = 0;
+    memset(c.luma_txtp_map, 0, sizeof(c.luma_txtp_map));
     if (!msac || !cdf || !state || bs < 0 || bs >= STBV_AV1_N_BS_SIZES)
         return -1;
     bw4 = stbv_av1_block_dimensions[bs][0];
@@ -1042,6 +1071,8 @@ c.recon = recon;
     layout = seq ? (int)seq->layout : STB_AV1_LAYOUT_I444;
     ss_hor = layout == STB_AV1_LAYOUT_I420 || layout == STB_AV1_LAYOUT_I422;
     ss_ver = layout == STB_AV1_LAYOUT_I420;
+    c.ss_hor = ss_hor;
+    c.ss_ver = ss_ver;
     sb_step = (seq && seq->sb128) ? 32 : 16;
     lossless = frame ? (int)frame->segmentation.lossless[0] : 0;
     qidx = state->last_qidx + (frame ? (int)frame->segmentation.d[seg_id].delta_q : 0);
@@ -1141,6 +1172,7 @@ c.recon = recon;
         if (!block_skip) {
             block_skip = stb_av1_msac_bool_adapt(msac, cdf->skip + sctx * 2);
         }
+    
         for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->above_skip_n; i++)
             state->above_skip[bx4 + i] = (stbv_u8)block_skip;
         for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->left_skip_n; i++)
@@ -1246,6 +1278,7 @@ c.recon = recon;
         intra.uv_mode = STBV_AV1_INTRA_DC;
     }
 
+
     /* Recompute qidx using the SB-level last_qidx (may have been updated
      * by delta_q above). */
     qidx = state->last_qidx + (frame ? (int)frame->segmentation.d[seg_id].delta_q : 0);
@@ -1265,6 +1298,7 @@ c.recon = recon;
                                    &pred_mv_y, &pred_mv_x);
         mv_y = pred_mv_y;
         mv_x = pred_mv_x;
+    
         stbv_av1_read_mv_residual(msac, cdf, &mv_y, &mv_x, -1, bx4, by4);
 
         /* Clip IBC MV to decoded parts of the current tile/SB
@@ -1560,22 +1594,36 @@ c.recon = recon;
                         }
                     } else {
                         /* IBC: variable TX tree for luma (dav1d read_vartx_tree +
-                         * read_coef_tree).  Chroma uses fixed uv_tx. */
+                         * read_coef_tree).  Chroma uses fixed uv_tx.
+                         * dav1d reads ALL split bools first (read_vartx_tree),
+                         * then decodes ALL coefficients (read_coef_tree/recon_b_inter).
+                         * We must match this order exactly. */
                         int ytxw = stbv_av1_tx_dims[max_tx].w;
                         int ytxh = stbv_av1_tx_dims[max_tx].h;
                         if (stbv_av1_tx_dims[max_tx].max > STBV_AV1_TX_4X4 &&
                             frame && frame->txfm_mode == 1) {
-                            /* Variable TX: recursively read split bools from MSAC
-                             * and decode coefficients at each leaf. */
-                            int ty4, tx4;
-                            for (ty4 = qy4; ty4 < qy4 + qh4; ty4 += ytxh) {
-                                for (tx4 = qx4; tx4 < qx4 + qw4; tx4 += ytxw) {
-                                    r = stbv_av1_decode_tx_tree(msac, cdf,
-                                        &state->tx, max_tx, tx4, ty4,
+                            /* Pass 1: Read all split bools (dav1d read_vartx_tree).
+                             * Collect into a shared tx_split array indexed by
+                             * y_off*4+x_off, matching dav1d's mask layout. */
+                            stbv_u16 tx_split[2] = { 0, 0 };
+                            int ty4, tx4, y_off, x_off;
+                            for (ty4 = qy4, y_off = 0; ty4 < qy4 + qh4; ty4 += ytxh, y_off++) {
+                                for (tx4 = qx4, x_off = 0; tx4 < qx4 + qw4; tx4 += ytxw, x_off++) {
+                                    stbv_av1_tx_tree_read_splits(msac, cdf,
+                                        &state->tx, max_tx, 0,
+                                        tx_split, tx4, ty4,
+                                        x_off, y_off);
+                                }
+                            }
+                            /* Pass 2: Decode coefficients at leaves (dav1d read_coef_tree). */
+                            for (ty4 = qy4, y_off = 0; ty4 < qy4 + qh4; ty4 += ytxh, y_off++) {
+                                for (tx4 = qx4, x_off = 0; tx4 < qx4 + qw4; tx4 += ytxw, x_off++) {
+                                    r = stbv_av1_tx_tree_read_coefs(msac, cdf,
+                                        &state->tx, max_tx, 0,
+                                        tx_split, tx4, ty4,
+                                        x_off, y_off,
                                         stbv_av1_ibc_luma_leaf, &c);
-                                    if (r) {
-                                        return -4;
-                                    }
+                                    if (r) return -4;
                                 }
                             }
                         } else {
