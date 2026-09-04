@@ -3134,8 +3134,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     left_skip = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
     above_pal_sz = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
     left_pal_sz = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
-    above_pal_uv = (stbv_u8*)stb_avif_calloc(cframe_w8, 1);
-    left_pal_uv = (stbv_u8*)stb_avif_calloc(cframe_h8, 1);
+    above_pal_uv = (stbv_u8*)stb_avif_calloc(frame_w4, 1);
+    left_pal_uv = (stbv_u8*)stb_avif_calloc(frame_h4, 1);
     above_uvmode = (stbv_u8*)stb_avif_calloc(
         stream->seq.ss_hor ? ((frame_w4 + 1) >> 1) : frame_w4, 1);
     left_uvmode = (stbv_u8*)stb_avif_calloc(
@@ -3203,8 +3203,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     arrays.left_skip = left_skip; arrays.left_skip_n = frame_h4;
     arrays.above_pal_sz = above_pal_sz; arrays.above_pal_sz_n = frame_w4;
     arrays.left_pal_sz = left_pal_sz; arrays.left_pal_sz_n = frame_h4;
-    arrays.above_pal_uv = above_pal_uv; arrays.above_pal_uv_n = cframe_w8;
-    arrays.left_pal_uv = left_pal_uv; arrays.left_pal_uv_n = cframe_h8;
+    arrays.above_pal_uv = above_pal_uv; arrays.above_pal_uv_n = frame_w4;
+    arrays.left_pal_uv = left_pal_uv; arrays.left_pal_uv_n = frame_h4;
     arrays.above_pal[0] = above_pal0; arrays.above_pal[1] = above_pal1;
     arrays.left_pal[0] = left_pal0; arrays.left_pal[1] = left_pal1;
     arrays.above_pal_n = frame_w4; arrays.left_pal_n = frame_h4;
@@ -3327,19 +3327,6 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     g_scalar_recon_cb.luma_pal = stb_avif_recon_luma_pal;
     g_scalar_recon_cb.chroma_pal = stb_avif_recon_chroma_pal;
 
-    fprintf(stderr, "FRAMEHDR: w=%d h=%d type=%d show=%d allow_ibc=%d "
-            "superres=%d cdf_upd=%d yac=%d dq_present=%d "
-            "all_lossless=%d coded_w=%d cdef_used=%d\n",
-            stream->frame.width[0], (int)stream->frame.height,
-            stream->frame.frame_type, stream->frame.show_frame,
-            stream->frame.allow_intrabc,
-            stream->frame.superres_enabled, !stream->frame.disable_cdf_update,
-            (int)stream->frame.quant.yac,
-            stream->frame.delta_q_present,
-            stream->frame.all_lossless,
-            tc->frame_width,
-            stream->seq.cdef);
-
     memset(&td, 0, sizeof(td));
     td.seq = &stream->seq;
     td.frame = &stream->frame;
@@ -3435,17 +3422,6 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     }
 #endif
 
-    /* Dump pre-CDEF chroma (u16) for isolating CDEF vs reconstruction diffs. */
-    {
-        int _uw = (tc->frame_width + 1) / 2;
-        int _uh = (tc->frame_height + 1) / 2;
-        int _r;
-        FILE *_fu = fopen("debug_precdef_u.bin", "wb");
-        FILE *_fv = fopen("debug_precdef_v.bin", "wb");
-        if (_fu) { for (_r = 0; _r < _uh; _r++) fwrite(&pu16[_r * tc->stride_u], 2, (size_t)_uw, _fu); fclose(_fu); }
-        if (_fv) { for (_r = 0; _r < _uh; _r++) fwrite(&pv16[_r * tc->stride_v], 2, (size_t)_uw, _fv); fclose(_fv); }
-    }
-
     /* CDEF filtering (after deblocking, before loop restoration). */
     if (!r && stream->seq.cdef && cdef_idx_grid) {
         const struct stb_av1_framehdr *fh = &stream->frame;
@@ -3466,17 +3442,6 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                            y_pri_arr, y_sec_arr,
                            uv_pri_arr, uv_sec_arr,
                                (int)fh->cdef.damping);
-    }
-
-    /* Dump post-CDEF chroma (u16) for isolating CDEF vs LR diffs. */
-    {
-        int _uw = (tc->frame_width + 1) / 2;
-        int _uh = (tc->frame_height + 1) / 2;
-        int _r;
-        FILE *_fu = fopen("debug_postcdef_u.bin", "wb");
-        FILE *_fv = fopen("debug_postcdef_v.bin", "wb");
-        if (_fu) { for (_r = 0; _r < _uh; _r++) fwrite(&pu16[_r * tc->stride_u], 2, (size_t)_uw, _fu); fclose(_fu); }
-        if (_fv) { for (_r = 0; _r < _uh; _r++) fwrite(&pv16[_r * tc->stride_v], 2, (size_t)_uw, _fv); fclose(_fv); }
     }
 
     /* Loop restoration filtering (after CDEF, before 8-bit conversion). */
@@ -4398,6 +4363,9 @@ ivf_decoded:
     info.plane_y = NULL;
     info.plane_u = NULL;
     info.plane_v = NULL;
+    stb_avif_g_last_yuv_y = NULL;
+    stb_avif_g_last_yuv_u = NULL;
+    stb_avif_g_last_yuv_v = NULL;
 
     stb_avif_error_msg = "no error";
     return result;
