@@ -79,21 +79,24 @@ static const unsigned char stbv_av1_tx_set_intra1[7] = {
     STBV_AV1_TX_DCT_ADST
 };
 
-/* Inter tx type mapping tables from dav1d tables.c tx_types_per_set[]. */
-static const unsigned char stbv_av1_tx_set_inter1[15] = {
+/* Inter tx type mapping tables from dav1d tables.c tx_types_per_set[].
+ * Tables have n+1 entries; entry n is the fallback when all n CDF symbols
+ * are exhausted (msac_symbol returns n). dav1d always uses FLIPADST_ADST. */
+static const unsigned char stbv_av1_tx_set_inter1[16] = {
     STBV_AV1_TX_IDTX, STBV_AV1_TX_V_DCT, STBV_AV1_TX_H_DCT,
     STBV_AV1_TX_V_ADST, STBV_AV1_TX_H_ADST, STBV_AV1_TX_V_FLIPADST,
     STBV_AV1_TX_H_FLIPADST, STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_ADST_DCT,
     STBV_AV1_TX_DCT_ADST, STBV_AV1_TX_FLIPADST_DCT,
     STBV_AV1_TX_DCT_FLIPADST, STBV_AV1_TX_ADST_ADST,
-    STBV_AV1_TX_FLIPADST_FLIPADST, STBV_AV1_TX_ADST_FLIPADST
+    STBV_AV1_TX_FLIPADST_FLIPADST, STBV_AV1_TX_ADST_FLIPADST,
+    STBV_AV1_TX_FLIPADST_ADST
 };
-static const unsigned char stbv_av1_tx_set_inter2[11] = {
+static const unsigned char stbv_av1_tx_set_inter2[12] = {
     STBV_AV1_TX_IDTX, STBV_AV1_TX_V_DCT, STBV_AV1_TX_H_DCT,
     STBV_AV1_TX_DCT_DCT, STBV_AV1_TX_ADST_DCT, STBV_AV1_TX_DCT_ADST,
     STBV_AV1_TX_FLIPADST_DCT, STBV_AV1_TX_DCT_FLIPADST,
     STBV_AV1_TX_ADST_ADST, STBV_AV1_TX_FLIPADST_FLIPADST,
-    STBV_AV1_TX_ADST_FLIPADST
+    STBV_AV1_TX_ADST_FLIPADST, STBV_AV1_TX_FLIPADST_ADST
 };
 static const unsigned char stbv_av1_tx_set_inter3[2] = {
     STBV_AV1_TX_IDTX, STBV_AV1_TX_DCT_DCT
@@ -348,12 +351,12 @@ static int stbv_av1_decode_inter_txtp(struct stb_av1_msac *msac,
         return stbv_av1_tx_set_inter3[idx];
     } else if (t_dim_min == 2 /* TX_16X16 */) {
         idx = stb_av1_msac_symbol(msac, cdf->txtp_inter2, 11);
-        return stbv_av1_tx_set_inter2[idx < 11 ? idx : 0];
+        return stbv_av1_tx_set_inter2[idx];
     } else {
         /* t_dim_min is 0 or 1 */
         int min2 = t_dim_min > 1 ? 1 : (t_dim_min < 0 ? 0 : t_dim_min);
         idx = stb_av1_msac_symbol(msac, cdf->txtp_inter1[min2], 15);
-        return stbv_av1_tx_set_inter1[idx < 15 ? idx : 0];
+        return stbv_av1_tx_set_inter1[idx];
     }
 }
 

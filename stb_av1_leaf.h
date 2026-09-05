@@ -1016,6 +1016,7 @@ static int stbv_refmvs_scan_row(
     int first_cand_bw4 = stbv_av1_block_dimensions[cand_b->bs][0];
     int first_cand_bh4 = stbv_av1_block_dimensions[cand_b->bs][1];
     int len = step > first_cand_bw4 ? step : (bw4 < first_cand_bw4 ? bw4 : first_cand_bw4);
+    int x, cand_bw4;
 
     (void)stride; (void)rw4;
 
@@ -1031,7 +1032,7 @@ static int stbv_refmvs_scan_row(
         return weight >> 1;
     }
 
-    for (int x = 0;;) {
+    for (x = 0;;) {
         if (cand_b->valid && (filter_ref < 0 || cand_b->ref == filter_ref)) {
             stbv_refmvs_add_candidate(mvstack_mv_y, mvstack_mv_x, mvstack_w,
                                        cnt, cand_b->mv_y, cand_b->mv_x,
@@ -1040,7 +1041,7 @@ static int stbv_refmvs_scan_row(
         x += len;
         if (x >= w4) return 1;
         cand_b = &b[x];
-        int cand_bw4 = stbv_av1_block_dimensions[cand_b->bs][0];
+        cand_bw4 = stbv_av1_block_dimensions[cand_b->bs][0];
         len = step > cand_bw4 ? step : cand_bw4;
     }
 }
@@ -1060,6 +1061,7 @@ static int stbv_refmvs_scan_col1(
     const stbv_refmvs_cell *cand = &r[start_y * (int)stride + bx4_col];
     int cand_bh4 = stbv_av1_block_dimensions[cand->bs][1];
     int len = step > cand_bh4 ? step : (bh4 < cand_bh4 ? bh4 : cand_bh4);
+    int y;
 
     if (bh4 <= cand_bh4) {
         int cand_bw4 = stbv_av1_block_dimensions[cand->bs][0];
@@ -1075,7 +1077,7 @@ static int stbv_refmvs_scan_col1(
         return weight >> 1;
     }
 
-    for (int y = 0;;) {
+    for (y = 0;;) {
         if (cand->valid && (filter_ref < 0 || cand->ref == filter_ref)) {
             stbv_refmvs_add_candidate(mvstack_mv_y, mvstack_mv_x, mvstack_w,
                                        cnt, cand->mv_y, cand->mv_x,
@@ -1151,52 +1153,6 @@ static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
 
     if (!s->refmvs_r) goto default_mv;
 
-    { static int logged = 0;
-      if (!logged) { logged = 1;
-        fprintf(stderr, "REFMVS active: stride=%u h4=%u w4=%u\n",
-                s->refmvs_stride, s->refmvs_h4, s->refmvs_w4);
-      }
-    }
-
-    /* Dump refmvs_r around first diff location for IBC block at (278,24) */
-    { static int logged2 = 0;
-      if (!logged2 && bx4 == 278 && by4 == 24) { logged2 = 1;
-        fprintf(stderr, "REFMVS_DUMP at (278,24) bw4=%d bh4=%d:\n", bw4, bh4);
-        /* Dump rows 16-24 around the block, columns 272-288 */
-        for (int dy = 16; dy <= 24; dy++) {
-            fprintf(stderr, "  ROW %d:\n", dy);
-            for (int dx = 272; dx <= 288; dx++) {
-                if ((unsigned)dx < s->refmvs_w4 && (unsigned)dy < s->refmvs_h4) {
-                    const stbv_refmvs_cell *c = &s->refmvs_r[dy * (int)s->refmvs_stride + dx];
-                    if (c->valid) {
-                        fprintf(stderr, "    r[%d][%d] v=%d ref=%d bs=%d mv=(%d,%d)\n",
-                                dy, dx, c->valid, c->ref, c->bs, c->mv_y, c->mv_x);
-                    }
-                }
-            }
-        }
-      }
-    }
-
-    /* Dump refmvs_r around new first diff location for IBC block at (528,24) */
-    { static int logged3 = 0;
-      if (!logged3 && bx4 == 528 && by4 == 24) { logged3 = 1;
-        fprintf(stderr, "REFMVS_DUMP2 at (528,24) bw4=%d bh4=%d:\n", bw4, bh4);
-        for (int dy = 16; dy <= 24; dy++) {
-            fprintf(stderr, "  ROW %d:\n", dy);
-            for (int dx = 520; dx <= 540; dx++) {
-                if ((unsigned)dx < s->refmvs_w4 && (unsigned)dy < s->refmvs_h4) {
-                    const stbv_refmvs_cell *c = &s->refmvs_r[dy * (int)s->refmvs_stride + dx];
-                    if (c->valid) {
-                        fprintf(stderr, "    r[%d][%d] v=%d ref=%d bs=%d mv=(%d,%d)\n",
-                                dy, dx, c->valid, c->ref, c->bs, c->mv_y, c->mv_x);
-                    }
-                }
-            }
-        }
-      }
-    }
-
     /* max_rows/max_cols: same formula as dav1d refmvs_find.
      * max_rows = imin((by4 + 1) >> 1, 2 + (bh4 > 1)) */
     max_rows = ((by4 + 1) >> 1);
@@ -1268,7 +1224,8 @@ static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
     }
 
     /* 5. Secondary rows/columns (8x8-aligned): match dav1d refmvs_find lines 464-478. */
-    for (int n2 = 2; n2 <= 3; n2++) {
+    { int n2;
+    for (n2 = 2; n2 <= 3; n2++) {
         if ((unsigned)n2 > n_rows && (unsigned)n2 <= (unsigned)max_rows) {
             int sec_y = ((by4 - 2 * n2 + 1) | 1);
             int w4 = bw4 < 16 ? bw4 : 16;
@@ -1291,6 +1248,7 @@ static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
                                              bh4, h4,
                                              1 + max_cols - n2, bh4 >= 16 ? 4 : 2, 0);
         }
+    }
     }
 
     /* Sort by weight (descending): bubble sort, matches dav1d refmvs_find
@@ -1323,18 +1281,7 @@ static void stbv_av1_find_ibc_mv_pred(const stbv_av1_leaf_state *s,
     if (cnt > 0) {
         *pred_y = mvstack_mv_y[0];
         *pred_x = mvstack_mv_x[0];
-        /* Trace candidates for blocks at diff locations */
-        if ((bx4 == 278 && by4 == 24) || (bx4 == 528 && by4 == 24)) {
-            fprintf(stderr, "REFMVS bx4=%d by4=%d bw4=%d bh4=%d cnt=%d n_rows=%d n_cols=%d best=(%d,%d) w=%d\n",
-                    bx4, by4, bw4, bh4, cnt, n_rows, n_cols, mvstack_mv_y[0], mvstack_mv_x[0], mvstack_w[0]);
-            { int k; for (k = 0; k < cnt; k++)
-                fprintf(stderr, "  cand[%d] = mv=(%d,%d) w=%d\n", k, mvstack_mv_y[k], mvstack_mv_x[k], mvstack_w[k]); }
-        }
         return;
-    }
-    if ((bx4 == 448 && by4 == 0) || (bx4 == 416 && by4 == 0)) {
-        fprintf(stderr, "REFMVS bx4=%d by4=%d bw4=%d bh4=%d NO CANDIDATES, using default\n",
-                bx4, by4, bw4, bh4);
     }
 
 default_mv:
@@ -1389,12 +1336,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     c.ss_hor = 0;
     c.ss_ver = 0;
     memset(c.luma_txtp_map, 0, sizeof(c.luma_txtp_map));
-    /* Detailed tracing for block (631,88) divergence analysis */
-    #define LEAF_TRACE (bx4 == 631 && by4 == 88)
-    if (LEAF_TRACE) {
-        fprintf(stderr, "LEAF_ENTER bx4=%d by4=%d bs=%d rng=%u cnt=%d\n",
-                bx4, by4, bs, (unsigned)msac->rng, msac->cnt);
-    }
     if (!msac || !cdf || !state || bs < 0 || bs >= STBV_AV1_N_BS_SIZES)
         return -1;
     bw4 = stbv_av1_block_dimensions[bs][0];
@@ -1491,10 +1432,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                 state->left_seg_id[by4 + i] = (stbv_u8)seg_id;
         }
     }
-    if (LEAF_TRACE) {
-        fprintf(stderr, "  AFTER_SEG  rng=%u cnt=%d seg_id=%d\n",
-                (unsigned)msac->rng, msac->cnt, seg_id);
-    }
 
     /* Block-level skip, decoded before intra modes (dav1d decode_b).
      * When skip_mode or segment skip is already set, skip=1 without
@@ -1515,10 +1452,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
             state->above_skip[bx4 + i] = (stbv_u8)block_skip;
         for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->left_skip_n; i++)
             state->left_skip[by4 + i] = (stbv_u8)block_skip;
-    }
-    if (LEAF_TRACE) {
-        fprintf(stderr, "  AFTER_SKIP rng=%u cnt=%d skip=%d\n",
-                (unsigned)msac->rng, msac->cnt, (int)block_skip);
     }
 
     /* cdef index, once per superblock, only when the block is not skipped.
@@ -1607,10 +1540,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         }
         qidx = state->last_qidx;
     }
-    if (LEAF_TRACE) {
-        fprintf(stderr, "  AFTER_DELTAQ rng=%u cnt=%d qidx=%d\n",
-                (unsigned)msac->rng, msac->cnt, qidx);
-    }
 
     /* Intra flag: for key frames with allow_intrabc, decode the intrabc
      * flag (dav1d decode.c:1043-1044).  For key frames without intrabc,
@@ -1623,21 +1552,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         intra.y_mode = STBV_AV1_INTRA_DC;
         intra.uv_mode = STBV_AV1_INTRA_DC;
     }
-    if (LEAF_TRACE) {
-        fprintf(stderr, "  AFTER_INTRA rng=%u cnt=%d intra=%d\n",
-                (unsigned)msac->rng, msac->cnt, intra_flag);
-    }
-    /* Trace blocks near first diff (300,29) in SB (288,0) */
-    if (bx4 >= 296 && bx4 < 312 && by4 >= 28 && by4 < 32) {
-        fprintf(stderr, "BLK bx4=%d by4=%d bs=%d bw4=%d bh4=%d intra=%d rng=%u cnt=%d\n",
-                bx4, by4, bs, bw4, bh4, intra_flag, (unsigned)msac->rng, msac->cnt);
-    }
-    /* Trace blocks around earlier diff (528,27) */
-    if (bx4 >= 524 && bx4 < 544 && by4 >= 24 && by4 < 36) {
-        fprintf(stderr, "BLK2 bx4=%d by4=%d bs=%d bw4=%d bh4=%d intra=%d rng=%u cnt=%d\n",
-                bx4, by4, bs, bw4, bh4, intra_flag, (unsigned)msac->rng, msac->cnt);
-    }
-
 
     /* Recompute qidx using the SB-level last_qidx (may have been updated
      * by delta_q above). */
@@ -1658,16 +1572,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                    &pred_mv_y, &pred_mv_x);
         mv_y = pred_mv_y;
         mv_x = pred_mv_x;
-        /* Trace IBC MV prediction near first diff (300,29) */
-        if (bx4 >= 296 && bx4 < 312 && by4 >= 28 && by4 < 32) {
-            fprintf(stderr, "IBC_PRED bx4=%d by4=%d bw4=%d bh4=%d pred=(%d,%d) mv=(%d,%d)\n",
-                    bx4, by4, bw4, bh4, pred_mv_y, pred_mv_x, mv_y, mv_x);
-        }
-        /* Trace IBC MV prediction around diff (528,27) */
-        if (bx4 >= 524 && bx4 < 544 && by4 >= 24 && by4 < 36) {
-            fprintf(stderr, "IBC_PRED2 bx4=%d by4=%d bw4=%d bh4=%d pred=(%d,%d) mv=(%d,%d)\n",
-                    bx4, by4, bw4, bh4, pred_mv_y, pred_mv_x, mv_y, mv_x);
-        }
     
         stbv_av1_read_mv_residual(msac, cdf, &mv_y, &mv_x, -1, bx4, by4);
 
@@ -1739,10 +1643,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         c.ibc_mv_y = 0;
         c.ibc_mv_x = 0;
     }
-    if (LEAF_TRACE) {
-        fprintf(stderr, "  AFTER_IBC_MV rng=%u cnt=%d ibc=%d mv_y=%d mv_x=%d\n",
-                (unsigned)msac->rng, msac->cnt, !intra_flag, c.ibc_mv_y, c.ibc_mv_x);
-    }
 
     cfl_allowed = lossless ? (cbw4 == 1 && cbh4 == 1) :
         !!(STBV_AV1_CFL_ALLOWED_MASK & (1U << bs));
@@ -1756,10 +1656,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         memset(&intra, 0, sizeof(intra));
         intra.y_mode = STBV_AV1_INTRA_DC;
         intra.uv_mode = STBV_AV1_INTRA_DC;
-    }
-    if (LEAF_TRACE) {
-        fprintf(stderr, "  AFTER_MODE rng=%u cnt=%d y_mode=%d uv_mode=%d\n",
-                (unsigned)msac->rng, msac->cnt, intra.y_mode, intra.uv_mode);
     }
     /* Palette, filter-intra, and palette indices: intra-only.
      * IBC blocks skip all of these (dav1d decode.c:1267). */
@@ -1834,10 +1730,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                 return -8;
         }
     } /* end intra-only palette/filter-intra */
-    if (LEAF_TRACE) {
-        fprintf(stderr, "  AFTER_PAL rng=%u cnt=%d pal_y=%d pal_uv=%d\n",
-                (unsigned)msac->rng, msac->cnt, state->pal_sz_y, state->pal_sz_uv);
-    }
 
     /* block_info hook: fires AFTER all mode decisions are final (including
      * filter_intra override), so reconstruction uses the correct mode.
@@ -1853,7 +1745,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                             intra.cfl_alpha_u, intra.cfl_alpha_v,
                              c.ibc_mv_y, c.ibc_mv_x);
     }
-
 
     /* Palette pixel application must run AFTER block_info (the callbacks
      * read the recon context's current block position) and before the
@@ -1897,10 +1788,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                                                stbv_av1_tx_dims[max_tx].lh,
                                                                state->tx.left_n));
         }
-    }
-    if (LEAF_TRACE) {
-        fprintf(stderr, "  AFTER_TX   rng=%u cnt=%d tx0=%d uv_tx=%d max_tx=%d\n",
-                (unsigned)msac->rng, msac->cnt, tx0, uv_tx, max_tx);
     }
 
     c.msac = msac;
@@ -2052,10 +1939,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                     }
                 }
             }
-            if (LEAF_TRACE) {
-                fprintf(stderr, "  AFTER_COEF rng=%u cnt=%d\n",
-                        (unsigned)msac->rng, msac->cnt);
-            }
+
         } else {
             /* dav1d read_coef_blocks marks the full block edges 0x40. */
             /* dav1d memsets context with UNCLIPPED b_dim; clipping here
@@ -2270,11 +2154,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                      bx4, by4, bw4, bh4, bs);
         }
     }
-    if (LEAF_TRACE) {
-        fprintf(stderr, "LEAF_EXIT  bx4=%d by4=%d bs=%d rng=%u cnt=%d\n",
-                bx4, by4, bs, (unsigned)msac->rng, msac->cnt);
-    }
-    #undef LEAF_TRACE
+
     return 0;
 }
 
