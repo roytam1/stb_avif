@@ -1335,6 +1335,16 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     c.recon = recon;
     c.ss_hor = 0;
     c.ss_ver = 0;
+    { /* Dump MSAC at leaf entry for all blocks */
+        static FILE *leaf_dump = NULL;
+        if (!leaf_dump) leaf_dump = fopen("msac_ours_leaf.bin", "wb");
+        if (leaf_dump) {
+            unsigned int vals[6] = { (unsigned int)bx4, (unsigned int)by4,
+                (unsigned int)msac->rng, (unsigned int)msac->cnt,
+                (unsigned int)bs, 0 };
+            fwrite(vals, sizeof(unsigned int), 6, leaf_dump);
+        }
+    }
     memset(c.luma_txtp_map, 0, sizeof(c.luma_txtp_map));
     if (!msac || !cdf || !state || bs < 0 || bs >= STBV_AV1_N_BS_SIZES)
         return -1;
@@ -1552,6 +1562,16 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         intra.y_mode = STBV_AV1_INTRA_DC;
         intra.uv_mode = STBV_AV1_INTRA_DC;
     }
+    { /* Early dump after intra flag */
+        static FILE *early_dump = NULL;
+        if (!early_dump) early_dump = fopen("msac_ours_early.bin", "wb");
+        if (early_dump && bx4 >= 628 && bx4 <= 631 && by4 == 88) {
+            unsigned int vals[6] = { (unsigned int)bx4, (unsigned int)by4,
+                (unsigned int)msac->rng, (unsigned int)msac->cnt,
+                (unsigned int)bs, (unsigned int)intra_flag };
+            fwrite(vals, sizeof(unsigned int), 6, early_dump);
+        }
+    }
 
     /* Recompute qidx using the SB-level last_qidx (may have been updated
      * by delta_q above). */
@@ -1574,6 +1594,16 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         mv_x = pred_mv_x;
     
         stbv_av1_read_mv_residual(msac, cdf, &mv_y, &mv_x, -1, bx4, by4);
+        { /* Dump after MV residual decode */
+            static FILE *mv_dump = NULL;
+            if (!mv_dump) mv_dump = fopen("msac_ours_mv.bin", "wb");
+            if (mv_dump && bx4 >= 628 && bx4 <= 631 && by4 == 88) {
+                unsigned int vals[6] = { (unsigned int)bx4, (unsigned int)by4,
+                    (unsigned int)msac->rng, (unsigned int)msac->cnt,
+                    (unsigned int)bs, (unsigned int)mv_x };
+                fwrite(vals, sizeof(unsigned int), 6, mv_dump);
+            }
+        }
 
         /* Clip IBC MV to decoded parts of the current tile/SB
          * (dav1d decode.c:1292-1346).  All values in pixel units. */
@@ -1769,6 +1799,16 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
      * For IBC blocks, the TX tree bools are decoded separately via
      * read_vartx_tree/read_tx_tree (dav1d decode.c:1352).  No single
      * tx-size symbol is decoded for IBC. */
+    { /* Mid-point dump after mode decode, before tx_size */
+        static FILE *mid_dump = NULL;
+        if (!mid_dump) mid_dump = fopen("msac_ours_mid.bin", "wb");
+        if (mid_dump && bx4 >= 608 && bx4 < 640 && by4 >= 64 && by4 < 96) {
+            unsigned int vals[6] = { (unsigned int)bx4, (unsigned int)by4,
+                (unsigned int)msac->rng, (unsigned int)msac->cnt,
+                (unsigned int)bs, (unsigned int)intra_flag };
+            fwrite(vals, sizeof(unsigned int), 6, mid_dump);
+        }
+    }
     if (lossless) {
         tx0 = STBV_AV1_TX_4X4;
         uv_tx = STBV_AV1_TX_4X4;
@@ -1886,6 +1926,16 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                         &state->tx, max_tx, 0,
                                         tx_split, tx4, ty4,
                                         x_off, y_off);
+                                }
+                            }
+                            { /* Dump after vartx split bools (IBC section) */
+                                static FILE *vtx_dump = NULL;
+                                if (!vtx_dump) vtx_dump = fopen("msac_ours_vtx.bin", "wb");
+                                if (vtx_dump && bx4 >= 628 && bx4 <= 631 && by4 == 88) {
+                                    unsigned int vals[6] = { (unsigned int)bx4, (unsigned int)by4,
+                                        (unsigned int)msac->rng, (unsigned int)msac->cnt,
+                                        (unsigned int)bs, (unsigned int)max_tx };
+                                    fwrite(vals, sizeof(unsigned int), 6, vtx_dump);
                                 }
                             }
                             /* Pass 2: Decode coefficients at leaves (dav1d read_coef_tree). */
@@ -2010,12 +2060,11 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
             }
         }
 
-        /* Tx neighbour map: dav1d sets it to the block tx dimensions over the
-         * whole block edge after reconstruction; skipped blocks use the
-         * block's default tx size (dav1d b_dim[2+i], set_ctx skip path).
-         * dav1d also writes to tx_intra (MAX tx lw/lh) which is used by
-         * get_tx_ctx for the next block's TX context. */
-        {
+        /* Tx neighbour map (edge->tx): dav1d intra set_ctx writes decoded TX
+         * lw/lh; IBC set_ctx does NOT write edge->tx (read_tx_tree leaf
+         * path already set it). Skipped blocks: dav1d read_vartx_tree writes
+         * b_dim[2]/b_dim[3] (max TX) directly. */
+        if (intra_flag || block_skip) {
             int txm = (int)block_skip ? max_tx : tx0;
             for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->tx.above_n; i++)
                 state->tx.above_tx[bx4 + i] =
@@ -2023,28 +2072,28 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
             for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->tx.left_n; i++)
                 state->tx.left_tx[by4 + i] =
                     (stbv_u8)stbv_av1_tx_dims[txm].lh;
-            /* tx_intra: for intra blocks store decoded TX lw/lh; for IBC
-             * blocks store max TX (dav1d: intra set_ctx uses t_dim->lw/lh
-             * which is the decoded TX; IBC set_ctx uses b_dim[2+i] which
-             * is the max TX). get_tx_ctx() compares this against the next
-             * block's max TX to form the TX size context. */
-            {
-                int lw, lh;
-                if (intra_flag) {
-                    lw = stbv_av1_tx_dims[tx0].lw;
-                    lh = stbv_av1_tx_dims[tx0].lh;
-                } else {
-                    lw = stbv_av1_tx_dims[max_tx].lw;
-                    lh = stbv_av1_tx_dims[max_tx].lh;
-                }
-                if (state->tx.above_tx_intra) {
-                    for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->tx.above_n; i++)
-                        state->tx.above_tx_intra[bx4 + i] = (stbv_u8)lw;
-                }
-                if (state->tx.left_tx_intra) {
-                    for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->tx.left_n; i++)
-                        state->tx.left_tx_intra[by4 + i] = (stbv_u8)lh;
-                }
+        }
+        /* tx_intra: for intra blocks store decoded TX lw/lh; for IBC
+         * blocks store max TX (dav1d: intra set_ctx uses t_dim->lw/lh
+         * which is the decoded TX; IBC set_ctx uses b_dim[2+i] which
+         * is the max TX). get_tx_ctx() compares this against the next
+         * block's max TX to form the TX size context. */
+        {
+            int lw, lh;
+            if (intra_flag) {
+                lw = stbv_av1_tx_dims[tx0].lw;
+                lh = stbv_av1_tx_dims[tx0].lh;
+            } else {
+                lw = stbv_av1_tx_dims[max_tx].lw;
+                lh = stbv_av1_tx_dims[max_tx].lh;
+            }
+            if (state->tx.above_tx_intra) {
+                for (i = 0; i < bw4 && (unsigned int)(bx4 + i) < state->tx.above_n; i++)
+                    state->tx.above_tx_intra[bx4 + i] = (stbv_u8)lw;
+            }
+            if (state->tx.left_tx_intra) {
+                for (i = 0; i < bh4 && (unsigned int)(by4 + i) < state->tx.left_n; i++)
+                    state->tx.left_tx_intra[by4 + i] = (stbv_u8)lh;
             }
         }
     }
@@ -2155,6 +2204,16 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         }
     }
 
+    { /* Dump MSAC after leaf decode */
+        static FILE *leaf_after = NULL;
+        if (!leaf_after) leaf_after = fopen("msac_ours_leaf_after.bin", "wb");
+        if (leaf_after) {
+            unsigned int vals[6] = { (unsigned int)bx4, (unsigned int)by4,
+                (unsigned int)msac->rng, (unsigned int)msac->cnt,
+                (unsigned int)bs, 0 };
+            fwrite(vals, sizeof(unsigned int), 6, leaf_after);
+        }
+    }
     return 0;
 }
 
