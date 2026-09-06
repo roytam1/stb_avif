@@ -247,10 +247,6 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         is_split = stb_av1_msac_bool(d->msac,
                                      stbv_av1_gather_top_partition_prob(pc, bl));
         bp = is_split ? (int)STBV_AV1_PARTITION_SPLIT : (int)STBV_AV1_PARTITION_H;
-        if (bl == STBV_AV1_BL_64X64 || bl == STBV_AV1_BL_32X32 || bl == STBV_AV1_BL_16X16) {
-            fprintf(stderr, "  BP   bx=%d by=%d bp=%d rng=%u cnt=%d\n",
-                    bx, by, bp, (unsigned)d->msac->rng, d->msac->cnt);
-        }
         if (is_split) {
             if (bl >= STBV_AV1_BL_8X8) {
                 int r;
@@ -284,10 +280,6 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         is_split = stb_av1_msac_bool(d->msac,
                                      stbv_av1_gather_left_partition_prob(pc, bl));
         bp = is_split ? (int)STBV_AV1_PARTITION_SPLIT : (int)STBV_AV1_PARTITION_V;
-        if (bl == STBV_AV1_BL_64X64 || bl == STBV_AV1_BL_32X32 || bl == STBV_AV1_BL_16X16) {
-            fprintf(stderr, "  BP   bx=%d by=%d bp=%d rng=%u cnt=%d\n",
-                    bx, by, bp, (unsigned)d->msac->rng, d->msac->cnt);
-        }
         if (is_split) {
             if (bl >= STBV_AV1_BL_8X8) {
                 int r;

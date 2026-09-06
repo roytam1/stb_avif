@@ -1015,8 +1015,9 @@ static int stbv_refmvs_scan_row(
     const stbv_refmvs_cell *cand_b = b;
     int first_cand_bw4 = stbv_av1_block_dimensions[cand_b->bs][0];
     int first_cand_bh4 = stbv_av1_block_dimensions[cand_b->bs][1];
-    int len = step > first_cand_bw4 ? step : (bw4 < first_cand_bw4 ? bw4 : first_cand_bw4);
-    int x, cand_bw4;
+    int len, x, cand_bw4;
+    { int _min = bw4 < first_cand_bw4 ? bw4 : first_cand_bw4;
+      len = step > _min ? step : _min; }
 
     (void)stride; (void)rw4;
 
@@ -1060,8 +1061,9 @@ static int stbv_refmvs_scan_col1(
 {
     const stbv_refmvs_cell *cand = &r[start_y * (int)stride + bx4_col];
     int cand_bh4 = stbv_av1_block_dimensions[cand->bs][1];
-    int len = step > cand_bh4 ? step : (bh4 < cand_bh4 ? bh4 : cand_bh4);
-    int y;
+    int len, y;
+    { int _min = bh4 < cand_bh4 ? bh4 : cand_bh4;
+      len = step > _min ? step : _min; }
 
     if (bh4 <= cand_bh4) {
         int cand_bw4 = stbv_av1_block_dimensions[cand->bs][0];
@@ -1335,6 +1337,15 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     c.recon = recon;
     c.ss_hor = 0;
     c.ss_ver = 0;
+    { /* Temporary: dump MSAC state at every block for divergence search */
+        static FILE *_blk = NULL;
+        if (!_blk) _blk = fopen("msac_ours_perblock.bin", "wb");
+        if (_blk) {
+            unsigned int vals[4] = { (unsigned int)bx4, (unsigned int)by4,
+                (unsigned int)msac->rng, (unsigned int)msac->cnt };
+            fwrite(vals, sizeof(unsigned int), 4, _blk);
+        }
+    }
     memset(c.luma_txtp_map, 0, sizeof(c.luma_txtp_map));
     if (!msac || !cdf || !state || bs < 0 || bs >= STBV_AV1_N_BS_SIZES)
         return -1;
@@ -1871,7 +1882,8 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                          * We must match this order exactly. */
                         int ytxw = stbv_av1_tx_dims[max_tx].w;
                         int ytxh = stbv_av1_tx_dims[max_tx].h;
-                        if (stbv_av1_tx_dims[max_tx].max > STBV_AV1_TX_4X4 &&
+                        if (!block_skip &&
+                            stbv_av1_tx_dims[max_tx].max > STBV_AV1_TX_4X4 &&
                             frame && frame->txfm_mode == 1) {
                             /* Pass 1: Read all split bools (dav1d read_vartx_tree).
                              * Collect into a shared tx_split array indexed by
@@ -1902,7 +1914,7 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                              * dav1d read_vartx_tree path 1: when max_ytx==TX_4X4
                              * and txfm_mode==SWITCHABLE, sets edge->tx to TX_4X4.
                              * We must do the same. */
-                            if (frame && frame->txfm_mode == 1) {
+                            if (!block_skip && frame && frame->txfm_mode == 1) {
                                 int ii;
                                 for (ii = 0; ii < bw4 && (unsigned int)(bx4 + ii) < state->tx.above_n; ii++)
                                     state->tx.above_tx[bx4 + ii] = STBV_AV1_TX_4X4;
@@ -2161,7 +2173,15 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
                                      bx4, by4, bw4, bh4, bs);
         }
     }
-
+    { /* Temporary: dump MSAC state at block exit */
+        static FILE *_blk = NULL;
+        if (!_blk) _blk = fopen("msac_ours_exit.bin", "wb");
+        if (_blk) {
+            unsigned int vals[4] = { (unsigned int)bx4, (unsigned int)by4,
+                (unsigned int)msac->rng, (unsigned int)msac->cnt };
+            fwrite(vals, sizeof(unsigned int), 4, _blk);
+        }
+    }
     return 0;
 }
 

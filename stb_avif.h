@@ -2319,33 +2319,10 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
          * region (above or to the left of current position).  AV1 decode
          * order guarantees this when src is within the current tile. */
         if (cw > 0 && ch > 0 && rc->plane_y) {
-            /* Debug dump for blocks near first diff */
-            if (bx4 >= 296 && bx4 < 312 && by4 >= 28 && by4 < 32) {
-                fprintf(stderr, "IBC_COPY bx4=%d by4=%d src=(%d,%d) dst=(%d,%d) cw=%d ch=%d src_px0=%d\n",
-                    bx4, by4, src_px_x, src_px_y, dst_px_x, dst_px_y, cw, ch,
-                    rc->plane_y[(size_t)src_px_y * rc->stride_y + src_px_x]);
-                /* Dump source row at dst_py_y for the first row */
-                if (bx4 == 300 && by4 == 29) {
-                    fprintf(stderr, "  IBC_SRC_ROW:");
-                    for (i = 0; i < cw && i < 16; i++)
-                        fprintf(stderr, " %d", rc->plane_y[(size_t)src_px_y * rc->stride_y + src_px_x + i]);
-                    fprintf(stderr, "\n");
-                    fprintf(stderr, "  IBC_DST_BEFORE:");
-                    for (i = 0; i < cw && i < 16; i++)
-                        fprintf(stderr, " %d", rc->plane_y[(size_t)dst_px_y * rc->stride_y + dst_px_x + i]);
-                    fprintf(stderr, "\n");
-                }
-            }
             for (i = 0; i < ch; i++)
                 memmove(rc->plane_y + (size_t)(dst_px_y + i) * rc->stride_y + dst_px_x,
                        rc->plane_y + (size_t)(src_px_y + i) * rc->stride_y + src_px_x,
                        (size_t)cw * sizeof(stbv_u16));
-            if (bx4 == 300 && by4 == 29) {
-                fprintf(stderr, "  IBC_DST_AFTER_COPY:");
-                for (i = 0; i < cw && i < 16; i++)
-                    fprintf(stderr, " %d", rc->plane_y[(size_t)dst_px_y * rc->stride_y + dst_px_x + i]);
-                fprintf(stderr, "\n");
-            }
         }
         /* Copy chroma if present. */
         if (has_chroma && rc->plane_u && rc->plane_v) {
@@ -2595,24 +2572,10 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
      * (coefficients present!), < 0 == none. */
     if (!rc->block_skip && eob >= 0)
     {
-        /* Dump plane state before residual add for first diff region */
-        if (x4 >= 298 && x4 <= 306 && y4 >= 28 && y4 <= 30 && rc->is_ibc) {
-            int _px = x4 << 2, _py = y4 << 2;
-            fprintf(stderr, "BEFORE_RESIDUAL x4=%d y4=%d tx=%d txtp=%d eob=%d px0=%d\n",
-                x4, y4, tx, txtp, eob,
-                rc->plane_y[(size_t)_py * rc->stride_y + _px]);
-        }
         stb_avif_recon_add_res(rc, rc->plane_y, rc->stride_y,
                                x4 << 2, y4 << 2, rc->frame_w,
                                rc->frame_h + 64,
-                                tx, txtp, eob, cf);
-        /* Dump plane state after residual add for first diff region */
-        if (x4 >= 298 && x4 <= 306 && y4 >= 28 && y4 <= 30 && rc->is_ibc) {
-            int _px = x4 << 2, _py = y4 << 2;
-            fprintf(stderr, "AFTER_RESIDUAL  x4=%d y4=%d tx=%d txtp=%d eob=%d px0=%d\n",
-                x4, y4, tx, txtp, eob,
-                rc->plane_y[(size_t)_py * rc->stride_y + _px]);
-        }
+                                 tx, txtp, eob, cf);
     }
     {
         /* record transform coverage for the deblocking pass */
