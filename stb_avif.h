@@ -2267,21 +2267,6 @@ static void stb_avif_recon_block_info(void *ud, int intra, int bs, int bx4, int 
     (void)pal_sz_y; (void)pal_sz_uv;
     rc = (struct stb_avif_scalar_recon *)ud;
     if (!rc) return;
-    /* Debug: dump all block_info calls in a region around the first diff */
-    if (by4 >= 40 && by4 <= 48 && bx4 >= 16 && bx4 <= 36) {
-        static FILE *_bif = NULL;
-        if (!_bif) _bif = fopen("block_info_dump.bin", "wb");
-        if (_bif) {
-            unsigned long long rec[8] = {
-                (unsigned long long)intra, (unsigned long long)bs,
-                (unsigned long long)bx4, (unsigned long long)by4,
-                (unsigned long long)has_chroma, (unsigned long long)skip,
-                (unsigned long long)y_mode, (unsigned long long)uv_mode
-            };
-            fwrite(rec, 8, 8, _bif);
-            fflush(_bif);
-        }
-    }
     /* Always record position so luma_txb/luma_pal can fill lf_blkid. */
     rc->cur_bx4 = bx4;
     rc->cur_by4 = by4;
@@ -2727,50 +2712,6 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
     rc = (struct stb_avif_scalar_recon *)ud;
     rc->cur_pl = pl;
     if (!rc || !rc->plane_u || !rc->plane_v) return;
-    /* Debug: track ALL chroma_txb calls for block (25,44) */
-    if (x4 == 25 && y4 == 44) {
-        static int _t2544 = 0;
-        FILE *_f = fopen("chroma_txb_tracker.bin", "ab");
-        if (_f) {
-            unsigned long long vals[8] = {
-                (unsigned long long)pl, (unsigned long long)x4, (unsigned long long)y4,
-                (unsigned long long)tx, (unsigned long long)eob,
-                (unsigned long long)rc->pal_uv, (unsigned long long)rc->is_ibc,
-                (unsigned long long)rc->has_chroma
-            };
-            fwrite(vals, 8, 8, _f);
-            fclose(_f);
-            _t2544++;
-        }
-    }
-    /* Debug: dump chroma TXB info for blocks near first diff pixel (101,176) */
-    {
-        static int _dbg_cnt = 0;
-        int _px = x4 << 2, _py = y4 << 2;
-        /* Fire for blocks near first diff */
-        if (_dbg_cnt < 200 && rc->cur_bx4 <= 28 && rc->cur_by4 <= 48 && rc->cur_by4 >= 38) {
-            FILE *_f = fopen("chroma_txb_ours.bin", "ab");
-            if (_f) {
-                int _txw = stbv_av1_tx_dims[tx].w;
-                int _txh = stbv_av1_tx_dims[tx].h;
-                unsigned long long vals[14] = {
-                    (unsigned long long)pl, (unsigned long long)x4, (unsigned long long)y4,
-                    (unsigned long long)tx, (unsigned long long)txtp, (unsigned long long)eob,
-                    (unsigned long long)rc->uv_mode, (unsigned long long)rc->block_skip,
-                    (unsigned long long)rc->cur_bx4, (unsigned long long)rc->cur_by4,
-                    (unsigned long long)rc->ss_hor, (unsigned long long)rc->ss_ver,
-                    (unsigned long long)_txw, (unsigned long long)_txh
-                };
-                fwrite(vals, 8, 14, _f);
-                /* Write full cf array (txw*txh*16 i32 values = full transform) */
-                if (cf) {
-                    fwrite(cf, sizeof(stbv_i32), (size_t)(_txw * _txh * 16), _f);
-                }
-                fclose(_f);
-                _dbg_cnt++;
-            }
-        }
-    }
     plane = pl == 0 ? rc->plane_u : rc->plane_v;
     stride = pl == 0 ? rc->stride_u : rc->stride_v;
     /* Chroma plane extent follows ACTUAL subsampling: full width for
@@ -2812,32 +2753,6 @@ static void stb_avif_recon_chroma_txb(void *ud, int pl, int x4, int y4, int tx, 
         stb_avif_recon_add_res(rc, plane, stride,
                                x4 << 2, y4 << 2, stride, ph + 32,
                                tx, txtp, eob, cf);
-    /* Debug: dump chroma plane pixel values after residual for blocks near first diff */
-    if (pl == 0 && rc->cur_bx4 <= 28 && rc->cur_bx4 >= 24 &&
-        rc->cur_by4 == 44) {
-        static int _pxd = 0;
-        if (_pxd < 10) {
-            FILE *_fp = fopen("chroma_plane_ours.bin", "ab");
-            if (_fp) {
-                int _w = stbv_av1_tx_dims[tx].w << 2;
-                int _h = stbv_av1_tx_dims[tx].h << 2;
-                int _i;
-                unsigned long long hdr[10] = {
-                    (unsigned long long)pl, (unsigned long long)x4, (unsigned long long)y4,
-                    (unsigned long long)_w, (unsigned long long)_h, (unsigned long long)eob,
-                    (unsigned long long)rc->cur_bw4, (unsigned long long)rc->cur_bh4,
-                    (unsigned long long)rc->uv_mode, (unsigned long long)rc->cfl_alpha_u
-                };
-                fwrite(hdr, 8, 10, _fp);
-                for (_i = 0; _i < _h && _i < 16; _i++) {
-                    fwrite(plane + (size_t)((y4 << 2) + _i) * stride + (x4 << 2),
-                           sizeof(stbv_u16), (size_t)(_w < 16 ? _w : 16), _fp);
-                }
-                fclose(_fp);
-                _pxd++;
-            }
-        }
-    }
     if (pl == 0)
         stb_avif_extend_right_edge_u16(rc->plane_u, rc->stride_u, pw, ph, x4, y4, tx);
     else
@@ -2872,24 +2787,6 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
     int stride;
     const int pw = (rc->frame_w + rc->ss_hor) >> rc->ss_hor;
     const int ph = (rc->frame_h + rc->ss_ver) >> rc->ss_ver;
-    /* Debug: track ALL calls in range */
-    if (pl == 0 && x4 >= 24 && x4 <= 28 && y4 >= 44 && y4 <= 44) {
-        static int _track = 0;
-        if (_track < 40) {
-            FILE *_f = fopen("predict_calls.bin", "ab");
-            if (_f) {
-                unsigned long long vals[8] = {
-                    (unsigned long long)x4, (unsigned long long)y4,
-                    (unsigned long long)tx, (unsigned long long)rc->uv_mode,
-                    (unsigned long long)rc->pal_uv, (unsigned long long)rc->is_ibc,
-                    (unsigned long long)rc->has_chroma, (unsigned long long)rc->block_skip
-                };
-                fwrite(vals, 8, 8, _f);
-                fclose(_f);
-                _track++;
-            }
-        }
-    }
     /* 8-aligned (dav1d f->bw/f->bh), see note in block_edge_flags_run. */
     const int lfw4 = (rc->frame_w + 7) >> 3 << 1;
     const int lfh4 = (rc->frame_h + 7) >> 3 << 1;
@@ -2933,29 +2830,6 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
                           cangle | stb_avif_recon_edge_flags(rc, 0, rc->cur_bx4 >> rc->ss_hor,
                     rc->cur_by4 >> rc->ss_ver),
                           0, (cfw4 - cx4) << 2, (cfh4 - cy4) << 2, rc->bit_depth);
-    /* Debug: dump DC prediction for blocks near first diff */
-    if (pl == 0 && x4 >= 24 && x4 <= 32 && y4 >= 44 && y4 <= 46) {
-        static int _dcpd = 0;
-        if (_dcpd < 60) {
-            FILE *_fp = fopen("dc_pred_debug.bin", "ab");
-            if (_fp) {
-                unsigned long long hdr[10] = {
-                    (unsigned long long)x4, (unsigned long long)y4,
-                    (unsigned long long)w, (unsigned long long)h,
-                    (unsigned long long)rc->uv_mode, (unsigned long long)rc->block_skip,
-                    (unsigned long long)rc->cur_bx4, (unsigned long long)rc->cur_by4,
-                    (unsigned long long)rc->cur_bw4, (unsigned long long)rc->cur_bh4
-                };
-                fwrite(hdr, 8, 10, _fp);
-                /* Dump edge array (top+left) — first w+h entries are the edge */
-                fwrite(edge, sizeof(stbv_u16), (size_t)(w + h), _fp);
-                /* Dump pred array */
-                fwrite(rc->pred, sizeof(stbv_u16), (size_t)(w * h), _fp);
-                fclose(_fp);
-                _dcpd++;
-            }
-        }
-    }
     /* Chroma-from-luma, ported from dav1d recon_b_intra + cfl_ac_c +
      * cfl_pred: ONE block-wide AC array (built from the fully
      * reconstructed co-located luma) shared by both planes;
@@ -3045,27 +2919,6 @@ static void stb_avif_recon_predict_txb_chroma(struct stb_avif_scalar_recon *rc,
                     rc->cfl_ac_bx = rc->cur_bx4;
                     rc->cfl_ac_by = rc->cur_by4;
                     rc->cfl_ac_ok = 1;
-                }
-                /* Debug: dump CFL AC after computation, before alpha adjustment */
-                if (pl == 0 && rc->cur_bx4 >= 24 && rc->cur_bx4 <= 28 && rc->cur_by4 == 44) {
-                    static int _cfl_d = 0;
-                    if (_cfl_d < 10) {
-                        FILE *_fp = fopen("cfl_debug.bin", "ab");
-                        if (_fp) {
-                            int W_ = rc->cfl_ac_w, H_ = rc->cfl_ac_h;
-                            unsigned long long hdr[8] = {
-                                (unsigned long long)rc->cur_bx4, (unsigned long long)rc->cur_by4,
-                                (unsigned long long)alpha, (unsigned long long)rc->cfl_alpha_v,
-                                (unsigned long long)W_, (unsigned long long)H_,
-                                (unsigned long long)rc->cur_bw4, (unsigned long long)rc->cur_bh4
-                            };
-                            fwrite(hdr, 8, 8, _fp);
-                            fwrite(rc->cfl_ac, sizeof(stbv_i16), (size_t)(W_ * H_), _fp);
-                            fwrite(rc->pred, sizeof(stbv_u16), (size_t)(w * h), _fp);
-                            fclose(_fp);
-                            _cfl_d++;
-                        }
-                    }
                 }
                 {
                     const int off_x =

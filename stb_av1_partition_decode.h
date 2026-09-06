@@ -107,13 +107,7 @@ static int stbv_av1_partition_emit(stbv_av1_partition_decoder *d,
 {
     int r;
     d->leaf_count++;
-    if (bx >= 624 && bx < 648 && by >= 80 && by < 100)
-        fprintf(stderr, "LEAF_PRE  bx=%d by=%d bl=%d bs=%d rng=%u cnt=%d\n",
-                bx, by, bl, bs, (unsigned)d->msac->rng, d->msac->cnt);
     r = d->leaf(d, bl, bs, bp, bx, by, d->opaque);
-    if (bx >= 624 && bx < 648 && by >= 80 && by < 100)
-        fprintf(stderr, "LEAF_POST bx=%d by=%d bl=%d bs=%d rng=%u cnt=%d\n",
-                bx, by, bl, bs, (unsigned)d->msac->rng, d->msac->cnt);
     return r;
 }
 
@@ -126,15 +120,6 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
     stbv_u16 *pc;
     int bp = 0;
     int bs;
-
-    if (bl == STBV_AV1_BL_64X64 || bl == STBV_AV1_BL_32X32 || bl == STBV_AV1_BL_16X16) {
-        fprintf(stderr, "SB_ENTER bx=%d by=%d rng=%u cnt=%d\n",
-                bx, by, (unsigned)d->msac->rng, d->msac->cnt);
-    }
-    if (bl == STBV_AV1_BL_128X128) {
-        fprintf(stderr, "SB128_OUR bx=%d by=%d rng=%u cnt=%d\n",
-                bx, by, (unsigned)d->msac->rng, d->msac->cnt);
-    }
 
     hsz = 16 >> bl;
     have_h_split = d->frame_w4 > bx + hsz;
@@ -153,20 +138,11 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
         return -1;
     ctx = ((d->above[bx8] >> (4 - bl)) & 1) |
           (((d->left[by8] >> (4 - bl)) & 1) << 1);
-    if (bl == STBV_AV1_BL_64X64 || bl == STBV_AV1_BL_32X32 || bl == STBV_AV1_BL_16X16) {
-        fprintf(stderr, "  CTX bx8=%d by8=%d above=%d left=%d ctx=%d h=%d v=%d\n",
-                bx8, by8, d->above[bx8], d->left[by8], ctx,
-                have_h_split, have_v_split);
-    }
     pc = stbv_av1_partition_cdf(d->cdf->partition, bl, ctx);
 
     if (have_h_split && have_v_split) {
         bp = (int)stb_av1_msac_symbol(d->msac, pc,
                                        stbv_av1_partition_type_count[bl]);
-        if (bl == STBV_AV1_BL_64X64 || bl == STBV_AV1_BL_32X32 || bl == STBV_AV1_BL_16X16) {
-            fprintf(stderr, "  BP   bx=%d by=%d bp=%d rng=%u cnt=%d\n",
-                    bx, by, bp, (unsigned)d->msac->rng, d->msac->cnt);
-        }
         if (bp < 0 || bp >= STBV_AV1_N_PARTITIONS)
             return -1;
 
@@ -339,11 +315,6 @@ static int stbv_av1_partition_decode_sb(stbv_av1_partition_decoder *d,
             stbv_av1_partition_set_context(d->above, d->left, d->above_n,
                                            d->left_n, bx8, by8,
                                            hsz, bl, bp);
-    }
-
-    if (bl == STBV_AV1_BL_64X64 || bl == STBV_AV1_BL_32X32 || bl == STBV_AV1_BL_16X16) {
-        fprintf(stderr, "SB_EXIT  bx=%d by=%d rng=%u cnt=%d\n",
-                bx, by, (unsigned)d->msac->rng, d->msac->cnt);
     }
 
     return 0;
