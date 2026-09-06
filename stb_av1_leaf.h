@@ -1337,15 +1337,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
     c.recon = recon;
     c.ss_hor = 0;
     c.ss_ver = 0;
-    { /* Temporary: dump MSAC state at every block for divergence search */
-        static FILE *_blk = NULL;
-        if (!_blk) _blk = fopen("msac_ours_perblock.bin", "wb");
-        if (_blk) {
-            unsigned int vals[4] = { (unsigned int)bx4, (unsigned int)by4,
-                (unsigned int)msac->rng, (unsigned int)msac->cnt };
-            fwrite(vals, sizeof(unsigned int), 4, _blk);
-        }
-    }
     memset(c.luma_txtp_map, 0, sizeof(c.luma_txtp_map));
     if (!msac || !cdf || !state || bs < 0 || bs >= STBV_AV1_N_BS_SIZES)
         return -1;
@@ -2171,15 +2162,6 @@ static int stbv_av1_decode_leaf_syntax(struct stb_av1_msac *msac,
         if (state->refmvs_r) {
             stbv_refmvs_splat_intra(state->refmvs_r, state->refmvs_stride,
                                      bx4, by4, bw4, bh4, bs);
-        }
-    }
-    { /* Temporary: dump MSAC state at block exit */
-        static FILE *_blk = NULL;
-        if (!_blk) _blk = fopen("msac_ours_exit.bin", "wb");
-        if (_blk) {
-            unsigned int vals[4] = { (unsigned int)bx4, (unsigned int)by4,
-                (unsigned int)msac->rng, (unsigned int)msac->cnt };
-            fwrite(vals, sizeof(unsigned int), 4, _blk);
         }
     }
     return 0;
