@@ -400,6 +400,73 @@ static void stb_av1_getbits_bytealign(struct stb_av1_getbits *c)
     c->state = 0;
 }
 
+/* ---- Byte-level helpers (ISOBMFF / OBU byte-oriented parsing) ---- */
+
+static int stb_av1_getbits_read_byte(struct stb_av1_getbits *c)
+{
+    return (int)stb_av1_get_bits(c, 8);
+}
+
+static int stb_av1_getbits_peek_byte(struct stb_av1_getbits *c)
+{
+    if (c->bits_left >= 8)
+        return (int)(c->state >> (64 - 8));
+    if (c->ptr < c->ptr_end)
+        return *c->ptr;
+    c->error = 1;
+    return -1;
+}
+
+static stbv_u16 stb_av1_getbits_read_be16(struct stb_av1_getbits *c)
+{
+    return (stbv_u16)stb_av1_get_bits(c, 16);
+}
+
+static stbv_u32 stb_av1_getbits_read_be32(struct stb_av1_getbits *c)
+{
+    return stb_av1_get_bits(c, 32);
+}
+
+static stbv_u64 stb_av1_getbits_read_be64(struct stb_av1_getbits *c)
+{
+    stbv_u64 hi = stb_av1_get_bits(c, 32);
+    stbv_u64 lo = stb_av1_get_bits(c, 32);
+    return (hi << 32) | lo;
+}
+
+static unsigned int stb_av1_getbits_read_uleb128(struct stb_av1_getbits *c)
+{
+    return stb_av1_get_uleb128(c);
+}
+
+static void stb_av1_getbits_skip(struct stb_av1_getbits *c, size_t n)
+{
+    while (n > 0 && !c->error) {
+        size_t chunk = n > 4 ? 4 : n;
+        stb_av1_get_bits(c, (int)(chunk * 8));
+        n -= chunk;
+    }
+}
+
+/* Current byte position in the stream (valid after byte-align or when
+ * bits_left == 0). */
+static size_t stb_av1_getbits_bytepos(const struct stb_av1_getbits *c)
+{
+    return (size_t)(c->ptr - c->ptr_start);
+}
+
+static void stb_av1_getbits_seek(struct stb_av1_getbits *c, size_t byte_pos)
+{
+    c->bits_left = 0;
+    c->state = 0;
+    c->ptr = c->ptr_start + byte_pos;
+}
+
+static size_t stb_av1_getbits_size(const struct stb_av1_getbits *c)
+{
+    return (size_t)(c->ptr_end - c->ptr_start);
+}
+
 #endif /* STB_AV1_GETBITS_H */
 
 /* ===== stb_av1_msac.h ===== */
@@ -12323,91 +12390,6 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
 int sh_parsed_ok = 0;
 int probe_seq_hbd = 0, probe_seq_mono = 0;
 
-struct stb_avif_reader {
-    const unsigned char *data;
-    size_t size;
-    size_t pos;
-    int bit_pos;        /* current bit position (0-7) within current byte */
-    int byte_buf;       /* buffered byte for bit reads (-1 = none) */
-};
-
-static void stb_avif_reader_init(struct stb_avif_reader *r, const unsigned char *data, size_t size)
-{
-    r->data = data;
-    r->size = size;
-    r->pos = 0;
-    r->bit_pos = 0;
-    r->byte_buf = -1;
-}
-
-static int stb_avif_read_byte(struct stb_avif_reader *r)
-{
-    if (r->pos >= r->size)
-        STB_AVIF_ERROR("Unexpected end of data");
-    return r->data[r->pos++];
-}
-
-static int stb_avif_peek_byte(struct stb_avif_reader *r)
-{
-    if (r->pos >= r->size)
-        STB_AVIF_ERROR("Unexpected end of data");
-    return r->data[r->pos];
-}
-
-static stbv_u32 stb_avif_read_be32(struct stb_avif_reader *r)
-{
-    stbv_u32 v;
-    v = (stbv_u32)stb_avif_read_byte(r) << 24;
-    v |= (stbv_u32)stb_avif_read_byte(r) << 16;
-    v |= (stbv_u32)stb_avif_read_byte(r) << 8;
-    v |= (stbv_u32)stb_avif_read_byte(r);
-    return v;
-}
-
-static stbv_u16 stb_avif_read_be16(struct stb_avif_reader *r)
-{
-    stbv_u16 v;
-    v = (stbv_u16)(stb_avif_read_byte(r) << 8);
-    v |= (stbv_u16)(stb_avif_read_byte(r));
-    return v;
-}
-
-static stbv_u64 stb_avif_read_be64(struct stb_avif_reader *r)
-{
-    stbv_u64 v;
-    v = (stbv_u64)stb_avif_read_byte(r) << 56;
-    v |= (stbv_u64)stb_avif_read_byte(r) << 48;
-    v |= (stbv_u64)stb_avif_read_byte(r) << 40;
-    v |= (stbv_u64)stb_avif_read_byte(r) << 32;
-    v |= (stbv_u64)stb_avif_read_byte(r) << 24;
-    v |= (stbv_u64)stb_avif_read_byte(r) << 16;
-    v |= (stbv_u64)stb_avif_read_byte(r) << 8;
-    v |= (stbv_u64)stb_avif_read_byte(r);
-    return v;
-}
-
-/* Skip n bytes forward */
-static void stb_avif_skip_bytes(struct stb_avif_reader *r, size_t n)
-{
-    if (r->pos + n > r->size)
-        STB_AVIF_ERROR("Unexpected end of data");
-    r->pos += n;
-}
-
-/* Read a 7-bit variable-length quantity (used in ISOBMFF) */
-static stbv_u32 stb_avif_read_uleb128(struct stb_avif_reader *r)
-{
-    stbv_u32 val = 0;
-    int i;
-    for (i = 0; i < 5; i++) {
-        int b = stb_avif_read_byte(r);
-        val |= ((stbv_u32)(b & 0x7F)) << (i * 7);
-        if (!(b & 0x80))
-            break;
-    }
-    return val;
-}
-
 /* ----------- ISOBMFF/HEIF BOX PARSER ----------- */
 
 /* Box header: size (4 or 8 bytes) + type (4 bytes) */
@@ -12443,47 +12425,47 @@ struct stb_avif_box {
 };
 
 /* Read a box header at current position and advance past it */
-static void stb_avif_read_box_header(struct stb_avif_reader *r, struct stb_avif_box *box)
+static void stb_avif_read_box_header(struct stb_av1_getbits *gb, struct stb_avif_box *box)
 {
     stbv_u32 size32;
-    stbv_u64 start = (stbv_u64)r->pos;
+    stbv_u64 start = (stbv_u64)stb_av1_getbits_bytepos(gb);
 
-    size32 = stb_avif_read_be32(r);
-    box->type = stb_avif_read_be32(r);
+    size32 = stb_av1_getbits_read_be32(gb);
+    box->type = stb_av1_getbits_read_be32(gb);
 
     if (size32 == 1) {
         /* Extended size (64-bit) */
-        box->size = stb_avif_read_be64(r);
+        box->size = stb_av1_getbits_read_be64(gb);
     } else if (size32 == 0) {
         /* Box extends to end of file */
-        box->size = (stbv_u64)r->size - start;
+        box->size = (stbv_u64)stb_av1_getbits_size(gb) - start;
     } else {
         box->size = (stbv_u64)size32;
     }
 
-    box->data_start = (stbv_u64)r->pos;
-    if (box->size >= (stbv_u64)(r->pos - start)) {
-        box->data_size = box->size - (stbv_u64)(r->pos - start);
+    box->data_start = (stbv_u64)stb_av1_getbits_bytepos(gb);
+    if (box->size >= (stbv_u64)(stb_av1_getbits_bytepos(gb) - start)) {
+        box->data_size = box->size - (stbv_u64)(stb_av1_getbits_bytepos(gb) - start);
     } else {
         box->data_size = 0;
     }
 }
 
 /* Skip to end of box */
-static void stb_avif_skip_box(struct stb_avif_reader *r, const struct stb_avif_box *box)
+static void stb_avif_skip_box(struct stb_av1_getbits *gb, const struct stb_avif_box *box)
 {
     stbv_u64 end = box->data_start + box->data_size;
-    if (end > (stbv_u64)r->size)
+    if (end > (stbv_u64)stb_av1_getbits_size(gb))
         STB_AVIF_ERROR("Box extends beyond data");
-    r->pos = (size_t)end;
+    stb_av1_getbits_seek(gb, (size_t)end);
 }
 
 /* Enter a box: position at data start */
-static void stb_avif_enter_box(struct stb_avif_reader *r, const struct stb_avif_box *box)
+static void stb_avif_enter_box(struct stb_av1_getbits *gb, const struct stb_avif_box *box)
 {
-    if (box->data_start > (stbv_u64)r->size)
+    if (box->data_start > (stbv_u64)stb_av1_getbits_size(gb))
         STB_AVIF_ERROR("Box position out of bounds");
-    r->pos = (size_t)box->data_start;
+    stb_av1_getbits_seek(gb, (size_t)box->data_start);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -12560,20 +12542,20 @@ struct stb_avif_avif_info {
 /* ----------- ISOBMFF PARSER ----------- */
 
 /* Find a box of given type within a container; recurses into sub-boxes if needed.
-   Returns 1 if found, 0 if not. Does not modify r->pos on return. */
-static int stb_avif_find_box(struct stb_avif_reader *r, stbv_u32 type,
+   Returns 1 if found, 0 if not. Does not modify gb position on return. */
+static int stb_avif_find_box(struct stb_av1_getbits *gb, stbv_u32 type,
                               int deep_search, struct stb_avif_box *box_out)
 {
-    size_t saved_pos = r->pos;
+    size_t saved_pos = stb_av1_getbits_bytepos(gb);
 
-    while (r->pos + 8 <= r->size) {
+    while (stb_av1_getbits_bytepos(gb) + 8 <= stb_av1_getbits_size(gb)) {
         struct stb_avif_box box;
-        size_t box_start = r->pos;
+        size_t box_start = stb_av1_getbits_bytepos(gb);
 
-        stb_avif_read_box_header(r, &box);
+        stb_avif_read_box_header(gb, &box);
 
         if (box.type == type) {
-            r->pos = (size_t)box.data_start;
+            stb_av1_getbits_seek(gb, (size_t)box.data_start);
             if (box_out) *box_out = box;
             return 1;
         }
@@ -12584,29 +12566,29 @@ static int stb_avif_find_box(struct stb_avif_reader *r, stbv_u32 type,
                             box.type == STB_AVIF_BOX_MOOV ||
                             box.type == STB_AVIF_BOX_MOOF))
         {
-            stb_avif_enter_box(r, &box);
-            if (stb_avif_find_box(r, type, deep_search, box_out)) {
+            stb_avif_enter_box(gb, &box);
+            if (stb_avif_find_box(gb, type, deep_search, box_out)) {
                 return 1;
             }
         }
 
-        r->pos = (size_t)(box_start + box.size);
+        stb_av1_getbits_seek(gb, (size_t)(box_start + box.size));
     }
 
-    r->pos = saved_pos;
+    stb_av1_getbits_seek(gb, saved_pos);
     return 0;
 }
 
 /* Parse ftyp box to verify this is an AVIF file */
-static void stb_avif_parse_ftyp(struct stb_avif_reader *r,
+static void stb_avif_parse_ftyp(struct stb_av1_getbits *gb,
                                  struct stb_avif_avif_info *info)
 {
     /* Skip major brand (4 bytes), minor version (4 bytes) */
-    stb_avif_skip_bytes(r, 8);
+    stb_av1_getbits_skip(gb, 8);
 
     /* Check for compatible brands */
-    while (r->pos < r->size) {
-        stbv_u32 brand = stb_avif_read_be32(r);
+    while (stb_av1_getbits_bytepos(gb) < stb_av1_getbits_size(gb)) {
+        stbv_u32 brand = stb_av1_getbits_read_be32(gb);
         if (brand == STB_AVIF_FOURCC('a','v','i','f'))
             return; /* OK */
         /* We found avif brand; we're good */
@@ -12619,7 +12601,7 @@ static void stb_avif_parse_ftyp(struct stb_avif_reader *r,
 
 /* Parse the av1C box (AV1 codec configuration) 
    box_data_size: remaining bytes in the av1C box (after box header) */
-static void stb_avif_parse_av1c(struct stb_avif_reader *r,
+static void stb_avif_parse_av1c(struct stb_av1_getbits *gb,
                                  struct stb_avif_avif_info *info,
                                  size_t box_data_size)
 {
@@ -12654,18 +12636,18 @@ static void stb_avif_parse_av1c(struct stb_avif_reader *r,
     int initial_presentation_delay_present;
 
     /* Byte 0: marker(1)=1 + version(7)=1 */
-    stb_avif_read_byte(r);
+    stb_av1_getbits_read_byte(gb);
 
     /* Byte 1: seq_profile(3) + seq_level_idx_0(5) */
     {
-        int byte1 = stb_avif_read_byte(r);
+        int byte1 = stb_av1_getbits_read_byte(gb);
         seq_profile = (byte1 >> 5) & 7;
         /* seq_level_idx_0 = byte1 & 31; */
     }
 
     /* Byte 2: flags */
     {
-        int byte2 = stb_avif_read_byte(r);
+        int byte2 = stb_av1_getbits_read_byte(gb);
         seq_tier_0                  = (byte2 >> 7) & 1;
         high_bitdepth               = (byte2 >> 6) & 1;
         twelve_bit                  = (byte2 >> 5) & 1;
@@ -12687,7 +12669,7 @@ static void stb_avif_parse_av1c(struct stb_avif_reader *r,
 
     /* Byte 3: reserved + initial_presentation_delay */
     {
-        int byte3 = stb_avif_read_byte(r);
+        int byte3 = stb_av1_getbits_read_byte(gb);
         initial_presentation_delay_present = (byte3 >> 4) & 1;
     }
 
@@ -12699,7 +12681,7 @@ static void stb_avif_parse_av1c(struct stb_avif_reader *r,
     if (info->av1c_size < 0) info->av1c_size = 0;
 
     for (i = 0; i < info->av1c_size && i < (int)box_data_size - 4; i++) {
-        info->av1c_data[i] = (unsigned char)stb_avif_read_byte(r);
+        info->av1c_data[i] = (unsigned char)stb_av1_getbits_read_byte(gb);
     }
 
     STB_AVIF_CHECK(high_bitdepth == 0 || high_bitdepth == 1,
@@ -12711,7 +12693,7 @@ static void stb_avif_parse_av1c(struct stb_avif_reader *r,
 }
 
 /* Parse the iloc box (item location) to find where coded data is stored */
-static void stb_avif_parse_iloc(struct stb_avif_reader *r,
+static void stb_avif_parse_iloc(struct stb_av1_getbits *gb,
                                  struct stb_avif_avif_info *info,
                                  int primary_id,
                                  stbv_u32 *data_offset,
@@ -12721,19 +12703,19 @@ static void stb_avif_parse_iloc(struct stb_avif_reader *r,
     int offset_size, length_size, base_offset_size, index_size;
     int item_count, i_item;
 
-    version = stb_avif_read_byte(r);
+    version = stb_av1_getbits_read_byte(gb);
     {
         /* fullbox: version(1) + flags(3), then the sizes byte */
         int fl;
-        stb_avif_read_byte(r);          /* version */
-        stb_avif_read_byte(r);
-        stb_avif_read_byte(r);
-        fl       = stb_avif_read_byte(r);
+        stb_av1_getbits_read_byte(gb);          /* version */
+        stb_av1_getbits_read_byte(gb);
+        stb_av1_getbits_read_byte(gb);
+        fl       = stb_av1_getbits_read_byte(gb);
         /* ISO/AVIF: these 4-bit fields store SIZE-1 (0 = absent) */
         offset_size = (fl >> 4) & 0xF;
         length_size = fl & 0xF;
         /* base_offset_size / index_size byte is present in ALL versions */
-        fl = stb_avif_read_byte(r);
+        fl = stb_av1_getbits_read_byte(gb);
         base_offset_size = (fl >> 4) & 0xF;
         index_size = fl & 0xF;
         if (version < 2) {
@@ -12742,7 +12724,7 @@ static void stb_avif_parse_iloc(struct stb_avif_reader *r,
         }
     }
 
-    item_count = (int)stb_avif_read_be16(r);
+    item_count = (int)stb_av1_getbits_read_be16(gb);
     *data_offset = 0;
     *data_size = 0;
 
@@ -12753,19 +12735,19 @@ static void stb_avif_parse_iloc(struct stb_avif_reader *r,
         int extent_count;
 
         if (version < 2) {
-            item_ID = (int)stb_avif_read_be16(r);
+            item_ID = (int)stb_av1_getbits_read_be16(gb);
         } else {
-            item_ID = (int)stb_avif_read_be16(r);
-            stb_avif_read_be16(r);
+            item_ID = (int)stb_av1_getbits_read_be16(gb);
+            stb_av1_getbits_read_be16(gb);
         }
 
         if (version >= 1) {
             /* construction_method */
             /* 4 bytes: (12 reserved + 4 construction_method) or more depending on version */
-            stb_avif_read_be16(r); /* skip */
-            data_ref_index = stb_avif_read_be16(r);
+            stb_av1_getbits_read_be16(gb); /* skip */
+            data_ref_index = stb_av1_getbits_read_be16(gb);
         } else {
-            data_ref_index = stb_avif_read_be16(r);
+            data_ref_index = stb_av1_getbits_read_be16(gb);
         }
         (void)data_ref_index;
 
@@ -12780,10 +12762,10 @@ static void stb_avif_parse_iloc(struct stb_avif_reader *r,
             _off_sz = base_offset_size;
 
             for (j = 0; j < _off_sz; j++) {
-                base_offset_val = (base_offset_val << 8) | (stbv_u64)stb_avif_read_byte(r);
+                base_offset_val = (base_offset_val << 8) | (stbv_u64)stb_av1_getbits_read_byte(gb);
             }
 
-            extent_count = (int)stb_avif_read_be16(r);
+            extent_count = (int)stb_av1_getbits_read_be16(gb);
 
             for (i_extent = 0; i_extent < extent_count; i_extent++) {
                 stbv_u64 extent_offset = 0;
@@ -12791,10 +12773,10 @@ static void stb_avif_parse_iloc(struct stb_avif_reader *r,
                 int k;
 
                 for (k = 0; k < offset_size; k++) {
-                    extent_offset = (extent_offset << 8) | (stbv_u64)stb_avif_read_byte(r);
+                    extent_offset = (extent_offset << 8) | (stbv_u64)stb_av1_getbits_read_byte(gb);
                 }
                 for (k = 0; k < length_size; k++) {
-                    extent_length = (extent_length << 8) | (stbv_u64)stb_avif_read_byte(r);
+                    extent_length = (extent_length << 8) | (stbv_u64)stb_av1_getbits_read_byte(gb);
                 }
 
                 if (item_ID == primary_id && i_extent == 0 &&
@@ -12808,22 +12790,22 @@ static void stb_avif_parse_iloc(struct stb_avif_reader *r,
 }
 
 /* Parse pitm (Primary Item ID) */
-static int stb_avif_parse_pitm(struct stb_avif_reader *r)
+static int stb_avif_parse_pitm(struct stb_av1_getbits *gb)
 {
-    int version = stb_avif_read_byte(r);
-    stb_avif_read_byte(r); /* flags */
-    stb_avif_read_byte(r); /* flags */
-    stb_avif_read_byte(r); /* flags */
+    int version = stb_av1_getbits_read_byte(gb);
+    stb_av1_getbits_read_byte(gb); /* flags */
+    stb_av1_getbits_read_byte(gb); /* flags */
+    stb_av1_getbits_read_byte(gb); /* flags */
     if (version < 1) {
-        return (int)stb_avif_read_be16(r);
+        return (int)stb_av1_getbits_read_be16(gb);
     } else {
         /* version >= 1 uses 32-bit */
-        return (int)stb_avif_read_be32(r);
+        return (int)stb_av1_getbits_read_be32(gb);
     }
 }
 
 /* Parse the meta box to extract AVIF metadata */
-static void stb_avif_parse_meta(struct stb_avif_reader *r,
+static void stb_avif_parse_meta(struct stb_av1_getbits *gb,
                                  struct stb_avif_avif_info *info)
 {
     stbv_u32 data_offset = 0;
@@ -12832,30 +12814,30 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
     size_t meta_end;
 
     /* Skip FullBox version+flags (4 bytes) */
-    stb_avif_read_byte(r); stb_avif_read_byte(r);
-    stb_avif_read_byte(r); stb_avif_read_byte(r);
+    stb_av1_getbits_read_byte(gb); stb_av1_getbits_read_byte(gb);
+    stb_av1_getbits_read_byte(gb); stb_av1_getbits_read_byte(gb);
 
-    meta_box.data_start = (stbv_u64)r->pos;
-    meta_box.data_size = (stbv_u64)(info->meta_end_offset - r->pos);
+    meta_box.data_start = (stbv_u64)stb_av1_getbits_bytepos(gb);
+    meta_box.data_size = (stbv_u64)(info->meta_end_offset - stb_av1_getbits_bytepos(gb));
 
     meta_end = info->meta_end_offset;
 
     /* Scan sub-boxes within meta */
-    while (r->pos < meta_end) {
+    while (stb_av1_getbits_bytepos(gb) < meta_end) {
         struct stb_avif_box sub;
-        size_t sub_start = r->pos;
+        size_t sub_start = stb_av1_getbits_bytepos(gb);
 
-        if (r->pos + 8 > r->size) break;
+        if (stb_av1_getbits_bytepos(gb) + 8 > stb_av1_getbits_size(gb)) break;
 
-        stb_avif_read_box_header(r, &sub);
+        stb_avif_read_box_header(gb, &sub);
         if (sub.type == STB_AVIF_BOX_HDLR) {
             /* handler box - verify picture handler */
         }
         else if (sub.type == STB_AVIF_BOX_PITM) {
-            info->primary_item_id = stb_avif_parse_pitm(r);
+            info->primary_item_id = stb_avif_parse_pitm(gb);
         }
         else if (sub.type == STB_AVIF_BOX_ILOC) {
-            stb_avif_parse_iloc(r, info, info->primary_item_id,
+            stb_avif_parse_iloc(gb, info, info->primary_item_id,
                                 &data_offset, &data_size);
         }
         else if (sub.type == STB_AVIF_BOX_IREF) {
@@ -12863,57 +12845,57 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
              * type: { u32 size; u32 type('auxl'); u16 from_item_ID;
              *         u16 reference_count; u16 to_item_ID[]; } */
             struct stb_avif_box ir = sub;
-            stb_avif_enter_box(r, &ir);
-            stb_avif_read_byte(r);
-            stb_avif_read_byte(r); stb_avif_read_byte(r); stb_avif_read_byte(r);
-            while (r->pos + 8 <= (size_t)(ir.data_start + ir.data_size)) {
-                stbv_u32 esz = stb_avif_read_be32(r);
-                stbv_u32 ety = stb_avif_read_be32(r);
+            stb_avif_enter_box(gb, &ir);
+            stb_av1_getbits_read_byte(gb);
+            stb_av1_getbits_read_byte(gb); stb_av1_getbits_read_byte(gb); stb_av1_getbits_read_byte(gb);
+            while (stb_av1_getbits_bytepos(gb) + 8 <= (size_t)(ir.data_start + ir.data_size)) {
+                stbv_u32 esz = stb_av1_getbits_read_be32(gb);
+                stbv_u32 ety = stb_av1_getbits_read_be32(gb);
                 int from_id, ref_count, ri;
                 size_t ebody_end;
                 if (esz < 8) break;
-                ebody_end = r->pos + esz - 8;
+                ebody_end = stb_av1_getbits_bytepos(gb) + esz - 8;
                 if (ebody_end > (size_t)(ir.data_start + ir.data_size))
                     ebody_end = (size_t)(ir.data_start + ir.data_size);
-                from_id = (int)stb_avif_read_be16(r);
-                ref_count = (int)stb_avif_read_be16(r);
+                from_id = (int)stb_av1_getbits_read_be16(gb);
+                ref_count = (int)stb_av1_getbits_read_be16(gb);
                 for (ri = 0; ri < ref_count; ri++) {
                     int to_id;
-                    if (r->pos + 2 > ebody_end) break;
-                    to_id = (int)stb_avif_read_be16(r);
+                    if (stb_av1_getbits_bytepos(gb) + 2 > ebody_end) break;
+                    to_id = (int)stb_av1_getbits_read_be16(gb);
                     if (ety == STB_AVIF_FOURCC('a','u','x','l') &&
                         to_id == info->primary_item_id)
                         info->alpha_item_id = from_id;
                 }
-                r->pos = ebody_end;
+                stb_av1_getbits_seek(gb, ebody_end);
             }
         }
         else if (sub.type == STB_AVIF_BOX_IPRP) {
             /* Item properties container */
             struct stb_avif_box iprp_box = sub;
-            stb_avif_enter_box(r, &iprp_box);
+            stb_avif_enter_box(gb, &iprp_box);
 
-            while (r->pos < (size_t)(iprp_box.data_start + iprp_box.data_size)) {
+            while (stb_av1_getbits_bytepos(gb) < (size_t)(iprp_box.data_start + iprp_box.data_size)) {
                 struct stb_avif_box iprp_sub;
-                size_t iprp_sub_start = r->pos;
+                size_t iprp_sub_start = stb_av1_getbits_bytepos(gb);
 
-                if (r->pos + 8 > r->size) break;
-                stb_avif_read_box_header(r, &iprp_sub);
+                if (stb_av1_getbits_bytepos(gb) + 8 > stb_av1_getbits_size(gb)) break;
+                stb_avif_read_box_header(gb, &iprp_sub);
 
                 if (iprp_sub.type == STB_AVIF_BOX_IPCO) {
                     /* Item property container */
                     struct stb_avif_box ipco_box = iprp_sub;
-                    stb_avif_enter_box(r, &ipco_box);
+                    stb_avif_enter_box(gb, &ipco_box);
                     {
                     int ipco_prop_pos = 0; /* 1-based ipco position counter */
 
-                    while (r->pos < (size_t)(ipco_box.data_start + ipco_box.data_size)) {
+                    while (stb_av1_getbits_bytepos(gb) < (size_t)(ipco_box.data_start + ipco_box.data_size)) {
                         struct stb_avif_box prop;
-                        size_t prop_start = r->pos;
+                        size_t prop_start = stb_av1_getbits_bytepos(gb);
                         ipco_prop_pos++;
 
-                        if (r->pos + 8 > r->size) break;
-                        stb_avif_read_box_header(r, &prop);
+                        if (stb_av1_getbits_bytepos(gb) + 8 > stb_av1_getbits_size(gb)) break;
+                        stb_avif_read_box_header(gb, &prop);
 
                         if (prop.type == STB_AVIF_BOX_AV1C) {
                             /* Record 1-based property index for ipma lookup.
@@ -12924,8 +12906,8 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                                 info->av1c_prop_idx[idx] = idx + 1;
                                 /* Parse av1C into temporary storage */
                                 {
-                                    size_t saved_pos = r->pos;
-                                    stb_avif_parse_av1c(r, info, (size_t)prop.data_size);
+                                    size_t saved_pos = stb_av1_getbits_bytepos(gb);
+                                    stb_avif_parse_av1c(gb, info, (size_t)prop.data_size);
                                     /* Copy the just-parsed av1C data to all_data[idx] */
                                     if (info->av1c_size <= 32) {
                                         int bi;
@@ -12948,13 +12930,13 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                             /* Image spatial extents: store per-property, resolve
                              * to primary item later via ipma. */
                             int si;
-                            stb_avif_read_byte(r); /* version */
-                            stb_avif_read_byte(r); /* flags */
-                            stb_avif_read_byte(r);
-                            stb_avif_read_byte(r);
+                            stb_av1_getbits_read_byte(gb); /* version */
+                            stb_av1_getbits_read_byte(gb); /* flags */
+                            stb_av1_getbits_read_byte(gb);
+                            stb_av1_getbits_read_byte(gb);
                             {
-                                int w = (int)stb_avif_read_be32(r);
-                                int h = (int)stb_avif_read_be32(r);
+                                int w = (int)stb_av1_getbits_read_be32(gb);
+                                int h = (int)stb_av1_getbits_read_be32(gb);
                                 si = info->ispe_prop_count;
                                 if (si < 8) {
                                     info->ispe_prop_idx[si] = ipco_prop_pos;
@@ -12966,15 +12948,15 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                         }
                         else if (prop.type == STB_AVIF_BOX_PIXI) {
                             /* Pixel information (bit depth per channel) */
-                            stb_avif_read_byte(r); /* version */
-                            stb_avif_read_byte(r); /* flags */
-                            stb_avif_read_byte(r);
-                            stb_avif_read_byte(r);
+                            stb_av1_getbits_read_byte(gb); /* version */
+                            stb_av1_getbits_read_byte(gb); /* flags */
+                            stb_av1_getbits_read_byte(gb);
+                            stb_av1_getbits_read_byte(gb);
                             /* num_channels */
-                            (void)stb_avif_read_byte(r);
+                            (void)stb_av1_getbits_read_byte(gb);
                         }
 
-                        r->pos = (size_t)(prop_start + prop.size);
+                        stb_av1_getbits_seek(gb, (size_t)(prop_start + prop.size));
                     }
                     } /* end ipco_prop_pos block */
                 }
@@ -12984,25 +12966,25 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                      *   each entry: item_ID(16|32) + association_count(8)
                      *     per assoc: property_index(16, 1-based, high bit = essential) */
                     struct stb_avif_box ipma_box = iprp_sub;
-                    stb_avif_enter_box(r, &ipma_box);
+                    stb_avif_enter_box(gb, &ipma_box);
                     {
-                        int ipma_version = stb_avif_read_byte(r);
-                        stb_avif_read_byte(r); stb_avif_read_byte(r); stb_avif_read_byte(r);
+                        int ipma_version = stb_av1_getbits_read_byte(gb);
+                        stb_av1_getbits_read_byte(gb); stb_av1_getbits_read_byte(gb); stb_av1_getbits_read_byte(gb);
                         {
-                            stbv_u32 entry_count = stb_avif_read_be32(r);
+                            stbv_u32 entry_count = stb_av1_getbits_read_be32(gb);
                             stbv_u32 ei;
                             info->ipma_item_count = 0;
                             for (ei = 0; ei < entry_count && ei < 16; ei++) {
                                 int item_id, acnt, ai;
                                 if (ipma_version == 0)
-                                    item_id = (int)stb_avif_read_be16(r);
+                                    item_id = (int)stb_av1_getbits_read_be16(gb);
                                 else
-                                    item_id = (int)stb_avif_read_be32(r);
-                                acnt = (int)stb_avif_read_byte(r);
+                                    item_id = (int)stb_av1_getbits_read_be32(gb);
+                                acnt = (int)stb_av1_getbits_read_byte(gb);
                                 info->ipma_item_ids[info->ipma_item_count] = item_id;
                                 info->ipma_prop_count[info->ipma_item_count] = 0;
                                 for (ai = 0; ai < acnt && ai < 8; ai++) {
-                                    int prop_idx = (int)stb_avif_read_be16(r);
+                                    int prop_idx = (int)stb_av1_getbits_read_be16(gb);
                                     /* bit 15 = essential flag; property_index is bits 14..0 */
                                     prop_idx &= 0x7fff;
                                     if (info->ipma_prop_count[info->ipma_item_count] < 8)
@@ -13014,7 +12996,7 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
     }
                 }
 
-                r->pos = (size_t)(iprp_sub_start + iprp_sub.size);
+                stb_av1_getbits_seek(gb, (size_t)(iprp_sub_start + iprp_sub.size));
             }
         }
 
@@ -13081,21 +13063,21 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
             info->height = info->ispe_all_h[0];
         }
 
-        r->pos = (size_t)(sub_start + sub.size);
+        stb_av1_getbits_seek(gb, (size_t)(sub_start + sub.size));
     }
 
     /* Now read the mdat data */
     {
-        size_t saved = r->pos;
+        size_t saved = stb_av1_getbits_bytepos(gb);
 
-        r->pos = 0;
-        if (stb_avif_find_box(r, STB_AVIF_BOX_MDAT, 0, NULL)) {
-                    info->av1_data = r->data + r->pos;
-            info->av1_size = r->size - r->pos; /* Rest of file is mdat content */
+        stb_av1_getbits_seek(gb, 0);
+        if (stb_avif_find_box(gb, STB_AVIF_BOX_MDAT, 0, NULL)) {
+                    info->av1_data = gb->ptr_start + stb_av1_getbits_bytepos(gb);
+            info->av1_size = stb_av1_getbits_size(gb) - stb_av1_getbits_bytepos(gb); /* Rest of file is mdat content */
 
             /* If we have iloc info, use that offset instead */
             if (data_size > 0 && data_offset > 0) {
-                info->av1_data = r->data + data_offset;
+                info->av1_data = gb->ptr_start + data_offset;
                 info->av1_size = (size_t)data_size;
             } else {
                 /* Conservative: mdat may contain more than just our image.
@@ -13103,15 +13085,15 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
                 /* The actual av1 data starts at data_offset from the beginning of mdat */
                 if (data_offset > 0) {
                     /* data_offset is absolute in the file */
-                    info->av1_data = r->data + data_offset;
+                    info->av1_data = gb->ptr_start + data_offset;
                     if (data_size > 0)
                         info->av1_size = (size_t)data_size;
                     else
-                        info->av1_size = r->size - data_offset;
+                        info->av1_size = stb_av1_getbits_size(gb) - data_offset;
                 }
             }
         }
-        r->pos = saved;
+        stb_av1_getbits_seek(gb, saved);
     }
 }
 
@@ -13137,10 +13119,10 @@ static void stb_avif_parse_meta(struct stb_avif_reader *r,
    bit 6: obu_has_size_field
    bit 7: obu_reserved_1bit (1)
 */
-static int stb_av1_read_obu_header(struct stb_avif_reader *r, int *obu_type,
+static int stb_av1_read_obu_header(struct stb_av1_getbits *gb, int *obu_type,
                                     int *obu_extension_flag, int *obu_has_size_field)
 {
-    int hdr = stb_avif_read_byte(r);
+    int hdr = stb_av1_getbits_read_byte(gb);
     if (hdr & 0x80) STB_AVIF_ERROR("Invalid OBU header (reserved bit not 0)");
     *obu_type = (hdr >> 3) & 0xF;
     *obu_extension_flag = (hdr >> 2) & 1;
@@ -13149,9 +13131,9 @@ static int stb_av1_read_obu_header(struct stb_avif_reader *r, int *obu_type,
 }
 
 /* Read OBU size (LEB128 encoded) */
-static stbv_u32 stb_av1_read_obu_size(struct stb_avif_reader *r)
+static stbv_u32 stb_av1_read_obu_size(struct stb_av1_getbits *gb)
 {
-    return stb_avif_read_uleb128(r);
+    return stb_av1_getbits_read_uleb128(gb);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -13443,8 +13425,7 @@ struct stb_av1_frame_header {
 #define STB_AV1_INTRA_ONLY 2
 #define STB_AV1_S_FRAME 3
 
-static void stb_av1_parse_frame_header(struct stb_avif_reader *r,
-                                        struct stb_av1_frame_header *fh,
+static void stb_av1_parse_frame_header(struct stb_av1_frame_header *fh,
                                         struct stb_av1_sequence_header *sh,
                                         struct stb_av1_bool_reader *br)
 {
@@ -15656,13 +15637,13 @@ unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
                                           int *x, int *y, int *channels,
                                           int req_channels)
 {
-    struct stb_avif_reader r;
+    struct stb_av1_getbits gb;
     
     struct stb_avif_avif_info info;
     struct stb_av1_sequence_header sh;
     struct stb_av1_frame_header fh;
     struct stb_av1_tile_context tc;
-    struct stb_avif_reader obu_reader;
+    struct stb_av1_getbits obu_gb;
     struct stb_av1_bool_reader br;
     unsigned char *result = NULL;
     int output_channels;
@@ -15740,25 +15721,25 @@ unsigned char *stb_avif_load_from_memory(const unsigned char *data, int len,
         goto error_exit;
     }
 
-    stb_avif_reader_init(&r, data, (size_t)len);
+    stb_av1_getbits_init(&gb, data, (size_t)len);
 
     /* Look for ftyp box */
-    STB_AVIF_CHECK(stb_avif_find_box(&r, STB_AVIF_BOX_FTYP, 0, NULL),
+    STB_AVIF_CHECK(stb_avif_find_box(&gb, STB_AVIF_BOX_FTYP, 0, NULL),
                    "No ftyp box found");
-    stb_avif_parse_ftyp(&r, &info);
+    stb_avif_parse_ftyp(&gb, &info);
 
     /* Look for meta box */
     {
         struct stb_avif_box meta_hdr;
-        stb_avif_reader_init(&r, data, (size_t)len);
-        STB_AVIF_CHECK(stb_avif_find_box(&r, STB_AVIF_BOX_META, 1, &meta_hdr),
+        stb_av1_getbits_init(&gb, data, (size_t)len);
+        STB_AVIF_CHECK(stb_avif_find_box(&gb, STB_AVIF_BOX_META, 1, &meta_hdr),
                        "No meta box found");
         /* Save meta end position for parse_meta */
         info.meta_end_offset = (size_t)(meta_hdr.data_start + meta_hdr.data_size);
     }
 
     /* Parse the meta box to extract all AVIF metadata */
-    stb_avif_parse_meta(&r, &info);
+    stb_avif_parse_meta(&gb, &info);
 
     /* Verify we have image dimensions */
     STB_AVIF_CHECK(info.width > 0 && info.height > 0,
@@ -15797,7 +15778,7 @@ ivf_decoded:
     sh.color_description_present = 0;
 
     /* Parse the AV1 bitstream */
-    stb_avif_reader_init(&obu_reader, info.av1_data, info.av1_size);
+    stb_av1_getbits_init(&obu_gb, info.av1_data, info.av1_size);
 
     /* Initialize Boolean reader from the OBU data */
     stb_av1_bool_reader_init(&br, info.av1_data, info.av1_size);
@@ -15815,18 +15796,18 @@ ivf_decoded:
         (void)obu_extension_flag;
         obu_size = 0;
 
-        while (more_obus && obu_reader.pos < obu_reader.size) {
+        while (more_obus && stb_av1_getbits_bytepos(&obu_gb) < stb_av1_getbits_size(&obu_gb)) {
             /* Parse OBU header */
-            if (obu_reader.pos + 1 > obu_reader.size)
+            if (stb_av1_getbits_bytepos(&obu_gb) + 1 > stb_av1_getbits_size(&obu_gb))
                 break;
 
-            stb_av1_read_obu_header(&obu_reader, &obu_type,
+            stb_av1_read_obu_header(&obu_gb, &obu_type,
                                      &obu_extension_flag, &obu_has_size_field);
 
             /* Read OBU size */
             obu_size = 0;
             if (obu_has_size_field) {
-                obu_size = stb_av1_read_obu_size(&obu_reader);
+                obu_size = stb_av1_read_obu_size(&obu_gb);
             }
 
             /* Process based on type */
@@ -15839,7 +15820,7 @@ ivf_decoded:
                      * sh->enable_cdef, etc.). */
                     struct stb_av1_seqhdr sq;
                     struct stb_av1_getbits sq_gb;
-                    const stbv_u8 *sq_data = obu_reader.data + obu_reader.pos;
+                    const stbv_u8 *sq_data = obu_gb.ptr_start + stb_av1_getbits_bytepos(&obu_gb);
                     size_t sq_sz = (size_t)obu_size;
                     memset(&sq, 0, sizeof(sq));
                     stb_av1_getbits_init(&sq_gb, sq_data, sq_sz);
@@ -15885,36 +15866,28 @@ ivf_decoded:
                 }
                 case STB_AV1_OBU_FRAME_HEADER:
                 case STB_AV1_OBU_REDUNDANT_FRAME_HEADER: {
-                    struct stb_avif_reader fh_r;
                     struct stb_av1_bool_reader fh_br;
 
-                    stb_avif_reader_init(&fh_r,
-                                          obu_reader.data + obu_reader.pos,
-                                          (size_t)obu_size);
                     stb_av1_bool_reader_init(&fh_br,
-                                               obu_reader.data + obu_reader.pos,
+                                               obu_gb.ptr_start + stb_av1_getbits_bytepos(&obu_gb),
                                                (size_t)obu_size);
 
-                    stb_av1_parse_frame_header(&fh_r, &fh, &sh, &fh_br);
+                    stb_av1_parse_frame_header(&fh, &sh, &fh_br);
                     frame_header_found = 1;
                     break;
                 }
                 case STB_AV1_OBU_FRAME: {
                     /* Combined frame header + tile group OBU */
                     /* For simplicity, we handle frame + tile group separately */
-                    struct stb_avif_reader frame_r;
                     struct stb_av1_bool_reader frame_br;
 
-                    stb_avif_reader_init(&frame_r,
-                                          obu_reader.data + obu_reader.pos,
-                                          (size_t)obu_size);
                     stb_av1_bool_reader_init(&frame_br,
-                                               obu_reader.data + obu_reader.pos,
+                                               obu_gb.ptr_start + stb_av1_getbits_bytepos(&obu_gb),
                                                (size_t)obu_size);
 
                     /* Frame OBU contains frame header followed by tile group data.
                        Parse frame header first. */
-                    stb_av1_parse_frame_header(&frame_r, &fh, &sh, &frame_br);
+                    stb_av1_parse_frame_header(&fh, &sh, &frame_br);
                     frame_header_found = 1;
 
                     /* Remaining data in the OBU is tile group data.
@@ -15932,9 +15905,9 @@ ivf_decoded:
                 case STB_AV1_OBU_TILE_GROUP: {
                     /* We already parsed frame header; this is tile data.
                        Transfer the boolean reader from current position. */
-                    /* The tile group data starts at obu_reader.pos */
+                    /* The tile group data starts at obu_gb position */
                     if (frame_header_found) {
-                        br.data = obu_reader.data + obu_reader.pos;
+                        br.data = obu_gb.ptr_start + stb_av1_getbits_bytepos(&obu_gb);
                         br.size = (size_t)obu_size;
                         br.pos = 0;
                         br.value = 0;
@@ -15943,7 +15916,7 @@ ivf_decoded:
                         br.error = 0;
                         /* Re-init properly */
                         stb_av1_bool_reader_init(&br,
-                                                   obu_reader.data + obu_reader.pos,
+                                                   obu_gb.ptr_start + stb_av1_getbits_bytepos(&obu_gb),
                                                    (size_t)obu_size);
                     }
                     break;
@@ -15957,21 +15930,21 @@ ivf_decoded:
 
             /* Advance past this OBU's data */
             if (obu_has_size_field && obu_size > 0) {
-                obu_reader.pos += (size_t)obu_size;
+                stb_av1_getbits_seek(&obu_gb, stb_av1_getbits_bytepos(&obu_gb) + (size_t)obu_size);
             } else if (obu_has_size_field) {
                 /* OBU with has_size_field=1 and size=0 is valid (e.g. temporal delimiter).
                    Just skip the header+size bytes we already consumed. */
                 /* Already advanced past header+size, nothing more to skip. */
             } else {
                 /* No size field: determine from remaining data or break on unknown */
-                if (obu_reader.pos < obu_reader.size)
-                    obu_reader.pos = obu_reader.size; /* consume all remaining */
+                if (stb_av1_getbits_bytepos(&obu_gb) < stb_av1_getbits_size(&obu_gb))
+                    stb_av1_getbits_seek(&obu_gb, stb_av1_getbits_size(&obu_gb)); /* consume all remaining */
                 else
                     break;
             }
 
             /* Check if we've found end of OBUs */
-            if (obu_reader.pos >= obu_reader.size)
+            if (stb_av1_getbits_bytepos(&obu_gb) >= stb_av1_getbits_size(&obu_gb))
                 more_obus = 0;
         }
 
@@ -15980,17 +15953,17 @@ ivf_decoded:
          * OBU from av1C now - AFTER the stream walk, so the stream's
          * own seq header always wins. */
         if (!seq_header_found && info.av1c_size > 0) {
-            struct stb_avif_reader config_r;
+            struct stb_av1_getbits config_gb;
             int config_obu_type, config_obu_ext, config_obu_hassize;
             stbv_u32 config_obu_sz;
 
-            stb_avif_reader_init(&config_r, info.av1c_data, (size_t)info.av1c_size);
-            stb_av1_read_obu_header(&config_r, &config_obu_type,
+            stb_av1_getbits_init(&config_gb, info.av1c_data, (size_t)info.av1c_size);
+            stb_av1_read_obu_header(&config_gb, &config_obu_type,
                                      &config_obu_ext, &config_obu_hassize);
             if (config_obu_hassize)
-                config_obu_sz = stb_av1_read_obu_size(&config_r);
+                config_obu_sz = stb_av1_read_obu_size(&config_gb);
             else
-                config_obu_sz = (stbv_u32)(info.av1c_size - (size_t)(config_r.pos));
+                config_obu_sz = (stbv_u32)(info.av1c_size - stb_av1_getbits_bytepos(&config_gb));
 
             if (config_obu_type == STB_AV1_OBU_SEQUENCE_HEADER && config_obu_sz > 0) {
                 seq_header_found = 1;
@@ -16198,7 +16171,7 @@ ivf_decoded:
     /* ---- auxiliary alpha item (AVIF auxl -> primary) ---- */
     if (info.alpha_item_id > 0 && !info.alpha_plane) {
         /* Locate the alpha item's coded data with a fresh iloc scan. */
-        struct stb_avif_reader ar;
+        struct stb_av1_getbits ar_gb;
         size_t ameta_start = 0;
         int found_iloc_box = 0;
         {
@@ -16226,8 +16199,8 @@ ivf_decoded:
                 if (bsz < 8 || ap + bsz > aend + 4096) break;
                 if (bty == STB_AVIF_FOURCC('i','l','o','c')) {
                     stbv_u32 aoff = 0; stbv_u64 asz = 0;
-                                stb_avif_reader_init(&ar, data + ap + 8, bsz - 8);
-                    stb_avif_parse_iloc(&ar, &info, info.alpha_item_id,
+                                stb_av1_getbits_init(&ar_gb, data + ap + 8, bsz - 8);
+                    stb_avif_parse_iloc(&ar_gb, &info, info.alpha_item_id,
                                         &aoff, &asz);
                     if (asz > 0 && aoff + asz <= (stbv_u64)len) {
                         info.alpha_av1 = info.input + aoff;
