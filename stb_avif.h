@@ -3906,6 +3906,14 @@ ivf_decoded:
     }
 #endif /* !STB_AVIF_USE_DAV1D */
 
+    /* After sequence header parse, override info.width/height with the
+     * real bitstream dimensions.  IVF headers or ispe boxes can be wrong
+     * (e.g. thumbnail dimensions); the sequence header is authoritative. */
+    if (sh.max_frame_width > 0 && sh.max_frame_height > 0) {
+        info.width  = sh.max_frame_width;
+        info.height = sh.max_frame_height;
+    }
+
     /* If we didn't find a frame header, use defaults for still picture */
     if (!fh.frame_width || !fh.frame_height) {
         fh.frame_width = (int)sh.max_frame_width;
