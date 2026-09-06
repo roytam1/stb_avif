@@ -145,9 +145,8 @@ static int decode_to_ppm(const char *avif_path, const char *ppm_path, int req_ch
                 fclose(fy);
                 printf("  Y4M: -> %s\n", y4m_path);
             }
-            stb_avif_free(uy);
-            stb_avif_free(uu);
-            stb_avif_free(uv);
+            /* YUV pointers are borrowed from stb_avif's internal globals;
+             * do NOT free them — stb_avif_cleanup() owns them. */
         }
     }
 

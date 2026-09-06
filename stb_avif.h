@@ -110,7 +110,8 @@ static unsigned char *stb_avif_last_alpha(int *stride)
 }
 
 /* Returns the 8-bit YUV planes from the most recent load, or NULL.
- * Caller must free *y, *u, *v with stb_avif_free() when done. */
+ * Pointers are owned by the library and freed on the next stb_avif_load()
+ * or stb_avif_close(); do NOT call stb_avif_free() on them. */
 static void stb_avif_last_yuv(unsigned char **y, unsigned char **u, unsigned char **v,
                                int *stride_y, int *stride_u, int *stride_v)
 {
