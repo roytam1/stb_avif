@@ -191,4 +191,71 @@ static void stb_av1_getbits_bytealign(struct stb_av1_getbits *c)
     c->state = 0;
 }
 
+/* ---- Byte-level helpers (ISOBMFF / OBU byte-oriented parsing) ---- */
+
+static int stb_av1_getbits_read_byte(struct stb_av1_getbits *c)
+{
+    return (int)stb_av1_get_bits(c, 8);
+}
+
+static int stb_av1_getbits_peek_byte(struct stb_av1_getbits *c)
+{
+    if (c->bits_left >= 8)
+        return (int)(c->state >> (64 - 8));
+    if (c->ptr < c->ptr_end)
+        return *c->ptr;
+    c->error = 1;
+    return -1;
+}
+
+static stbv_u16 stb_av1_getbits_read_be16(struct stb_av1_getbits *c)
+{
+    return (stbv_u16)stb_av1_get_bits(c, 16);
+}
+
+static stbv_u32 stb_av1_getbits_read_be32(struct stb_av1_getbits *c)
+{
+    return stb_av1_get_bits(c, 32);
+}
+
+static stbv_u64 stb_av1_getbits_read_be64(struct stb_av1_getbits *c)
+{
+    stbv_u64 hi = stb_av1_get_bits(c, 32);
+    stbv_u64 lo = stb_av1_get_bits(c, 32);
+    return (hi << 32) | lo;
+}
+
+static unsigned int stb_av1_getbits_read_uleb128(struct stb_av1_getbits *c)
+{
+    return stb_av1_get_uleb128(c);
+}
+
+static void stb_av1_getbits_skip(struct stb_av1_getbits *c, size_t n)
+{
+    while (n > 0 && !c->error) {
+        size_t chunk = n > 4 ? 4 : n;
+        stb_av1_get_bits(c, (int)(chunk * 8));
+        n -= chunk;
+    }
+}
+
+/* Current byte position in the stream (valid after byte-align or when
+ * bits_left == 0). */
+static size_t stb_av1_getbits_bytepos(const struct stb_av1_getbits *c)
+{
+    return (size_t)(c->ptr - c->ptr_start);
+}
+
+static void stb_av1_getbits_seek(struct stb_av1_getbits *c, size_t byte_pos)
+{
+    c->bits_left = 0;
+    c->state = 0;
+    c->ptr = c->ptr_start + byte_pos;
+}
+
+static size_t stb_av1_getbits_size(const struct stb_av1_getbits *c)
+{
+    return (size_t)(c->ptr_end - c->ptr_start);
+}
+
 #endif /* STB_AV1_GETBITS_H */
