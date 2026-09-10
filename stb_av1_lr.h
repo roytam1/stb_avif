@@ -174,25 +174,27 @@ static void stbv_av1_wiener_v_only(unsigned short *p, unsigned short **ptrs,
         ptrs[i] = ptrs[i + 1];
 }
 
-/* Apply Wiener filter to a rectangular region of a plane.
- * Matches dav1d's wiener_c() ring buffer structure exactly. */
+/* Apply Wiener filter to a single stripe of a plane.
+ * Matches dav1d's wiener_c() ring buffer structure exactly.
+ * lpf must point to the lr_lpf_line offset for this stripe
+ * (advanced by 4*stride per stripe, matching dav1d's lr_stripe). */
 static void stbv_av1_wiener_plane(unsigned short *plane, int stride,
                                   int frame_w, int frame_h,
-                                  int ux0, int uy0, int uw, int uh,
+                                  int ux0, int stripe_y, int uw, int stripe_h,
                                   const signed char *raw_fv, const signed char *raw_fh,
                                   int bit_depth,
-                                  const unsigned short *lpf, int lpf_stride)
+                                  const unsigned short *lpf, int lpf_stride,
+                                  int have_top, int have_bottom)
 {
     unsigned short hor[6 * STBV_LR_REST_UNIT_STRIDE];
     unsigned short *ptrs[7], *rows[6];
     signed short fh[7], fv[7];
     int i, h;
-    int have_top, have_bottom;
     const unsigned short *src;
     unsigned short *p;
     const unsigned short *lpf_bottom;
 
-    if (uw <= 0 || uh <= 0) return;
+    if (uw <= 0 || stripe_h <= 0) return;
 
     for (i = 0; i < 6; i++)
         rows[i] = &hor[i * STBV_LR_REST_UNIT_STRIDE];
@@ -207,16 +209,20 @@ static void stbv_av1_wiener_plane(unsigned short *plane, int stride,
     fv[2] = fv[4] = raw_fv[2];
     fv[3] = (signed short)(128 - (fv[0] + fv[1] + fv[2]) * 2);
 
-    have_top = (uy0 > 0);
-    have_bottom = (uy0 + uh < frame_h);
+    /* lpf_bottom = lpf + stripe_h*stride.
+     * The caller positions lpf at padded row (stripe_y+2) for have_top,
+     * so lpf_bottom lands at padded row (stripe_y+2+stripe_h) = frame row (stripe_y+stripe_h).
+     * For !have_top, lpf is at padded row 2, lpf_bottom = padded row (2+stripe_h). */
+    lpf_bottom = lpf + stripe_h * lpf_stride;
 
-    p = plane + uy0 * stride + ux0;
+    p = plane + stripe_y * stride + ux0;
     src = p;
-    lpf_bottom = lpf + 6 * lpf_stride;
-    h = uh;
+    h = stripe_h;
 
     if (have_top) {
-        const unsigned short *lpf_top = lpf + (uy0 - 2) * lpf_stride + ux0;
+        /* In dav1d, lpf_top = lpf - 2*stride. lpf points to the start of
+         * the lpf data for this stripe (advanced by 4*stride per stripe). */
+        const unsigned short *lpf_top = lpf - 2 * lpf_stride;
 
         ptrs[0] = rows[0];
         ptrs[1] = rows[0];
@@ -248,6 +254,10 @@ static void stbv_av1_wiener_plane(unsigned short *plane, int stride,
 
         if (--h <= 0) goto v3;
     } else {
+        /* For !LR_HAVE_TOP, lpf is at padded row 2 (base position).
+         * lpf_bottom = lpf + stripe_h*stride. */
+        lpf_bottom = lpf + stripe_h * lpf_stride;
+
         ptrs[0] = rows[0];
         ptrs[1] = rows[0];
         ptrs[2] = rows[0];
@@ -938,10 +948,19 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
             if (!any_non_none) continue;
         }
 
-        lpf = (unsigned short *)stb_avif_calloc((size_t)stride * h, sizeof(unsigned short));
+        /* Allocate with 2 extra rows at top and bottom for lpf_top/lpf_bottom
+         * edge reads (matching dav1d's lr_lpf_line padding). Data starts at row 2. */
+        lpf = (unsigned short *)stb_avif_calloc((size_t)stride * (h + 4), sizeof(unsigned short));
         if (!lpf) continue;
+        /* Fill top 2 rows with clamped copy of first row */
+        for (y = 0; y < 2; y++)
+            memcpy(lpf + y * stride, plane, w * sizeof(unsigned short));
+        /* Copy main data starting at row 2 */
         for (y = 0; y < h; y++)
-            memcpy(lpf + y * stride, plane + y * stride, w * sizeof(unsigned short));
+            memcpy(lpf + (y + 2) * stride, plane + y * stride, w * sizeof(unsigned short));
+        /* Fill bottom 2 rows with clamped copy of last row */
+        for (y = h + 2; y < h + 4; y++)
+            memcpy(lpf + y * stride, plane + (h - 1) * stride, w * sizeof(unsigned short));
         lpf_planes[p] = lpf;
     }
 
@@ -953,7 +972,7 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
         int h = (frame_h + ss_v) >> ss_v;
         int stride = chroma ? (p == 1 ? stride_u : stride_v) : stride_y;
         unsigned short *plane = chroma ? (p == 1 ? plane_u : plane_v) : plane_y;
-        unsigned short *lpf = lpf_planes[p];
+        unsigned short *lpf = lpf_planes[p] + 2 * stride; /* data starts at row 2 */
         int usz = m->unit_size_log2[chroma ? 1 : 0];
         int unit_sz = 1 << usz;
         int gw = m->grid_stride[p];
@@ -971,10 +990,40 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
                 int uh = uy0 + unit_sz <= h ? unit_sz : h - uy0;
 
                 if (u->type == STBV_AV1_RESTORATION_WIENER) {
-                    stbv_av1_wiener_plane(plane, stride, w, h,
-                                          ux0, uy0, uw, uh,
-                                          u->filter_v, u->filter_h,
-                                          bit_depth, lpf, stride);
+                    /* Stripe-by-stripe processing matching dav1d's lr_stripe().
+                     * First stripe: stripe_h = (64 - 8 * (uy0==0)) >> ss_v
+                     * Subsequent: stripe_h = 64 >> ss_v
+                     * have_bottom: true for all stripes except last.
+                     *
+                     * lpf positioning: For each stripe at position stripe_y:
+                     * - have_top: lpf at padded row (stripe_y+2), so lpf-2*stride
+                     *   reads frame rows (stripe_y-2, stripe_y-1) as top context.
+                     * - !have_top: lpf at padded row 2 (base), not used for top context.
+                     * - lpf_bottom = lpf + stripe_h*stride reads frame rows
+                     *   (stripe_y+stripe_h, stripe_y+stripe_h+1) as bottom context. */
+                    int stripe_y = uy0;
+                    int remaining = uh;
+                    int stripe_idx = 0;
+                    while (remaining > 0) {
+                        int first_stripe = (stripe_y == uy0);
+                        int max_sh = first_stripe ? ((64 - 8) >> ss_v) : (64 >> ss_v);
+                        int sh = remaining < max_sh ? remaining : max_sh;
+                        int ht = first_stripe ? (uy0 > 0) : 1;
+                        int hb = (sh < remaining);
+                        const unsigned short *stripe_lpf;
+                        if (ht)
+                            stripe_lpf = lpf + stripe_y * stride + ux0;
+                        else
+                            stripe_lpf = lpf + ux0;
+                        stbv_av1_wiener_plane(plane, stride, w, h,
+                                              ux0, stripe_y, uw, sh,
+                                              u->filter_v, u->filter_h,
+                                              bit_depth, stripe_lpf, stride,
+                                              ht, hb);
+                        stripe_y += sh;
+                        remaining -= sh;
+                        stripe_idx++;
+                    }
                 } else if (u->type >= STBV_AV1_RESTORATION_SGRPROJ) {
                     int s0 = stbv_av1_sgr_tab[u->sgr_idx][0];
                     int s1 = stbv_av1_sgr_tab[u->sgr_idx][1];
