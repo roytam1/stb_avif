@@ -12834,15 +12834,30 @@ static void stbv_av1_sgr_mix(unsigned short *dst, int stride,
     for (i = 0; i < 5; i++) {
         sumsq5_rows[i] = sumsq5_buf + i * BUF;
         sum5_rows[i]   = sum5_buf   + i * BUF;
-        sumsq5_ptrs[i] = sumsq5_rows[0];
-        sum5_ptrs[i]   = sum5_rows[0];
     }
     for (i = 0; i < 3; i++) {
         sumsq3_rows[i] = sumsq3_buf + i * BUF;
         sum3_rows[i]   = sum3_buf   + i * BUF;
-        sumsq3_ptrs[i] = sumsq3_rows[0];
-        sum3_ptrs[i]   = sum3_rows[0];
     }
+    /* Initialize ring buffer pointers matching dav1d LR_HAVE_TOP.
+     * 5x5: [0]=[1]=lpf[0] (duplicated), [2]=lpf[1], [3]=src[0], [4]=src[1]
+     * 3x3: [0]=lpf[0], [1]=lpf[1], [2]=src[0] */
+    sumsq5_ptrs[0] = sumsq5_rows[0];
+    sumsq5_ptrs[1] = sumsq5_rows[0];
+    sumsq5_ptrs[2] = sumsq5_rows[1];
+    sumsq5_ptrs[3] = sumsq5_rows[2];
+    sumsq5_ptrs[4] = sumsq5_rows[3];
+    sum5_ptrs[0] = sum5_rows[0];
+    sum5_ptrs[1] = sum5_rows[0];
+    sum5_ptrs[2] = sum5_rows[1];
+    sum5_ptrs[3] = sum5_rows[2];
+    sum5_ptrs[4] = sum5_rows[3];
+    sumsq3_ptrs[0] = sumsq3_rows[0];
+    sumsq3_ptrs[1] = sumsq3_rows[1];
+    sumsq3_ptrs[2] = sumsq3_rows[2];
+    sum3_ptrs[0] = sum3_rows[0];
+    sum3_ptrs[1] = sum3_rows[1];
+    sum3_ptrs[2] = sum3_rows[2];
     for (i = 0; i < 2; i++) {
         A5_ptrs[i] = A5_buf + i * BUF;
         B5_ptrs[i] = B5_buf + i * BUF;
