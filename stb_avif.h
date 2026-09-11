@@ -2583,8 +2583,8 @@ static void stb_avif_recon_luma_txb(void *ud, int x4, int y4, int tx, int txtp, 
         if (rc->lf_blkid) {
             int tw = stbv_av1_tx_dims[tx].w, th = stbv_av1_tx_dims[tx].h;
             int lx, ly;
-            stbv_u32 id = ((stbv_u32)rc->cur_bx4 << 16) |
-                          (stbv_u32)rc->cur_by4;
+            stbv_u32 id = ((stbv_u32)x4 << 16) |
+                          (stbv_u32)y4;
             for (ly = y4; ly < y4 + th && ly < rc->lf_maph4; ly++)
                 for (lx = x4; lx < x4 + tw && lx < rc->lf_mapw4; lx++) {
                     rc->lf_blkid[(size_t)ly * rc->lf_b4stride + lx] = id;
@@ -3508,7 +3508,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                                        (int)stream->frame.tiling.cols,
                                        stream->frame.tiling.row_start_sb,
                                        (int)stream->frame.tiling.rows,
-                                       (int)(1U << (6U + stream->seq.sb128)));
+                                       (int)(1U << (6U + stream->seq.sb128)),
+                                       lf_level_map, res_w4);
         if (pu16 && !stream->seq.monochrome) {
             int cw = (tc->frame_width + (recon->ss_hor ? 1 : 0)) >> recon->ss_hor;
             int ch = (tc->frame_height + (recon->ss_ver ? 1 : 0)) >> recon->ss_ver;
@@ -3522,7 +3523,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                                        (int)stream->frame.tiling.cols,
                                        stream->frame.tiling.row_start_sb,
                                        (int)stream->frame.tiling.rows,
-                                       (int)(1U << (6U + stream->seq.sb128)));
+                                       (int)(1U << (6U + stream->seq.sb128)),
+                                       NULL, 0);
             stb_avif_deblock_plane_u16(pv16, tc->stride_v, cw, ch,
                                        lvl_v ? lvl_v : lvl_u, lvl_v ? lvl_v : lvl_u,
                                        sharp, 1, maxv, recon->bit_depth - 8,
@@ -3533,7 +3535,8 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                                        (int)stream->frame.tiling.cols,
                                        stream->frame.tiling.row_start_sb,
                                        (int)stream->frame.tiling.rows,
-                                       (int)(1U << (6U + stream->seq.sb128)));
+                                       (int)(1U << (6U + stream->seq.sb128)),
+                                       NULL, 0);
         }
     }
 #endif

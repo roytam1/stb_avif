@@ -596,8 +596,10 @@ static void stbv_av1_sgr_compute_3x3(signed short *out_tmp,
     {
         int row0 = uy0 > 2 ? uy0 - 2 : 0;
         int row1 = uy0 > 1 ? uy0 - 1 : 0;
-        const unsigned short *r0 = src + row0 * src_stride + ux0;
-        const unsigned short *r1 = src + row1 * src_stride + ux0;
+        /* Use lpf (saved pre-LR data) for pre-fill, matching dav1d.
+         * src may have been modified by LR processing of units above. */
+        const unsigned short *r0 = lpf + row0 * lpf_stride + ux0;
+        const unsigned short *r1 = lpf + row1 * lpf_stride + ux0;
         stbv_av1_sgr_box3_row_h(sumsq_ptrs[0], sum_ptrs[0], r0, ew, ux0);
         stbv_av1_sgr_box3_row_h(sumsq_ptrs[1], sum_ptrs[1], r1, ew, ux0);
     }
@@ -617,6 +619,8 @@ static void stbv_av1_sgr_compute_3x3(signed short *out_tmp,
         stbv_av1_sgr_box3_row_h(sumsq_ptrs[2], sum_ptrs[2], src_ptr, ew, ux0);
         stbv_av1_sgr_box3_row_v((const int *const *)sumsq_ptrs, (const int *const *)sum_ptrs, A_ptrs[2], B_ptrs[2], uw);
         stbv_av1_sgr_calc_ab(A_ptrs[2], B_ptrs[2], uw, s1, 9, 455);
+
+
         stbv_av1_rotate3(sumsq_ptrs);
         stbv_av1_rotate3(sum_ptrs);
 
@@ -717,21 +721,26 @@ static void stbv_av1_sgr_compute_5x5(signed short *out_tmp,
     }
 
     /* Pre-fill: same row aliased for ptrs[0] and ptrs[1] (dav1d convention).
-     * ptrs[0]=ptrs[1]=uy0-2 (or 0), ptrs[2]=uy0-1 (or 0). */
+     * ptrs[0]=ptrs[1]=uy0-2 (or 0), ptrs[2]=uy0-1 (or 0).
+     * Use lpf (saved pre-LR data) for pre-fill, matching dav1d. */
     {
         int row0 = uy0 > 2 ? uy0 - 2 : 0;
         int row1 = uy0 > 1 ? uy0 - 1 : 0;
-        r = src + row0 * src_stride + ux0;
+        r = lpf + row0 * lpf_stride + ux0;
         stbv_av1_sgr_box5_row_h(sumsq_rows[0], sum_rows[0], r, ew, ux0);
-        r = src + row1 * src_stride + ux0;
+        r = lpf + row1 * lpf_stride + ux0;
         stbv_av1_sgr_box5_row_h(sumsq_rows[1], sum_rows[1], r, ew, ux0);
     }
     sumsq_ptrs[0] = sumsq_rows[0];
     sumsq_ptrs[1] = sumsq_rows[0];
     sumsq_ptrs[2] = sumsq_rows[1];
+    sumsq_ptrs[3] = sumsq_rows[2];
+    sumsq_ptrs[4] = sumsq_rows[3];
     sum_ptrs[0] = sum_rows[0];
     sum_ptrs[1] = sum_rows[0];
     sum_ptrs[2] = sum_rows[1];
+    sum_ptrs[3] = sum_rows[2];
+    sum_ptrs[4] = sum_rows[3];
 
     h = uh;
     src_y = uy0;
@@ -1015,7 +1024,7 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
                             stripe_lpf = lpf + stripe_y * stride + ux0;
                         else
                             stripe_lpf = lpf + ux0;
-                        stbv_av1_wiener_plane(plane, stride, w, h,
+                        stbv_av1_wiener_plane(plane, stride, uw, h,
                                               ux0, stripe_y, uw, sh,
                                               u->filter_v, u->filter_h,
                                               bit_depth, stripe_lpf, stride,
