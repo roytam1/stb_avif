@@ -467,6 +467,15 @@ static void stbv_av1_rotate5(int **ptrs)
     ptrs[3] = tmp;
 }
 
+static void stbv_av1_rotate4(int **ptrs)
+{
+    int *tmp = ptrs[0];
+    ptrs[0] = ptrs[1];
+    ptrs[1] = ptrs[2];
+    ptrs[2] = ptrs[3];
+    ptrs[3] = tmp;
+}
+
 /* Finish filter row for 3x3 SGR: 8-neighbor weighted sum */
 static void stbv_av1_sgr_finish_filter_row1(signed short *tmp,
                                             const unsigned short *src,
@@ -881,31 +890,387 @@ static void stbv_av1_sgr_5x5(unsigned short *dst, int stride,
 }
 
 /* ---- SGR mix (5x5 + 3x3) filter ---- */
-/* Both filters read from the same original src (dst before modification),
- * produce unweighted outputs in tmp5/tmp3, then blend via sgr_weighted2. */
+/* Interleaved structure matching dav1d's sgr_mix_c: both filters share source
+ * rows, A3 has 4 entries (shifted for second row of each pair). */
 static void stbv_av1_sgr_mix(unsigned short *dst, int stride,
                               int frame_w, int frame_h,
                               int ux0, int uy0, int uw, int uh,
                               int s0, int s1, int w0, int w1,
                               const unsigned short *lpf, int lpf_stride)
 {
+    int BUF = 384 + 16;
+    int ew = uw + 4;
+    int h, src_y, i;
+
+    /* 5x5 ring buffers */
+    int *sumsq5_buf, *sum5_buf;
+    int *sumsq5_rows[5], *sum5_rows[5];
+    int *sumsq5_ptrs[5], *sum5_ptrs[5];
+    int *A5_buf, *B5_buf;
+    int *A5_ptrs[2], *B5_ptrs[2];
+
+    /* 3x3 ring buffers */
+    int *sumsq3_buf, *sum3_buf;
+    int *sumsq3_rows[3], *sum3_rows[3];
+    int *sumsq3_ptrs[3], *sum3_ptrs[3];
+    int *A3_buf, *B3_buf;
+    int *A3_ptrs[4], *B3_ptrs[4];
+
+    /* Temporary filter output buffers */
     signed short *tmp5, *tmp3;
-    int y;
+
     if (uw <= 0 || uh <= 0) return;
+    if (ux0 + ew > frame_w) ew = frame_w - ux0;
+    if (ew <= 0) return;
+
+    h = uh;
+    src_y = uy0;
+
+    /* Allocate all buffers */
+    sumsq5_buf = (int*)stb_avif_calloc((size_t)BUF * 5, sizeof(int));
+    sum5_buf   = (int*)stb_avif_calloc((size_t)BUF * 5, sizeof(int));
+    A5_buf     = (int*)stb_avif_calloc((size_t)BUF * 2, sizeof(int));
+    B5_buf     = (int*)stb_avif_calloc((size_t)BUF * 2, sizeof(int));
+    sumsq3_buf = (int*)stb_avif_calloc((size_t)BUF * 3, sizeof(int));
+    sum3_buf   = (int*)stb_avif_calloc((size_t)BUF * 3, sizeof(int));
+    A3_buf     = (int*)stb_avif_calloc((size_t)BUF * 4, sizeof(int));
+    B3_buf     = (int*)stb_avif_calloc((size_t)BUF * 4, sizeof(int));
     tmp5 = (signed short *)stb_avif_calloc((size_t)uh * 384, sizeof(signed short));
     tmp3 = (signed short *)stb_avif_calloc((size_t)uh * 384, sizeof(signed short));
-    if (!tmp5 || !tmp3) {
+
+    if (!sumsq5_buf || !sum5_buf || !A5_buf || !B5_buf ||
+        !sumsq3_buf || !sum3_buf || !A3_buf || !B3_buf ||
+        !tmp5 || !tmp3) {
+        if (sumsq5_buf) stb_avif_free_internal(sumsq5_buf);
+        if (sum5_buf) stb_avif_free_internal(sum5_buf);
+        if (A5_buf) stb_avif_free_internal(A5_buf);
+        if (B5_buf) stb_avif_free_internal(B5_buf);
+        if (sumsq3_buf) stb_avif_free_internal(sumsq3_buf);
+        if (sum3_buf) stb_avif_free_internal(sum3_buf);
+        if (A3_buf) stb_avif_free_internal(A3_buf);
+        if (B3_buf) stb_avif_free_internal(B3_buf);
         if (tmp5) stb_avif_free_internal(tmp5);
         if (tmp3) stb_avif_free_internal(tmp3);
         return;
     }
-    /* Both compute functions read from dst (original) without modifying it */
-    stbv_av1_sgr_compute_5x5(tmp5, dst, stride, frame_w, frame_h,
-                              ux0, uy0, uw, uh, s0, lpf, lpf_stride);
-    stbv_av1_sgr_compute_3x3(tmp3, dst, stride, frame_w, frame_h,
-                              ux0, uy0, uw, uh, s1, lpf, lpf_stride);
-    /* Blend both filter outputs onto dst, offset to LR unit position */
-    stbv_av1_sgr_weighted2(dst + uy0 * stride + ux0, stride, tmp5, tmp3, uw, uh, w0, w1);
+
+    /* Initialize row pointer arrays */
+    for (i = 0; i < 5; i++) {
+        sumsq5_rows[i] = sumsq5_buf + i * BUF;
+        sum5_rows[i]   = sum5_buf   + i * BUF;
+        sumsq5_ptrs[i] = sumsq5_rows[0];
+        sum5_ptrs[i]   = sum5_rows[0];
+    }
+    for (i = 0; i < 3; i++) {
+        sumsq3_rows[i] = sumsq3_buf + i * BUF;
+        sum3_rows[i]   = sum3_buf   + i * BUF;
+        sumsq3_ptrs[i] = sumsq3_rows[0];
+        sum3_ptrs[i]   = sum3_rows[0];
+    }
+    for (i = 0; i < 2; i++) {
+        A5_ptrs[i] = A5_buf + i * BUF;
+        B5_ptrs[i] = B5_buf + i * BUF;
+    }
+    for (i = 0; i < 4; i++) {
+        A3_ptrs[i] = A3_buf + i * BUF;
+        B3_ptrs[i] = B3_buf + i * BUF;
+    }
+
+    /* Pre-fill top 2 rows from lpf (matching dav1d LR_HAVE_TOP path).
+     * lpf points to frame row uy0; lpf[-2*stride]..lpf[-1*stride] are the
+     * pre-fill rows from the lpf copy. */
+    {
+        const unsigned short *lpf_r0 = lpf + (uy0 - 2) * lpf_stride;
+        const unsigned short *lpf_r1 = lpf + (uy0 - 1) * lpf_stride;
+        stbv_av1_sgr_box5_row_h(sumsq5_rows[0], sum5_rows[0], lpf_r0, ew, ux0);
+        stbv_av1_sgr_box3_row_h(sumsq3_rows[0], sum3_rows[0], lpf_r0, ew, ux0);
+        stbv_av1_sgr_box5_row_h(sumsq5_rows[1], sum5_rows[1], lpf_r1, ew, ux0);
+        stbv_av1_sgr_box3_row_h(sumsq3_rows[1], sum3_rows[1], lpf_r1, ew, ux0);
+    }
+
+    /* First source row (uy0) */
+    {
+        const unsigned short *r = dst + src_y * stride + ux0;
+        stbv_av1_sgr_box5_row_h(sumsq5_rows[2], sum5_rows[2], r, ew, ux0);
+        stbv_av1_sgr_box3_row_h(sumsq3_rows[2], sum3_rows[2], r, ew, ux0);
+    }
+    src_y++;
+
+    /* box3_vert for first group of 3 rows */
+    stbv_av1_sgr_box3_row_v((const int *const *)sumsq3_ptrs,
+                             (const int *const *)sum3_ptrs,
+                             A3_ptrs[3], B3_ptrs[3], uw);
+    stbv_av1_sgr_calc_ab(A3_ptrs[3], B3_ptrs[3], uw, s1, 9, 455);
+    stbv_av1_rotate3(sumsq3_ptrs);
+    stbv_av1_rotate3(sum3_ptrs);
+    stbv_av1_rotate4(A3_ptrs);
+    stbv_av1_rotate4(B3_ptrs);
+
+    if (--h <= 0) goto vert_1;
+
+    /* Second source row (uy0+1) */
+    {
+        const unsigned short *r = dst + src_y * stride + ux0;
+        stbv_av1_sgr_box5_row_h(sumsq5_rows[3], sum5_rows[3], r, ew, ux0);
+        stbv_av1_sgr_box3_row_h(sumsq3_rows[2], sum3_rows[2], r, ew, ux0);
+    }
+    src_y++;
+
+    /* box5_vert + box3_vert */
+    stbv_av1_sgr_box5_row_v((const int *const *)sumsq5_ptrs,
+                             (const int *const *)sum5_ptrs,
+                             A5_ptrs[1], B5_ptrs[1], uw);
+    stbv_av1_sgr_calc_ab(A5_ptrs[1], B5_ptrs[1], uw, s0, 25, 164);
+    stbv_av1_rotate5(sumsq5_ptrs);
+    stbv_av1_rotate5(sum5_ptrs);
+    stbv_av1_rotate2(A5_ptrs);
+    stbv_av1_rotate2(B5_ptrs);
+
+    stbv_av1_sgr_box3_row_v((const int *const *)sumsq3_ptrs,
+                             (const int *const *)sum3_ptrs,
+                             A3_ptrs[3], B3_ptrs[3], uw);
+    stbv_av1_sgr_calc_ab(A3_ptrs[3], B3_ptrs[3], uw, s1, 9, 455);
+    stbv_av1_rotate3(sumsq3_ptrs);
+    stbv_av1_rotate3(sum3_ptrs);
+    stbv_av1_rotate4(A3_ptrs);
+    stbv_av1_rotate4(B3_ptrs);
+
+    if (--h <= 0) goto vert_2;
+
+    /* Fix ptrs[3] to fresh buffer */
+    sumsq5_ptrs[3] = sumsq5_rows[4];
+    sum5_ptrs[3]   = sum5_rows[4];
+
+    /* Main loop: process 2 rows per iteration */
+    do {
+        const unsigned short *r;
+        int out_y;
+
+        /* Write new source row to 3x3 ptrs[2] and 5x5 ptrs[3] */
+        r = dst + src_y * stride + ux0;
+        stbv_av1_sgr_box5_row_h(sumsq5_ptrs[3], sum5_ptrs[3], r, ew, ux0);
+        stbv_av1_sgr_box3_row_h(sumsq3_ptrs[2], sum3_ptrs[2], r, ew, ux0);
+        src_y++;
+
+        /* box3_vert */
+        stbv_av1_sgr_box3_row_v((const int *const *)sumsq3_ptrs,
+                                 (const int *const *)sum3_ptrs,
+                                 A3_ptrs[3], B3_ptrs[3], uw);
+        stbv_av1_sgr_calc_ab(A3_ptrs[3], B3_ptrs[3], uw, s1, 9, 455);
+        stbv_av1_rotate3(sumsq3_ptrs);
+        stbv_av1_rotate3(sum3_ptrs);
+        stbv_av1_rotate4(A3_ptrs);
+        stbv_av1_rotate4(B3_ptrs);
+
+        if (--h <= 0) goto odd;
+
+        /* Write second source row to 3x3 ptrs[2] and 5x5 ptrs[4] */
+        r = dst + src_y * stride + ux0;
+        stbv_av1_sgr_box5_row_h(sumsq5_ptrs[4], sum5_ptrs[4], r, ew, ux0);
+        stbv_av1_sgr_box3_row_h(sumsq3_ptrs[2], sum3_ptrs[2], r, ew, ux0);
+        src_y++;
+
+        /* box5_vert (no rotate for A5 — finish_mix does it) */
+        stbv_av1_sgr_box5_row_v((const int *const *)sumsq5_ptrs,
+                                 (const int *const *)sum5_ptrs,
+                                 A5_ptrs[1], B5_ptrs[1], uw);
+        stbv_av1_sgr_calc_ab(A5_ptrs[1], B5_ptrs[1], uw, s0, 25, 164);
+
+        /* box3_vert (no rotate for A3 — finish_mix does it) */
+        stbv_av1_sgr_box3_row_v((const int *const *)sumsq3_ptrs,
+                                 (const int *const *)sum3_ptrs,
+                                 A3_ptrs[3], B3_ptrs[3], uw);
+        stbv_av1_sgr_calc_ab(A3_ptrs[3], B3_ptrs[3], uw, s1, 9, 455);
+
+        /* finish_mix: filter + weighted2 + rotate A5/A3 */
+        out_y = uy0 + (uh - h - 2);
+        {
+            unsigned short *dst_row = dst + out_y * stride + ux0;
+            int idx5 = (out_y - uy0) * 384;
+            /* 5x5 filter (SIX_NEIGHBORS, 2 rows) */
+            stbv_av1_sgr_finish_filter_row2(tmp5 + idx5, dst_row, stride,
+                                             (const int *const *)A5_ptrs,
+                                             (const int *const *)B5_ptrs,
+                                             uw, 2);
+            /* 3x3 filter row 1 (EIGHT_NEIGHBORS) */
+            stbv_av1_sgr_finish_filter_row1(tmp3 + idx5, dst_row,
+                                             (const int *const *)A3_ptrs,
+                                             (const int *const *)B3_ptrs,
+                                             uw);
+            /* 3x3 filter row 2 (shifted A3/B3) */
+            stbv_av1_sgr_finish_filter_row1(tmp3 + idx5 + 384,
+                                             dst_row + stride,
+                                             (const int *const *)(A3_ptrs + 1),
+                                             (const int *const *)(B3_ptrs + 1),
+                                             uw);
+            /* Blend both filter outputs */
+            stbv_av1_sgr_weighted2(dst_row, stride, tmp5 + idx5, tmp3 + idx5,
+                                    uw, 2, w0, w1);
+        }
+        stbv_av1_rotate5(sumsq5_ptrs);
+        stbv_av1_rotate5(sum5_ptrs);
+        stbv_av1_rotate2(A5_ptrs);
+        stbv_av1_rotate2(B5_ptrs);
+        stbv_av1_rotate4(A3_ptrs);
+        stbv_av1_rotate4(B3_ptrs);
+    } while (--h > 0);
+
+    goto done;
+
+odd:
+    /* Odd row: duplicate last row for 5x5, output 1 row */
+    sumsq5_ptrs[4] = sumsq5_ptrs[3];
+    sum5_ptrs[4]   = sum5_ptrs[3];
+    sumsq3_ptrs[2] = sumsq3_ptrs[1];
+    sum3_ptrs[2]   = sum3_ptrs[1];
+
+    stbv_av1_sgr_box5_row_v((const int *const *)sumsq5_ptrs,
+                             (const int *const *)sum5_ptrs,
+                             A5_ptrs[1], B5_ptrs[1], uw);
+    stbv_av1_sgr_calc_ab(A5_ptrs[1], B5_ptrs[1], uw, s0, 25, 164);
+    stbv_av1_sgr_box3_row_v((const int *const *)sumsq3_ptrs,
+                             (const int *const *)sum3_ptrs,
+                             A3_ptrs[3], B3_ptrs[3], uw);
+    stbv_av1_sgr_calc_ab(A3_ptrs[3], B3_ptrs[3], uw, s1, 9, 455);
+    stbv_av1_rotate4(A3_ptrs);
+    stbv_av1_rotate4(B3_ptrs);
+    {
+        int out_y = uy0 + uh - 1;
+        unsigned short *dst_row = dst + out_y * stride + ux0;
+        int idx5 = (out_y - uy0) * 384;
+        stbv_av1_sgr_finish_filter_row2(tmp5 + idx5, dst_row, stride,
+                                         (const int *const *)A5_ptrs,
+                                         (const int *const *)B5_ptrs,
+                                         uw, 1);
+        stbv_av1_sgr_finish_filter_row1(tmp3 + idx5, dst_row,
+                                         (const int *const *)A3_ptrs,
+                                         (const int *const *)B3_ptrs,
+                                         uw);
+        stbv_av1_sgr_weighted2(dst_row, stride, tmp5 + idx5, tmp3 + idx5,
+                                uw, 1, w0, w1);
+    }
+    goto done;
+
+vert_2:
+    /* Last 2 rows: duplicate the last row */
+    sumsq5_ptrs[3] = sumsq5_ptrs[2];
+    sumsq5_ptrs[4] = sumsq5_ptrs[2];
+    sum5_ptrs[3]   = sum5_ptrs[2];
+    sum5_ptrs[4]   = sum5_ptrs[2];
+    sumsq3_ptrs[2] = sumsq3_ptrs[1];
+    sum3_ptrs[2]   = sum3_ptrs[1];
+
+    stbv_av1_sgr_box3_row_v((const int *const *)sumsq3_ptrs,
+                             (const int *const *)sum3_ptrs,
+                             A3_ptrs[3], B3_ptrs[3], uw);
+    stbv_av1_sgr_calc_ab(A3_ptrs[3], B3_ptrs[3], uw, s1, 9, 455);
+    stbv_av1_rotate4(A3_ptrs);
+    stbv_av1_rotate4(B3_ptrs);
+    /* Fall through to output_2 */
+
+output_2:
+    stbv_av1_sgr_box5_row_v((const int *const *)sumsq5_ptrs,
+                             (const int *const *)sum5_ptrs,
+                             A5_ptrs[1], B5_ptrs[1], uw);
+    stbv_av1_sgr_calc_ab(A5_ptrs[1], B5_ptrs[1], uw, s0, 25, 164);
+    stbv_av1_sgr_box3_row_v((const int *const *)sumsq3_ptrs,
+                             (const int *const *)sum3_ptrs,
+                             A3_ptrs[3], B3_ptrs[3], uw);
+    stbv_av1_sgr_calc_ab(A3_ptrs[3], B3_ptrs[3], uw, s1, 9, 455);
+    {
+        int out_y = uy0 + uh - 2;
+        unsigned short *dst_row = dst + out_y * stride + ux0;
+        int idx5 = (out_y - uy0) * 384;
+        stbv_av1_sgr_finish_filter_row2(tmp5 + idx5, dst_row, stride,
+                                         (const int *const *)A5_ptrs,
+                                         (const int *const *)B5_ptrs,
+                                         uw, 2);
+        stbv_av1_sgr_finish_filter_row1(tmp3 + idx5, dst_row,
+                                         (const int *const *)A3_ptrs,
+                                         (const int *const *)B3_ptrs,
+                                         uw);
+        stbv_av1_sgr_finish_filter_row1(tmp3 + idx5 + 384,
+                                         dst_row + stride,
+                                         (const int *const *)(A3_ptrs + 1),
+                                         (const int *const *)(B3_ptrs + 1),
+                                         uw);
+        stbv_av1_sgr_weighted2(dst_row, stride, tmp5 + idx5, tmp3 + idx5,
+                                uw, 2, w0, w1);
+    }
+    stbv_av1_rotate5(sumsq5_ptrs);
+    stbv_av1_rotate5(sum5_ptrs);
+    stbv_av1_rotate2(A5_ptrs);
+    stbv_av1_rotate2(B5_ptrs);
+    stbv_av1_rotate4(A3_ptrs);
+    stbv_av1_rotate4(B3_ptrs);
+    goto done;
+
+vert_1:
+    /* Only 1 row: duplicate */
+    sumsq5_ptrs[4] = sumsq5_ptrs[3];
+    sum5_ptrs[4]   = sum5_ptrs[3];
+    sumsq3_ptrs[2] = sumsq3_ptrs[1];
+    sum3_ptrs[2]   = sum3_ptrs[1];
+
+    stbv_av1_sgr_box5_row_v((const int *const *)sumsq5_ptrs,
+                             (const int *const *)sum5_ptrs,
+                             A5_ptrs[1], B5_ptrs[1], uw);
+    stbv_av1_sgr_calc_ab(A5_ptrs[1], B5_ptrs[1], uw, s0, 25, 164);
+    stbv_av1_rotate5(sumsq5_ptrs);
+    stbv_av1_rotate5(sum5_ptrs);
+    stbv_av1_rotate2(A5_ptrs);
+    stbv_av1_rotate2(B5_ptrs);
+
+    stbv_av1_sgr_box3_row_v((const int *const *)sumsq3_ptrs,
+                             (const int *const *)sum3_ptrs,
+                             A3_ptrs[3], B3_ptrs[3], uw);
+    stbv_av1_sgr_calc_ab(A3_ptrs[3], B3_ptrs[3], uw, s1, 9, 455);
+    stbv_av1_rotate4(A3_ptrs);
+    stbv_av1_rotate4(B3_ptrs);
+    /* Fall through to output_1 */
+
+output_1:
+    sumsq5_ptrs[3] = sumsq5_ptrs[2];
+    sumsq5_ptrs[4] = sumsq5_ptrs[2];
+    sum5_ptrs[3]   = sum5_ptrs[2];
+    sum5_ptrs[4]   = sum5_ptrs[2];
+    sumsq3_ptrs[2] = sumsq3_ptrs[1];
+    sum3_ptrs[2]   = sum3_ptrs[1];
+
+    stbv_av1_sgr_box5_row_v((const int *const *)sumsq5_ptrs,
+                             (const int *const *)sum5_ptrs,
+                             A5_ptrs[1], B5_ptrs[1], uw);
+    stbv_av1_sgr_calc_ab(A5_ptrs[1], B5_ptrs[1], uw, s0, 25, 164);
+    stbv_av1_sgr_box3_row_v((const int *const *)sumsq3_ptrs,
+                             (const int *const *)sum3_ptrs,
+                             A3_ptrs[3], B3_ptrs[3], uw);
+    stbv_av1_sgr_calc_ab(A3_ptrs[3], B3_ptrs[3], uw, s1, 9, 455);
+    stbv_av1_rotate4(A3_ptrs);
+    stbv_av1_rotate4(B3_ptrs);
+    {
+        int out_y = uy0;
+        unsigned short *dst_row = dst + out_y * stride + ux0;
+        stbv_av1_sgr_finish_filter_row2(tmp5, dst_row, stride,
+                                         (const int *const *)A5_ptrs,
+                                         (const int *const *)B5_ptrs,
+                                         uw, 1);
+        stbv_av1_sgr_finish_filter_row1(tmp3, dst_row,
+                                         (const int *const *)A3_ptrs,
+                                         (const int *const *)B3_ptrs,
+                                         uw);
+        stbv_av1_sgr_weighted2(dst_row, stride, tmp5, tmp3,
+                                uw, 1, w0, w1);
+    }
+
+done:
+    stb_avif_free_internal(sumsq5_buf);
+    stb_avif_free_internal(sum5_buf);
+    stb_avif_free_internal(A5_buf);
+    stb_avif_free_internal(B5_buf);
+    stb_avif_free_internal(sumsq3_buf);
+    stb_avif_free_internal(sum3_buf);
+    stb_avif_free_internal(A3_buf);
+    stb_avif_free_internal(B3_buf);
     stb_avif_free_internal(tmp5);
     stb_avif_free_internal(tmp3);
 }
