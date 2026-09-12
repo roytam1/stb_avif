@@ -95,11 +95,13 @@ static unsigned short stbv_av1_lr_clip16(int v, int maxv)
 /* Horizontal Wiener filter. left_off: number of valid pixels to the left
  * of src (0 for first unit in row, >0 for subsequent units).
  * When left_off > 0, reads src[-1]..src[-min(3,left_off)] for left context
- * instead of clamping, matching dav1d's wiener_filter_h behavior. */
+ * instead of clamping.
+ * have_right: when set, reads src[idx] for idx>=w (next unit's CDEF'd data)
+ * instead of clamping to src[w-1], matching dav1d's LR_HAVE_RIGHT behavior. */
 static void stbv_av1_wiener_filter_h(unsigned short *dst, const unsigned short *src,
                                      int src_stride, int w,
                                      const signed short *fh, int bit_depth,
-                                     int left_off)
+                                     int left_off, int have_right)
 {
     const int round_bits_h = 3 + (bit_depth == 12 ? 2 : 0);
     const int round_off_h = 1 << (round_bits_h - 1);
@@ -115,8 +117,10 @@ static void stbv_av1_wiener_filter_h(unsigned short *dst, const unsigned short *
             if (idx < 0) {
                 if (left_off > 0) px = src[idx];
                 else px = src[0];
-            } else if (idx >= w) px = src[w - 1];
-            else px = src[idx];
+            } else if (idx >= w) {
+                if (have_right) px = src[idx];
+                else px = src[w - 1];
+            } else px = src[idx];
             sum += px * fh[i];
         }
         dst[x] = (unsigned short)((sum + round_off_h) >> round_bits_h);
@@ -129,7 +133,7 @@ static void stbv_av1_wiener_filter_h(unsigned short *dst, const unsigned short *
 static void stbv_av1_wiener_hv(unsigned short *p, unsigned short **ptrs,
                                const unsigned short *src, int src_stride,
                                int w, const signed short *fh, const signed short *fv,
-                               int bit_depth, int left_off)
+                               int bit_depth, int left_off, int have_right)
 {
     const int round_bits_v = 11 - (bit_depth == 12 ? 2 : 0);
     const int round_off_v = 1 << (round_bits_v - 1);
@@ -139,7 +143,7 @@ static void stbv_av1_wiener_hv(unsigned short *p, unsigned short **ptrs,
     int i;
 
     /* H-filter the new source row into tmp */
-    stbv_av1_wiener_filter_h(tmp, src, src_stride, w, fh, bit_depth, left_off);
+    stbv_av1_wiener_filter_h(tmp, src, src_stride, w, fh, bit_depth, left_off, have_right);
 
     /* V-filter: 6 stored rows + 1 new row in tmp */
     for (i = 0; i < w; i++) {
@@ -191,7 +195,7 @@ static void stbv_av1_wiener_plane(unsigned short *plane, int stride,
                                   const signed char *raw_fv, const signed char *raw_fh,
                                   int bit_depth,
                                   const unsigned short *lpf, int lpf_stride,
-                                  int have_top, int have_bottom)
+                                  int have_top, int have_bottom, int have_right)
 {
     unsigned short hor[6 * STBV_LR_REST_UNIT_STRIDE];
     unsigned short *ptrs[7], *rows[6];
@@ -239,24 +243,24 @@ static void stbv_av1_wiener_plane(unsigned short *plane, int stride,
         ptrs[5] = rows[2];
 
         /* H-filter 2 lpf rows (deblocked, pre-LR) */
-        stbv_av1_wiener_filter_h(rows[0], lpf_top, lpf_stride, uw, fh, bit_depth, ux0);
+        stbv_av1_wiener_filter_h(rows[0], lpf_top, lpf_stride, uw, fh, bit_depth, ux0, have_right);
         lpf_top += lpf_stride;
-        stbv_av1_wiener_filter_h(rows[1], lpf_top, lpf_stride, uw, fh, bit_depth, ux0);
+        stbv_av1_wiener_filter_h(rows[1], lpf_top, lpf_stride, uw, fh, bit_depth, ux0, have_right);
 
         /* H-filter 1st src row */
-        stbv_av1_wiener_filter_h(rows[2], src, stride, uw, fh, bit_depth, 0);
+        stbv_av1_wiener_filter_h(rows[2], src, stride, uw, fh, bit_depth, ux0, have_right);
         src += stride;
 
         if (--h <= 0) goto v1;
 
         ptrs[4] = ptrs[5] = rows[3];
-        stbv_av1_wiener_filter_h(rows[3], src, stride, uw, fh, bit_depth, 0);
+        stbv_av1_wiener_filter_h(rows[3], src, stride, uw, fh, bit_depth, ux0, have_right);
         src += stride;
 
         if (--h <= 0) goto v2;
 
         ptrs[5] = rows[4];
-        stbv_av1_wiener_filter_h(rows[4], src, stride, uw, fh, bit_depth, 0);
+        stbv_av1_wiener_filter_h(rows[4], src, stride, uw, fh, bit_depth, ux0, have_right);
         src += stride;
 
         if (--h <= 0) goto v3;
@@ -272,32 +276,32 @@ static void stbv_av1_wiener_plane(unsigned short *plane, int stride,
         ptrs[4] = rows[0];
         ptrs[5] = rows[0];
 
-        stbv_av1_wiener_filter_h(rows[0], src, stride, uw, fh, bit_depth, 0);
+        stbv_av1_wiener_filter_h(rows[0], src, stride, uw, fh, bit_depth, ux0, have_right);
         src += stride;
 
         if (--h <= 0) goto v1;
 
         ptrs[4] = ptrs[5] = rows[1];
-        stbv_av1_wiener_filter_h(rows[1], src, stride, uw, fh, bit_depth, 0);
+        stbv_av1_wiener_filter_h(rows[1], src, stride, uw, fh, bit_depth, ux0, have_right);
         src += stride;
 
         if (--h <= 0) goto v2;
 
         ptrs[5] = rows[2];
-        stbv_av1_wiener_filter_h(rows[2], src, stride, uw, fh, bit_depth, 0);
+        stbv_av1_wiener_filter_h(rows[2], src, stride, uw, fh, bit_depth, ux0, have_right);
         src += stride;
 
         if (--h <= 0) goto v3;
 
         ptrs[6] = rows[3];
-        stbv_av1_wiener_hv(p, ptrs, src, stride, uw, fh, fv, bit_depth, 0);
+        stbv_av1_wiener_hv(p, ptrs, src, stride, uw, fh, fv, bit_depth, ux0, have_right);
         src += stride;
         p += stride;
 
         if (--h <= 0) goto v3;
 
         ptrs[6] = rows[4];
-        stbv_av1_wiener_hv(p, ptrs, src, stride, uw, fh, fv, bit_depth, 0);
+        stbv_av1_wiener_hv(p, ptrs, src, stride, uw, fh, fv, bit_depth, ux0, have_right);
         src += stride;
         p += stride;
 
@@ -306,7 +310,7 @@ static void stbv_av1_wiener_plane(unsigned short *plane, int stride,
 
     ptrs[6] = ptrs[5] + STBV_LR_REST_UNIT_STRIDE;
     do {
-        stbv_av1_wiener_hv(p, ptrs, src, stride, uw, fh, fv, bit_depth, 0);
+        stbv_av1_wiener_hv(p, ptrs, src, stride, uw, fh, fv, bit_depth, ux0, have_right);
         src += stride;
         p += stride;
     } while (--h > 0);
@@ -314,11 +318,11 @@ static void stbv_av1_wiener_plane(unsigned short *plane, int stride,
     if (!have_bottom)
         goto v3;
 
-    stbv_av1_wiener_hv(p, ptrs, lpf_bottom, lpf_stride, uw, fh, fv, bit_depth, ux0);
+    stbv_av1_wiener_hv(p, ptrs, lpf_bottom, lpf_stride, uw, fh, fv, bit_depth, ux0, have_right);
     lpf_bottom += lpf_stride;
     p += stride;
 
-    stbv_av1_wiener_hv(p, ptrs, lpf_bottom, lpf_stride, uw, fh, fv, bit_depth, ux0);
+    stbv_av1_wiener_hv(p, ptrs, lpf_bottom, lpf_stride, uw, fh, fv, bit_depth, ux0, have_right);
     p += stride;
 
 v1:
@@ -1494,6 +1498,7 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
                      * First stripe: stripe_h = (64 - 8 * (uy0==0)) >> ss_v
                      * Subsequent: stripe_h = 64 >> ss_v
                      * have_bottom: true for all stripes except last.
+                     * have_right: true for all units except the last in each row.
                      *
                      * lpf positioning: For each stripe at position stripe_y:
                      * - have_top: lpf at padded row (stripe_y+2), so lpf-2*stride
@@ -1504,6 +1509,7 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
                     int stripe_y = uy0;
                     int remaining = uh;
                     int stripe_idx = 0;
+                    int hr = (gx < gw - 1);
                     while (remaining > 0) {
                         int first_stripe = (stripe_y == uy0);
                         int max_sh = first_stripe ? ((64 - 8) >> ss_v) : (64 >> ss_v);
@@ -1519,7 +1525,7 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
                                               ux0, stripe_y, uw, sh,
                                               u->filter_v, u->filter_h,
                                               bit_depth, stripe_lpf, stride,
-                                              ht, hb);
+                                              ht, hb, hr);
                         stripe_y += sh;
                         remaining -= sh;
                         stripe_idx++;
