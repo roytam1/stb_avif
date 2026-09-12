@@ -536,20 +536,20 @@ static void stbv_av1_sgr_finish_filter_row2(signed short *tmp,
 
 /* Apply weight for 3x3 SGR */
 static void stbv_av1_sgr_weighted_row1(unsigned short *dst, const signed short *t1,
-                                       int w, int w1)
+                                       int w, int w1, int maxv)
 {
     int i;
     for (i = 0; i < w; i++) {
         int v = w1 * t1[i];
         int r = dst[i] + ((v + (1 << 10)) >> 11);
-        dst[i] = stbv_av1_lr_clip16(r, 255);
+        dst[i] = stbv_av1_lr_clip16(r, maxv);
     }
 }
 
 /* Apply dual weights for mix SGR */
 static void stbv_av1_sgr_weighted2(unsigned short *dst, int dst_stride,
                                    const signed short *t1, const signed short *t2,
-                                   int w, int h, int w0, int w1)
+                                   int w, int h, int w0, int w1, int maxv)
 {
     int j;
     for (j = 0; j < h; j++) {
@@ -557,7 +557,7 @@ static void stbv_av1_sgr_weighted2(unsigned short *dst, int dst_stride,
         for (i = 0; i < w; i++) {
             int v = w0 * t1[i] + w1 * t2[i];
             int r = dst[i] + ((v + (1 << 10)) >> 11);
-            dst[i] = stbv_av1_lr_clip16(r, 255);
+            dst[i] = stbv_av1_lr_clip16(r, maxv);
         }
         dst += dst_stride;
         t1 += 384;
@@ -672,10 +672,12 @@ static void stbv_av1_sgr_3x3(unsigned short *dst, int stride,
                               int frame_w, int frame_h,
                               int ux0, int uy0, int uw, int uh,
                               int s1, int w1,
-                              const unsigned short *lpf, int lpf_stride)
+                              const unsigned short *lpf, int lpf_stride,
+                              int bit_depth)
 {
     int y;
     signed short *out_tmp;
+    int maxv = (1 << bit_depth) - 1;
     if (uw <= 0 || uh <= 0) return;
     out_tmp = (signed short *)stb_avif_calloc((size_t)uh * 384, sizeof(signed short));
     if (!out_tmp) return;
@@ -683,7 +685,7 @@ static void stbv_av1_sgr_3x3(unsigned short *dst, int stride,
                               ux0, uy0, uw, uh, s1, lpf, lpf_stride);
     for (y = 0; y < uh; y++)
         stbv_av1_sgr_weighted_row1(dst + (uy0 + y) * stride + ux0,
-                                   out_tmp + y * 384, uw, w1);
+                                   out_tmp + y * 384, uw, w1, maxv);
     stb_avif_free_internal(out_tmp);
 }
 
@@ -913,10 +915,12 @@ static void stbv_av1_sgr_5x5(unsigned short *dst, int stride,
                               int frame_w, int frame_h,
                               int ux0, int uy0, int uw, int uh,
                               int s0, int w0,
-                              const unsigned short *lpf, int lpf_stride)
+                              const unsigned short *lpf, int lpf_stride,
+                              int bit_depth)
 {
     int y;
     signed short *out_tmp;
+    int maxv = (1 << bit_depth) - 1;
     if (uw <= 0 || uh <= 0) return;
     out_tmp = (signed short *)stb_avif_calloc((size_t)uh * 384, sizeof(signed short));
     if (!out_tmp) return;
@@ -924,7 +928,7 @@ static void stbv_av1_sgr_5x5(unsigned short *dst, int stride,
                               ux0, uy0, uw, uh, s0, lpf, lpf_stride);
     for (y = 0; y < uh; y++)
         stbv_av1_sgr_weighted_row1(dst + (uy0 + y) * stride + ux0,
-                                   out_tmp + y * 384, uw, w0);
+                                   out_tmp + y * 384, uw, w0, maxv);
     stb_avif_free_internal(out_tmp);
 }
 
@@ -935,11 +939,13 @@ static void stbv_av1_sgr_mix(unsigned short *dst, int stride,
                               int frame_w, int frame_h,
                               int ux0, int uy0, int uw, int uh,
                               int s0, int s1, int w0, int w1,
-                              const unsigned short *lpf, int lpf_stride)
+                              const unsigned short *lpf, int lpf_stride,
+                              int bit_depth)
 {
     int BUF = 384 + 16;
     int ew = uw + 4;
     int h, src_y, i;
+    int maxv = (1 << bit_depth) - 1;
 
     /* 5x5 ring buffers */
     int *sumsq5_buf, *sum5_buf;
@@ -1159,7 +1165,7 @@ static void stbv_av1_sgr_mix(unsigned short *dst, int stride,
                                              uw);
             /* Blend both filter outputs */
             stbv_av1_sgr_weighted2(dst_row, stride, tmp5 + idx5, tmp3 + idx5,
-                                    uw, 2, w0, w1);
+                                    uw, 2, w0, w1, maxv);
         }
         stbv_av1_rotate5(sumsq5_ptrs);
         stbv_av1_rotate5(sum5_ptrs);
@@ -1214,7 +1220,7 @@ static void stbv_av1_sgr_mix(unsigned short *dst, int stride,
                                              (const int *const *)(B3_ptrs + 1),
                                              uw);
             stbv_av1_sgr_weighted2(dst_row, stride, tmp5 + idx5, tmp3 + idx5,
-                                    uw, 2, w0, w1);
+                                    uw, 2, w0, w1, maxv);
         }
     }
 
@@ -1250,7 +1256,7 @@ odd:
                                          (const int *const *)B3_ptrs,
                                          uw);
         stbv_av1_sgr_weighted2(dst_row, stride, tmp5 + idx5, tmp3 + idx5,
-                                uw, 1, w0, w1);
+                                uw, 1, w0, w1, maxv);
     }
     goto done;
 
@@ -1298,7 +1304,7 @@ output_2:
                                          (const int *const *)(B3_ptrs + 1),
                                          uw);
         stbv_av1_sgr_weighted2(dst_row, stride, tmp5 + idx5, tmp3 + idx5,
-                                uw, 2, w0, w1);
+                                uw, 2, w0, w1, maxv);
     }
     stbv_av1_rotate5(sumsq5_ptrs);
     stbv_av1_rotate5(sum5_ptrs);
@@ -1363,7 +1369,7 @@ output_1:
                                          (const int *const *)B3_ptrs,
                                          uw);
         stbv_av1_sgr_weighted2(dst_row, stride, tmp5, tmp3,
-                                uw, 1, w0, w1);
+                                uw, 1, w0, w1, maxv);
     }
 
 done:
@@ -1539,13 +1545,16 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
                     if (s0 && s1)
                         stbv_av1_sgr_mix(plane, stride, w, h,
                                          ux0, uy0, uw, uh,
-                                         s0, s1, w0, w1_adj, lpf, stride);
+                                         s0, s1, w0, w1_adj, lpf, stride,
+                                         bit_depth);
                     else if (s0)
                         stbv_av1_sgr_5x5(plane, stride, w, h,
-                                         ux0, uy0, uw, uh, s0, w0, lpf, stride);
+                                         ux0, uy0, uw, uh, s0, w0, lpf, stride,
+                                         bit_depth);
                     else if (s1)
                         stbv_av1_sgr_3x3(plane, stride, w, h,
-                                         ux0, uy0, uw, uh, s1, w1_adj, lpf, stride);
+                                         ux0, uy0, uw, uh, s1, w1_adj, lpf, stride,
+                                         bit_depth);
                 }
                 /* NONE: no-op */
             }
