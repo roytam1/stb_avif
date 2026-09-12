@@ -11968,9 +11968,16 @@ static unsigned short stbv_av1_lr_clip16(int v, int maxv)
 
 #define STBV_LR_REST_UNIT_STRIDE 390
 
+/* Horizontal Wiener filter. left_off: number of valid pixels to the left
+ * of src (0 for first unit in row, >0 for subsequent units).
+ * When left_off > 0, reads src[-1]..src[-min(3,left_off)] for left context
+ * instead of clamping.
+ * have_right: when set, reads src[idx] for idx>=w (next unit's CDEF'd data)
+ * instead of clamping to src[w-1], matching dav1d's LR_HAVE_RIGHT behavior. */
 static void stbv_av1_wiener_filter_h(unsigned short *dst, const unsigned short *src,
                                      int src_stride, int w,
-                                     const signed short *fh, int bit_depth)
+                                     const signed short *fh, int bit_depth,
+                                     int left_off, int have_right)
 {
     const int round_bits_h = 3 + (bit_depth == 12 ? 2 : 0);
     const int round_off_h = 1 << (round_bits_h - 1);
@@ -11983,9 +11990,13 @@ static void stbv_av1_wiener_filter_h(unsigned short *dst, const unsigned short *
         for (i = 0; i < 7; i++) {
             int idx = x + i - 3;
             int px;
-            if (idx < 0) px = src[0];
-            else if (idx >= w) px = src[w - 1];
-            else px = src[idx];
+            if (idx < 0) {
+                if (left_off > 0) px = src[idx];
+                else px = src[0];
+            } else if (idx >= w) {
+                if (have_right) px = src[idx];
+                else px = src[w - 1];
+            } else px = src[idx];
             sum += px * fh[i];
         }
         dst[x] = (unsigned short)((sum + round_off_h) >> round_bits_h);
@@ -11998,7 +12009,7 @@ static void stbv_av1_wiener_filter_h(unsigned short *dst, const unsigned short *
 static void stbv_av1_wiener_hv(unsigned short *p, unsigned short **ptrs,
                                const unsigned short *src, int src_stride,
                                int w, const signed short *fh, const signed short *fv,
-                               int bit_depth)
+                               int bit_depth, int left_off, int have_right)
 {
     const int round_bits_v = 11 - (bit_depth == 12 ? 2 : 0);
     const int round_off_v = 1 << (round_bits_v - 1);
@@ -12008,7 +12019,7 @@ static void stbv_av1_wiener_hv(unsigned short *p, unsigned short **ptrs,
     int i;
 
     /* H-filter the new source row into tmp */
-    stbv_av1_wiener_filter_h(tmp, src, src_stride, w, fh, bit_depth);
+    stbv_av1_wiener_filter_h(tmp, src, src_stride, w, fh, bit_depth, left_off, have_right);
 
     /* V-filter: 6 stored rows + 1 new row in tmp */
     for (i = 0; i < w; i++) {
@@ -12060,7 +12071,7 @@ static void stbv_av1_wiener_plane(unsigned short *plane, int stride,
                                   const signed char *raw_fv, const signed char *raw_fh,
                                   int bit_depth,
                                   const unsigned short *lpf, int lpf_stride,
-                                  int have_top, int have_bottom)
+                                  int have_top, int have_bottom, int have_right)
 {
     unsigned short hor[6 * STBV_LR_REST_UNIT_STRIDE];
     unsigned short *ptrs[7], *rows[6];
@@ -12108,24 +12119,24 @@ static void stbv_av1_wiener_plane(unsigned short *plane, int stride,
         ptrs[5] = rows[2];
 
         /* H-filter 2 lpf rows (deblocked, pre-LR) */
-        stbv_av1_wiener_filter_h(rows[0], lpf_top, lpf_stride, uw, fh, bit_depth);
+        stbv_av1_wiener_filter_h(rows[0], lpf_top, lpf_stride, uw, fh, bit_depth, ux0, have_right);
         lpf_top += lpf_stride;
-        stbv_av1_wiener_filter_h(rows[1], lpf_top, lpf_stride, uw, fh, bit_depth);
+        stbv_av1_wiener_filter_h(rows[1], lpf_top, lpf_stride, uw, fh, bit_depth, ux0, have_right);
 
         /* H-filter 1st src row */
-        stbv_av1_wiener_filter_h(rows[2], src, stride, uw, fh, bit_depth);
+        stbv_av1_wiener_filter_h(rows[2], src, stride, uw, fh, bit_depth, ux0, have_right);
         src += stride;
 
         if (--h <= 0) goto v1;
 
         ptrs[4] = ptrs[5] = rows[3];
-        stbv_av1_wiener_filter_h(rows[3], src, stride, uw, fh, bit_depth);
+        stbv_av1_wiener_filter_h(rows[3], src, stride, uw, fh, bit_depth, ux0, have_right);
         src += stride;
 
         if (--h <= 0) goto v2;
 
         ptrs[5] = rows[4];
-        stbv_av1_wiener_filter_h(rows[4], src, stride, uw, fh, bit_depth);
+        stbv_av1_wiener_filter_h(rows[4], src, stride, uw, fh, bit_depth, ux0, have_right);
         src += stride;
 
         if (--h <= 0) goto v3;
@@ -12141,32 +12152,32 @@ static void stbv_av1_wiener_plane(unsigned short *plane, int stride,
         ptrs[4] = rows[0];
         ptrs[5] = rows[0];
 
-        stbv_av1_wiener_filter_h(rows[0], src, stride, uw, fh, bit_depth);
+        stbv_av1_wiener_filter_h(rows[0], src, stride, uw, fh, bit_depth, ux0, have_right);
         src += stride;
 
         if (--h <= 0) goto v1;
 
         ptrs[4] = ptrs[5] = rows[1];
-        stbv_av1_wiener_filter_h(rows[1], src, stride, uw, fh, bit_depth);
+        stbv_av1_wiener_filter_h(rows[1], src, stride, uw, fh, bit_depth, ux0, have_right);
         src += stride;
 
         if (--h <= 0) goto v2;
 
         ptrs[5] = rows[2];
-        stbv_av1_wiener_filter_h(rows[2], src, stride, uw, fh, bit_depth);
+        stbv_av1_wiener_filter_h(rows[2], src, stride, uw, fh, bit_depth, ux0, have_right);
         src += stride;
 
         if (--h <= 0) goto v3;
 
         ptrs[6] = rows[3];
-        stbv_av1_wiener_hv(p, ptrs, src, stride, uw, fh, fv, bit_depth);
+        stbv_av1_wiener_hv(p, ptrs, src, stride, uw, fh, fv, bit_depth, ux0, have_right);
         src += stride;
         p += stride;
 
         if (--h <= 0) goto v3;
 
         ptrs[6] = rows[4];
-        stbv_av1_wiener_hv(p, ptrs, src, stride, uw, fh, fv, bit_depth);
+        stbv_av1_wiener_hv(p, ptrs, src, stride, uw, fh, fv, bit_depth, ux0, have_right);
         src += stride;
         p += stride;
 
@@ -12175,7 +12186,7 @@ static void stbv_av1_wiener_plane(unsigned short *plane, int stride,
 
     ptrs[6] = ptrs[5] + STBV_LR_REST_UNIT_STRIDE;
     do {
-        stbv_av1_wiener_hv(p, ptrs, src, stride, uw, fh, fv, bit_depth);
+        stbv_av1_wiener_hv(p, ptrs, src, stride, uw, fh, fv, bit_depth, ux0, have_right);
         src += stride;
         p += stride;
     } while (--h > 0);
@@ -12183,11 +12194,11 @@ static void stbv_av1_wiener_plane(unsigned short *plane, int stride,
     if (!have_bottom)
         goto v3;
 
-    stbv_av1_wiener_hv(p, ptrs, lpf_bottom, lpf_stride, uw, fh, fv, bit_depth);
+    stbv_av1_wiener_hv(p, ptrs, lpf_bottom, lpf_stride, uw, fh, fv, bit_depth, ux0, have_right);
     lpf_bottom += lpf_stride;
     p += stride;
 
-    stbv_av1_wiener_hv(p, ptrs, lpf_bottom, lpf_stride, uw, fh, fv, bit_depth);
+    stbv_av1_wiener_hv(p, ptrs, lpf_bottom, lpf_stride, uw, fh, fv, bit_depth, ux0, have_right);
     p += stride;
 
 v1:
@@ -12477,14 +12488,12 @@ static void stbv_av1_sgr_compute_3x3(signed short *out_tmp,
     }
 
     /* Pre-fill rows[0] and rows[1] from above the LR unit (border rows).
-     * These are the 2 rows above the first output row. */
+     * These are the 2 rows above the first output row.
+     * lpf buffer: lpf[r*stride] = frame[r]. To read frame row F: lpf[F*stride].
+     * Frame rows uy0-2 and uy0-1 → lpf[(uy0-2)*stride] and lpf[(uy0-1)*stride]. */
     {
-        int row0 = uy0 > 2 ? uy0 - 2 : 0;
-        int row1 = uy0 > 1 ? uy0 - 1 : 0;
-        /* Use lpf (saved pre-LR data) for pre-fill, matching dav1d.
-         * src may have been modified by LR processing of units above. */
-        const unsigned short *r0 = lpf + row0 * lpf_stride + ux0;
-        const unsigned short *r1 = lpf + row1 * lpf_stride + ux0;
+        const unsigned short *r0 = lpf + (uy0 - 2) * lpf_stride + ux0;
+        const unsigned short *r1 = lpf + (uy0 - 1) * lpf_stride + ux0;
         stbv_av1_sgr_box3_row_h(sumsq_ptrs[0], sum_ptrs[0], r0, ew, ux0);
         stbv_av1_sgr_box3_row_h(sumsq_ptrs[1], sum_ptrs[1], r1, ew, ux0);
     }
@@ -12499,7 +12508,13 @@ static void stbv_av1_sgr_compute_3x3(signed short *out_tmp,
         if (row >= frame_h) row_clamped = frame_h - 1;
         else row_clamped = row;
 
-        src_ptr = src + row_clamped * src_stride + ux0;
+         /* Bottom context rows (y >= uh) come from lpf (deblocked),
+          * source rows come from src (CDEF'd frame).
+          * lpf[r*stride] = frame[r]. Frame row F → lpf[F*stride]. */
+         if (y >= uh)
+             src_ptr = lpf + row_clamped * lpf_stride + ux0;
+        else
+            src_ptr = src + row_clamped * src_stride + ux0;
 
         stbv_av1_sgr_box3_row_h(sumsq_ptrs[2], sum_ptrs[2], src_ptr, ew, ux0);
         stbv_av1_sgr_box3_row_v((const int *const *)sumsq_ptrs, (const int *const *)sum_ptrs, A_ptrs[2], B_ptrs[2], uw);
@@ -12606,14 +12621,12 @@ static void stbv_av1_sgr_compute_5x5(signed short *out_tmp,
     }
 
     /* Pre-fill: same row aliased for ptrs[0] and ptrs[1] (dav1d convention).
-     * ptrs[0]=ptrs[1]=uy0-2 (or 0), ptrs[2]=uy0-1 (or 0).
-     * Use lpf (saved pre-LR data) for pre-fill, matching dav1d. */
+     * lpf buffer: lpf[r*stride] = frame[r]. To read frame row F: lpf[F*stride].
+     * Frame rows uy0-2 and uy0-1 → lpf[(uy0-2)*stride] and lpf[(uy0-1)*stride]. */
     {
-        int row0 = uy0 > 2 ? uy0 - 2 : 0;
-        int row1 = uy0 > 1 ? uy0 - 1 : 0;
-        r = lpf + row0 * lpf_stride + ux0;
+        r = lpf + (uy0 - 2) * lpf_stride + ux0;
         stbv_av1_sgr_box5_row_h(sumsq_rows[0], sum_rows[0], r, ew, ux0);
-        r = lpf + row1 * lpf_stride + ux0;
+        r = lpf + (uy0 - 1) * lpf_stride + ux0;
         stbv_av1_sgr_box5_row_h(sumsq_rows[1], sum_rows[1], r, ew, ux0);
     }
     sumsq_ptrs[0] = sumsq_rows[0];
@@ -12737,6 +12750,32 @@ static void stbv_av1_sgr_compute_5x5(signed short *out_tmp,
         stbv_av1_rotate2(A_ptrs);
         stbv_av1_rotate2(B_ptrs);
     } while (--h > 0);
+
+    /* Post-loop bottom context: read 2 rows from lpf (deblocked) below the
+     * unit, matching dav1d's LR_HAVE_BOTTOM processing. These feed into the
+     * vertical sum for the last 2 output rows.
+     * lpf[r*stride] = frame[r]. Frame rows uy0+uh and uy0+uh+1 → lpf[(uy0+uh)*stride].
+     * Skip when unit is at bottom of frame (no rows below). */
+    if (uy0 + uh < frame_h) {
+        int bot0 = uy0 + uh;
+        int bot1 = uy0 + uh + 1;
+        const unsigned short *r3, *r4;
+        r3 = lpf + bot0 * lpf_stride + ux0;
+        r4 = lpf + bot1 * lpf_stride + ux0;
+        stbv_av1_sgr_box5_row_h(sumsq_ptrs[3], sum_ptrs[3], r3, ew, ux0);
+        stbv_av1_sgr_box5_row_h(sumsq_ptrs[4], sum_ptrs[4], r4, ew, ux0);
+        stbv_av1_sgr_box5_row_v((const int *const *)sumsq_ptrs, (const int *const *)sum_ptrs, A_ptrs[1], B_ptrs[1], uw);
+        stbv_av1_sgr_calc_ab(A_ptrs[1], B_ptrs[1], uw, s0, 25, 164);
+        /* Output 2 rows */
+        {
+            const unsigned short *dst_row = src + out_y * src_stride + ux0;
+            stbv_av1_sgr_finish_filter_row2(out_tmp + (out_y - uy0) * 384,
+                                             dst_row, src_stride,
+                                             (const int *const *)A_ptrs,
+                                             (const int *const *)B_ptrs,
+                                             uw, 2);
+        }
+    }
 
 done:
     stb_avif_free_internal(sumsq_buf);
@@ -12868,8 +12907,8 @@ static void stbv_av1_sgr_mix(unsigned short *dst, int stride,
     }
 
     /* Pre-fill top 2 rows from lpf (matching dav1d LR_HAVE_TOP path).
-     * lpf points to frame row uy0; lpf[-2*stride]..lpf[-1*stride] are the
-     * pre-fill rows from the lpf copy. */
+     * lpf buffer: lpf[r*stride] = frame[r]. To read frame row F: lpf[F*stride].
+     * Frame rows uy0-2 and uy0-1 → lpf[(uy0-2)*stride] and lpf[(uy0-1)*stride]. */
     {
         const unsigned short *lpf_r0 = lpf + (uy0 - 2) * lpf_stride;
         const unsigned short *lpf_r1 = lpf + (uy0 - 1) * lpf_stride;
@@ -12974,7 +13013,7 @@ static void stbv_av1_sgr_mix(unsigned short *dst, int stride,
         stbv_av1_sgr_calc_ab(A3_ptrs[3], B3_ptrs[3], uw, s1, 9, 455);
 
         /* finish_mix: filter + weighted2 + rotate A5/A3 */
-        out_y = uy0 + (uh - h - 2);
+        out_y = uy0 + (uh - h - 3);
         {
             unsigned short *dst_row = dst + out_y * stride + ux0;
             int idx5 = (out_y - uy0) * 384;
@@ -13005,6 +13044,55 @@ static void stbv_av1_sgr_mix(unsigned short *dst, int stride,
         stbv_av1_rotate4(A3_ptrs);
         stbv_av1_rotate4(B3_ptrs);
     } while (--h > 0);
+
+    /* Post-loop bottom context: read 2 rows from lpf (deblocked) below the
+     * unit for both 5x5 and 3x3 filters, matching dav1d's LR_HAVE_BOTTOM.
+     * lpf[r*stride] = frame[r]. Frame rows uy0+uh and uy0+uh+1 → lpf[(uy0+uh)*stride].
+     * Skip when unit is at bottom of frame (no rows below). */
+    if (uy0 + uh < frame_h) {
+        int bot0 = uy0 + uh;
+        int bot1 = uy0 + uh + 1;
+        const unsigned short *r3 = lpf + bot0 * lpf_stride + ux0;
+        const unsigned short *r4 = lpf + bot1 * lpf_stride + ux0;
+        stbv_av1_sgr_box5_row_h(sumsq5_ptrs[3], sum5_ptrs[3], r3, ew, ux0);
+        stbv_av1_sgr_box3_row_h(sumsq3_ptrs[2], sum3_ptrs[2], r3, ew, ux0);
+        stbv_av1_sgr_box3_row_v((const int *const *)sumsq3_ptrs,
+                                 (const int *const *)sum3_ptrs,
+                                 A3_ptrs[3], B3_ptrs[3], uw);
+        stbv_av1_sgr_calc_ab(A3_ptrs[3], B3_ptrs[3], uw, s1, 9, 455);
+        stbv_av1_rotate4(A3_ptrs);
+        stbv_av1_rotate4(B3_ptrs);
+        stbv_av1_sgr_box5_row_h(sumsq5_ptrs[4], sum5_ptrs[4], r4, ew, ux0);
+        stbv_av1_sgr_box3_row_h(sumsq3_ptrs[2], sum3_ptrs[2], r4, ew, ux0);
+        stbv_av1_sgr_box5_row_v((const int *const *)sumsq5_ptrs,
+                                 (const int *const *)sum5_ptrs,
+                                 A5_ptrs[1], B5_ptrs[1], uw);
+        stbv_av1_sgr_calc_ab(A5_ptrs[1], B5_ptrs[1], uw, s0, 25, 164);
+        stbv_av1_sgr_box3_row_v((const int *const *)sumsq3_ptrs,
+                                 (const int *const *)sum3_ptrs,
+                                 A3_ptrs[3], B3_ptrs[3], uw);
+        stbv_av1_sgr_calc_ab(A3_ptrs[3], B3_ptrs[3], uw, s1, 9, 455);
+        {
+            int out_y = uy0 + uh - 2;
+            unsigned short *dst_row = dst + out_y * stride + ux0;
+            int idx5 = (out_y - uy0) * 384;
+            stbv_av1_sgr_finish_filter_row2(tmp5 + idx5, dst_row, stride,
+                                             (const int *const *)A5_ptrs,
+                                             (const int *const *)B5_ptrs,
+                                             uw, 2);
+            stbv_av1_sgr_finish_filter_row1(tmp3 + idx5, dst_row,
+                                             (const int *const *)A3_ptrs,
+                                             (const int *const *)B3_ptrs,
+                                             uw);
+            stbv_av1_sgr_finish_filter_row1(tmp3 + idx5 + 384,
+                                             dst_row + stride,
+                                             (const int *const *)(A3_ptrs + 1),
+                                             (const int *const *)(B3_ptrs + 1),
+                                             uw);
+            stbv_av1_sgr_weighted2(dst_row, stride, tmp5 + idx5, tmp3 + idx5,
+                                    uw, 2, w0, w1);
+        }
+    }
 
     goto done;
 
@@ -13094,6 +13182,7 @@ output_2:
     stbv_av1_rotate2(B5_ptrs);
     stbv_av1_rotate4(A3_ptrs);
     stbv_av1_rotate4(B3_ptrs);
+
     goto done;
 
 vert_1:
@@ -13170,22 +13259,24 @@ done:
 
 /* Apply loop restoration to the entire frame.
  * Called after CDEF, before 8-bit conversion. */
-/* Apply frame-level LR. We save a copy of each plane before processing
- * (the "lpf" buffer). Both Wiener and SGR filters read edge rows from
- * this copy (deblocked, pre-LR), matching dav1d's lr_lpf_line behavior. */
+/* Apply frame-level LR. lpf_planes_in[]: pre-CDEF (deblocked) copies of each
+ * plane, with 2 rows of padding above and below.  Data starts at row 2.
+ * If lpf_planes_in[p] is NULL for a plane, that plane's lpf is allocated
+ * internally from the current frame data (fallback). */
 static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
                              unsigned short *plane_v,
                              int stride_y, int stride_u, int stride_v,
                              int frame_w, int frame_h,
                              int ss_hor, int ss_ver, int bit_depth,
-                             const stbv_av1_lr_mask *m)
+                             const stbv_av1_lr_mask *m,
+                             unsigned short *lpf_planes_in[3])
 {
     int p;
     unsigned short *lpf_planes[3];
+    unsigned char lpf_owned[3] = {0, 0, 0};
     int lpf_strides[3];
     if (!m) return;
 
-    /* Save pre-LR copies for edge rows */
     for (p = 0; p < 3; p++) {
         int chroma = p > 0;
         int ss_h = chroma ? ss_hor : 0;
@@ -13194,11 +13285,15 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
         int h = (frame_h + ss_v) >> ss_v;
         int stride = chroma ? (p == 1 ? stride_u : stride_v) : stride_y;
         unsigned short *plane = chroma ? (p == 1 ? plane_u : plane_v) : plane_y;
-        unsigned short *lpf;
         int y;
 
         lpf_planes[p] = NULL;
         lpf_strides[p] = stride;
+
+        if (lpf_planes_in && lpf_planes_in[p]) {
+            lpf_planes[p] = lpf_planes_in[p];
+            continue;
+        }
 
         /* Quick check: any non-NONE types? */
         {
@@ -13213,20 +13308,20 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
             if (!any_non_none) continue;
         }
 
-        /* Allocate with 2 extra rows at top and bottom for lpf_top/lpf_bottom
-         * edge reads (matching dav1d's lr_lpf_line padding). Data starts at row 2. */
-        lpf = (unsigned short *)stb_avif_calloc((size_t)stride * (h + 4), sizeof(unsigned short));
-        if (!lpf) continue;
-        /* Fill top 2 rows with clamped copy of first row */
-        for (y = 0; y < 2; y++)
-            memcpy(lpf + y * stride, plane, w * sizeof(unsigned short));
-        /* Copy main data starting at row 2 */
-        for (y = 0; y < h; y++)
-            memcpy(lpf + (y + 2) * stride, plane + y * stride, w * sizeof(unsigned short));
-        /* Fill bottom 2 rows with clamped copy of last row */
-        for (y = h + 2; y < h + 4; y++)
-            memcpy(lpf + y * stride, plane + (h - 1) * stride, w * sizeof(unsigned short));
-        lpf_planes[p] = lpf;
+        /* Fallback: allocate from current (possibly CDEF'd) frame data */
+        {
+            unsigned short *lpf;
+            lpf = (unsigned short *)stb_avif_calloc((size_t)stride * (h + 4), sizeof(unsigned short));
+            if (!lpf) continue;
+            for (y = 0; y < 2; y++)
+                memcpy(lpf + y * stride, plane, w * sizeof(unsigned short));
+            for (y = 0; y < h; y++)
+                memcpy(lpf + (y + 2) * stride, plane + y * stride, w * sizeof(unsigned short));
+            for (y = h + 2; y < h + 4; y++)
+                memcpy(lpf + y * stride, plane + (h - 1) * stride, w * sizeof(unsigned short));
+            lpf_planes[p] = lpf;
+            lpf_owned[p] = 1;
+        }
     }
 
     for (p = 0; p < 3; p++) {
@@ -13246,6 +13341,26 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
 
         if (!lpf) continue;
 
+        /* Debug: count filter types per plane */
+        if (p == 0) {
+            int cnt_none = 0, cnt_wiener = 0, cnt_sgr3 = 0, cnt_sgr5 = 0, cnt_mix = 0;
+            for (gy = 0; gy < gr; gy++)
+                for (gx = 0; gx < gw; gx++) {
+                    const stbv_av1_lr_unit *du = &m->units[p][gy * gw + gx];
+                    if (du->type == STBV_AV1_RESTORATION_NONE) cnt_none++;
+                    else if (du->type == STBV_AV1_RESTORATION_WIENER) cnt_wiener++;
+                    else if (du->type >= STBV_AV1_RESTORATION_SGRPROJ) {
+                        int ds0 = stbv_av1_sgr_tab[du->sgr_idx][0];
+                        int ds1 = stbv_av1_sgr_tab[du->sgr_idx][1];
+                        if (ds0 && ds1) cnt_mix++;
+                        else if (ds0) cnt_sgr5++;
+                        else cnt_sgr3++;
+                    }
+                }
+            fprintf(stderr, "LR plane0: NONE=%d WIENER=%d SGR3x3=%d SGR5x5=%d MIX=%d (total=%d)\n",
+                    cnt_none, cnt_wiener, cnt_sgr3, cnt_sgr5, cnt_mix, gw*gr);
+        }
+
         for (gy = 0; gy < gr; gy++) {
             for (gx = 0; gx < gw; gx++) {
                 const stbv_av1_lr_unit *u = &m->units[p][gy * gw + gx];
@@ -13259,6 +13374,7 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
                      * First stripe: stripe_h = (64 - 8 * (uy0==0)) >> ss_v
                      * Subsequent: stripe_h = 64 >> ss_v
                      * have_bottom: true for all stripes except last.
+                     * have_right: true for all units except the last in each row.
                      *
                      * lpf positioning: For each stripe at position stripe_y:
                      * - have_top: lpf at padded row (stripe_y+2), so lpf-2*stride
@@ -13269,6 +13385,7 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
                     int stripe_y = uy0;
                     int remaining = uh;
                     int stripe_idx = 0;
+                    int hr = (gx < gw - 1);
                     while (remaining > 0) {
                         int first_stripe = (stripe_y == uy0);
                         int max_sh = first_stripe ? ((64 - 8) >> ss_v) : (64 >> ss_v);
@@ -13284,7 +13401,7 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
                                               ux0, stripe_y, uw, sh,
                                               u->filter_v, u->filter_h,
                                               bit_depth, stripe_lpf, stride,
-                                              ht, hb);
+                                              ht, hb, hr);
                         stripe_y += sh;
                         remaining -= sh;
                         stripe_idx++;
@@ -13311,9 +13428,9 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
         }
     }
 
-    /* Free lpf copies */
+    /* Free only internally-allocated lpf copies (not caller-provided ones) */
     for (p = 0; p < 3; p++) {
-        if (lpf_planes[p]) stb_avif_free_internal(lpf_planes[p]);
+        if (lpf_owned[p] && lpf_planes[p]) stb_avif_free_internal(lpf_planes[p]);
     }
 }
 
@@ -16582,6 +16699,40 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     }
 #endif
 
+    /* Save deblocked (pre-CDEF) copies for LR context.
+     * dav1d's lr_lpf_line contains deblocked data, not CDEF'd data.
+     * We allocate padded copies here and pass them to stb_av1_lr_frame. */
+    {
+        unsigned short *lr_lpf[3] = { NULL, NULL, NULL };
+        int need_lpf = 0;
+#ifndef STB_AVIF_NO_LR
+        need_lpf = !r && lr_mask_ok && stream->seq.restoration && !stream->frame.allow_intrabc;
+#endif
+        if (need_lpf) {
+            int lp;
+            for (lp = 0; lp < 3; lp++) {
+                int chroma = lp > 0;
+                int ss_h = chroma ? (stream->seq.ss_hor ? 1 : 0) : 0;
+                int ss_v = chroma ? ((stream->seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0) : 0;
+                int lw = (tc->frame_width + ss_h) >> ss_h;
+                int lh = (tc->frame_height + ss_v) >> ss_v;
+                int ls = chroma ? (lp == 1 ? tc->stride_u : tc->stride_v) : tc->stride_y;
+                unsigned short *sp = chroma ? (lp == 1 ? pu16 : pv16) : py16;
+                unsigned short *lpf;
+                int yy;
+                if (!sp) continue;
+                lpf = (unsigned short *)stb_avif_calloc((size_t)ls * (lh + 4), sizeof(unsigned short));
+                if (!lpf) continue;
+                for (yy = 0; yy < 2; yy++)
+                    memcpy(lpf + yy * ls, sp, lw * sizeof(unsigned short));
+                for (yy = 0; yy < lh; yy++)
+                    memcpy(lpf + (yy + 2) * ls, sp + yy * ls, lw * sizeof(unsigned short));
+                for (yy = lh + 2; yy < lh + 4; yy++)
+                    memcpy(lpf + yy * ls, sp + (lh - 1) * ls, lw * sizeof(unsigned short));
+                lr_lpf[lp] = lpf;
+            }
+        }
+
     /* CDEF filtering (after deblocking, before loop restoration). */
     if (!r && stream->seq.cdef && cdef_idx_grid) {
         const struct stb_av1_framehdr *fh = &stream->frame;
@@ -16614,9 +16765,17 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                          stream->seq.ss_hor ? 1 : 0,
                          (stream->seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0,
                          8 + stream->seq.hbd * 2,
-                           &lr_mask);
+                           &lr_mask, lr_lpf);
     }
 #endif
+
+        /* Free deblocked lpf copies */
+        {
+            int lp2;
+            for (lp2 = 0; lp2 < 3; lp2++)
+                if (lr_lpf[lp2]) stb_avif_free_internal(lr_lpf[lp2]);
+        }
+    }
 #endif /* !STB_AVIF_NO_FILTERS */
 
     /* Convert internal u16 planes to the caller's 8-bit planes.
