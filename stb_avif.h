@@ -3541,6 +3541,40 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
     }
 #endif
 
+    /* Save deblocked (pre-CDEF) copies for LR context.
+     * dav1d's lr_lpf_line contains deblocked data, not CDEF'd data.
+     * We allocate padded copies here and pass them to stb_av1_lr_frame. */
+    {
+        unsigned short *lr_lpf[3] = { NULL, NULL, NULL };
+        int need_lpf = 0;
+#ifndef STB_AVIF_NO_LR
+        need_lpf = !r && lr_mask_ok && stream->seq.restoration && !stream->frame.allow_intrabc;
+#endif
+        if (need_lpf) {
+            int lp;
+            for (lp = 0; lp < 3; lp++) {
+                int chroma = lp > 0;
+                int ss_h = chroma ? (stream->seq.ss_hor ? 1 : 0) : 0;
+                int ss_v = chroma ? ((stream->seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0) : 0;
+                int lw = (tc->frame_width + ss_h) >> ss_h;
+                int lh = (tc->frame_height + ss_v) >> ss_v;
+                int ls = chroma ? (lp == 1 ? tc->stride_u : tc->stride_v) : tc->stride_y;
+                unsigned short *sp = chroma ? (lp == 1 ? pu16 : pv16) : py16;
+                unsigned short *lpf;
+                int yy;
+                if (!sp) continue;
+                lpf = (unsigned short *)stb_avif_calloc((size_t)ls * (lh + 4), sizeof(unsigned short));
+                if (!lpf) continue;
+                for (yy = 0; yy < 2; yy++)
+                    memcpy(lpf + yy * ls, sp, lw * sizeof(unsigned short));
+                for (yy = 0; yy < lh; yy++)
+                    memcpy(lpf + (yy + 2) * ls, sp + yy * ls, lw * sizeof(unsigned short));
+                for (yy = lh + 2; yy < lh + 4; yy++)
+                    memcpy(lpf + yy * ls, sp + (lh - 1) * ls, lw * sizeof(unsigned short));
+                lr_lpf[lp] = lpf;
+            }
+        }
+
     /* CDEF filtering (after deblocking, before loop restoration). */
     if (!r && stream->seq.cdef && cdef_idx_grid) {
         const struct stb_av1_framehdr *fh = &stream->frame;
@@ -3573,9 +3607,17 @@ static int stb_avif_decode_frame_scalar(struct stb_av1_tile_context *tc, const u
                          stream->seq.ss_hor ? 1 : 0,
                          (stream->seq.layout == STB_AV1_LAYOUT_I420) ? 1 : 0,
                          8 + stream->seq.hbd * 2,
-                           &lr_mask);
+                           &lr_mask, lr_lpf);
     }
 #endif
+
+        /* Free deblocked lpf copies */
+        {
+            int lp2;
+            for (lp2 = 0; lp2 < 3; lp2++)
+                if (lr_lpf[lp2]) stb_avif_free_internal(lr_lpf[lp2]);
+        }
+    }
 #endif /* !STB_AVIF_NO_FILTERS */
 
     /* Convert internal u16 planes to the caller's 8-bit planes.

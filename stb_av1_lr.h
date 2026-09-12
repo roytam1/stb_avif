@@ -1294,22 +1294,24 @@ done:
 
 /* Apply loop restoration to the entire frame.
  * Called after CDEF, before 8-bit conversion. */
-/* Apply frame-level LR. We save a copy of each plane before processing
- * (the "lpf" buffer). Both Wiener and SGR filters read edge rows from
- * this copy (deblocked, pre-LR), matching dav1d's lr_lpf_line behavior. */
+/* Apply frame-level LR. lpf_planes_in[]: pre-CDEF (deblocked) copies of each
+ * plane, with 2 rows of padding above and below.  Data starts at row 2.
+ * If lpf_planes_in[p] is NULL for a plane, that plane's lpf is allocated
+ * internally from the current frame data (fallback). */
 static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
                              unsigned short *plane_v,
                              int stride_y, int stride_u, int stride_v,
                              int frame_w, int frame_h,
                              int ss_hor, int ss_ver, int bit_depth,
-                             const stbv_av1_lr_mask *m)
+                             const stbv_av1_lr_mask *m,
+                             unsigned short *lpf_planes_in[3])
 {
     int p;
     unsigned short *lpf_planes[3];
+    unsigned char lpf_owned[3] = {0, 0, 0};
     int lpf_strides[3];
     if (!m) return;
 
-    /* Save pre-LR copies for edge rows */
     for (p = 0; p < 3; p++) {
         int chroma = p > 0;
         int ss_h = chroma ? ss_hor : 0;
@@ -1318,11 +1320,15 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
         int h = (frame_h + ss_v) >> ss_v;
         int stride = chroma ? (p == 1 ? stride_u : stride_v) : stride_y;
         unsigned short *plane = chroma ? (p == 1 ? plane_u : plane_v) : plane_y;
-        unsigned short *lpf;
         int y;
 
         lpf_planes[p] = NULL;
         lpf_strides[p] = stride;
+
+        if (lpf_planes_in && lpf_planes_in[p]) {
+            lpf_planes[p] = lpf_planes_in[p];
+            continue;
+        }
 
         /* Quick check: any non-NONE types? */
         {
@@ -1337,20 +1343,20 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
             if (!any_non_none) continue;
         }
 
-        /* Allocate with 2 extra rows at top and bottom for lpf_top/lpf_bottom
-         * edge reads (matching dav1d's lr_lpf_line padding). Data starts at row 2. */
-        lpf = (unsigned short *)stb_avif_calloc((size_t)stride * (h + 4), sizeof(unsigned short));
-        if (!lpf) continue;
-        /* Fill top 2 rows with clamped copy of first row */
-        for (y = 0; y < 2; y++)
-            memcpy(lpf + y * stride, plane, w * sizeof(unsigned short));
-        /* Copy main data starting at row 2 */
-        for (y = 0; y < h; y++)
-            memcpy(lpf + (y + 2) * stride, plane + y * stride, w * sizeof(unsigned short));
-        /* Fill bottom 2 rows with clamped copy of last row */
-        for (y = h + 2; y < h + 4; y++)
-            memcpy(lpf + y * stride, plane + (h - 1) * stride, w * sizeof(unsigned short));
-        lpf_planes[p] = lpf;
+        /* Fallback: allocate from current (possibly CDEF'd) frame data */
+        {
+            unsigned short *lpf;
+            lpf = (unsigned short *)stb_avif_calloc((size_t)stride * (h + 4), sizeof(unsigned short));
+            if (!lpf) continue;
+            for (y = 0; y < 2; y++)
+                memcpy(lpf + y * stride, plane, w * sizeof(unsigned short));
+            for (y = 0; y < h; y++)
+                memcpy(lpf + (y + 2) * stride, plane + y * stride, w * sizeof(unsigned short));
+            for (y = h + 2; y < h + 4; y++)
+                memcpy(lpf + y * stride, plane + (h - 1) * stride, w * sizeof(unsigned short));
+            lpf_planes[p] = lpf;
+            lpf_owned[p] = 1;
+        }
     }
 
     for (p = 0; p < 3; p++) {
@@ -1435,9 +1441,9 @@ static void stb_av1_lr_frame(unsigned short *plane_y, unsigned short *plane_u,
         }
     }
 
-    /* Free lpf copies */
+    /* Free only internally-allocated lpf copies (not caller-provided ones) */
     for (p = 0; p < 3; p++) {
-        if (lpf_planes[p]) stb_avif_free_internal(lpf_planes[p]);
+        if (lpf_owned[p] && lpf_planes[p]) stb_avif_free_internal(lpf_planes[p]);
     }
 }
 
